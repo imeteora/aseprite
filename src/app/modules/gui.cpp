@@ -48,7 +48,7 @@
 #include "base/memory.h"
 #include "base/shared_ptr.h"
 #include "base/unique_ptr.h"
-#include "raster/sprite.h"
+#include "doc/sprite.h"
 #include "she/clipboard.h"
 #include "she/display.h"
 #include "she/error.h"
@@ -58,14 +58,11 @@
 #include "ui/ui.h"
 
 #include <algorithm>
-#include <allegro.h>
-#include <allegro/internal/aintern.h>
 #include <list>
 #include <vector>
 
-#ifdef ALLEGRO_WINDOWS
-#include <winalleg.h>
-
+#ifdef WIN32
+  #include <windows.h>
 #endif
 
 #define SPRITEDITOR_ACTION_COPYSELECTION        "CopySelection"
@@ -243,9 +240,6 @@ void exit_module_gui()
   CurrentTheme::set(NULL);
   delete ase_theme;
 
-  remove_keyboard();
-  remove_mouse();
-
   main_clipboard->dispose();
   main_display->dispose();
 }
@@ -266,7 +260,6 @@ static void save_gui_config()
     set_config_bool("GfxMode", "Maximized", display->isMaximized());
     set_config_int("GfxMode", "Width", display->originalWidth());
     set_config_int("GfxMode", "Height", display->originalHeight());
-    set_config_int("GfxMode", "Depth", bitmap_color_depth(screen));
   }
   set_config_int("GfxMode", "ScreenScale", screen_scaling);
 }

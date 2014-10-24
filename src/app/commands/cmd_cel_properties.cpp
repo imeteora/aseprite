@@ -29,14 +29,12 @@
 #include "app/modules/gui.h"
 #include "app/undo_transaction.h"
 #include "base/mem_utils.h"
-#include "raster/cel.h"
-#include "raster/image.h"
-#include "raster/layer.h"
-#include "raster/sprite.h"
-#include "raster/stock.h"
+#include "doc/cel.h"
+#include "doc/image.h"
+#include "doc/layer.h"
+#include "doc/sprite.h"
+#include "doc/stock.h"
 #include "ui/ui.h"
-
-#include <allegro/unicode.h>
 
 namespace app {
 

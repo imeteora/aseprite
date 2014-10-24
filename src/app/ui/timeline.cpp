@@ -50,10 +50,9 @@
 #include "doc/document_event.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
-#include "raster/raster.h"
+#include "doc/doc.h"
 #include "ui/ui.h"
 
-#include <allegro.h>
 #include <cstdio>
 #include <vector>
 
@@ -83,7 +82,7 @@ namespace app {
 
 using namespace app::skin;
 using namespace gfx;
-using namespace raster;
+using namespace doc;
 using namespace ui;
 
 static const char* kTimeline = "timeline";
@@ -320,7 +319,7 @@ bool Timeline::onProcessMessage(Message* msg)
       if (!m_document)
         break;
 
-      if (mouseMsg->middle() || key[KEY_SPACE]) {
+      if (mouseMsg->middle() || she::is_key_pressed(kKeySpace)) {
         captureMouse();
         m_state = STATE_SCROLLING;
         m_oldPos = static_cast<MouseMessage*>(msg)->position();
@@ -739,8 +738,8 @@ bool Timeline::onProcessMessage(Message* msg)
         case kKeySpace: {
           m_scroll = false;
 
-          // We have to clear all the KEY_SPACE in buffer.
-          clear_keybuf();
+          // We have to clear all the kKeySpace keys in buffer.
+          she::clear_keyboard_buffer();
           used = true;
           break;
         }
@@ -1080,9 +1079,8 @@ void Timeline::drawClipboardRange(ui::Graphics* g)
   if (!m_clipboard_timer.isRunning())
     m_clipboard_timer.start();
 
-  dotted_mode(m_offset_count);
+  CheckedDrawMode checked(g, m_offset_count);
   g->drawRect(0, getRangeBounds(clipboard_range));
-  dotted_mode(-1);
 }
 
 void Timeline::drawHeader(ui::Graphics* g)

@@ -22,13 +22,11 @@
 
 #include "app/app.h"
 #include "app/modules/palettes.h"
-#include "raster/blend.h"
-#include "raster/conversion_alleg.h"
-#include "raster/image.h"
-#include "raster/palette.h"
-#include "raster/sprite.h"
+#include "doc/blend.h"
+#include "doc/image.h"
+#include "doc/palette.h"
+#include "doc/sprite.h"
 
-#include <allegro.h>
 #include <cstring>
 
 namespace app {
@@ -47,11 +45,7 @@ static Palette* ase_current_palette = NULL;
 int init_module_palette()
 {
   ase_default_palette = new Palette(FrameNumber(0), 256);
-  convert_palette_from_allegro(default_palette, ase_default_palette);
-
   ase_current_palette = new Palette(FrameNumber(0), 256);
-  convert_palette_from_allegro(black_palette, ase_current_palette);
-
   return 0;
 }
 
@@ -93,11 +87,6 @@ bool set_current_palette(const Palette *_palette, bool forced)
     // Copy current palette
     palette->copyColorsTo(ase_current_palette);
 
-    // Change system color palette
-    PALETTE allegPal;
-    convert_palette_to_allegro(palette, allegPal);
-    set_palette(allegPal);
-
     // Call slots in signals
     App::instance()->PaletteChange();
 
@@ -112,33 +101,6 @@ void set_black_palette()
   Palette* p = new Palette(FrameNumber(0), 256);
   set_current_palette(p, true);
   delete p;
-}
-
-// Changes a color of the current system palette
-void set_current_color(int index, int r, int g, int b)
-{
-  int c;
-
-  ASSERT(index >= 0 && index <= 255);
-  ASSERT(r >= 0 && r <= 255);
-  ASSERT(g >= 0 && g <= 255);
-  ASSERT(b >= 0 && b <= 255);
-
-  c = ase_current_palette->getEntry(index);
-
-  if (rgba_getr(c) != r ||
-      rgba_getg(c) != g ||
-      rgba_getb(c) != b) {
-    RGB rgb;
-
-    ase_current_palette->setEntry(index, rgba(r, g, b, 255));
-
-    rgb.r = r>>2;
-    rgb.g = g>>2;
-    rgb.b = b>>2;
-
-    set_color(index, &rgb);
-  }
 }
 
 } // namespace app

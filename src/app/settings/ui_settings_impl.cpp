@@ -42,7 +42,6 @@
 #include "ui/system.h"
 
 #include <algorithm>
-#include <allegro/color.h>
 #include <string>
 
 #define DEFAULT_ONIONSKIN_TYPE         Onionskin_Merge
@@ -52,7 +51,7 @@
 namespace app {
 
 using namespace gfx;
-using namespace raster;
+using namespace doc;
 using namespace filters;
 
 namespace {
@@ -191,11 +190,11 @@ public:
   // Animation
 
   virtual bool getLoopAnimation() override;
-  virtual void getLoopRange(raster::FrameNumber* begin, raster::FrameNumber* end) override;
+  virtual void getLoopRange(doc::FrameNumber* begin, doc::FrameNumber* end) override;
   virtual AniDir getAnimationDirection() override;
 
   virtual void setLoopAnimation(bool state) override;
-  virtual void setLoopRange(raster::FrameNumber begin, raster::FrameNumber end) override;
+  virtual void setLoopRange(doc::FrameNumber begin, doc::FrameNumber end) override;
   virtual void setAnimationDirection(AniDir dir) override;
 
   virtual void addObserver(DocumentSettingsObserver* observer) override;
@@ -246,8 +245,8 @@ private:
   bool m_pixelGridVisible;
   app::Color m_pixelGridColor;
   bool m_isLoop;
-  raster::FrameNumber m_loopBegin;
-  raster::FrameNumber m_loopEnd;
+  doc::FrameNumber m_loopBegin;
+  doc::FrameNumber m_loopEnd;
   AniDir m_aniDir;
 };
 
@@ -692,7 +691,7 @@ bool UIDocumentSettingsImpl::getLoopAnimation()
   return m_isLoop;
 }
 
-void UIDocumentSettingsImpl::getLoopRange(raster::FrameNumber* begin, raster::FrameNumber* end)
+void UIDocumentSettingsImpl::getLoopRange(doc::FrameNumber* begin, doc::FrameNumber* end)
 {
   *begin = m_loopBegin;
   *end = m_loopEnd;
@@ -709,7 +708,7 @@ void UIDocumentSettingsImpl::setLoopAnimation(bool state)
   redrawDocumentViews();
 }
 
-void UIDocumentSettingsImpl::setLoopRange(raster::FrameNumber begin, raster::FrameNumber end)
+void UIDocumentSettingsImpl::setLoopRange(doc::FrameNumber begin, doc::FrameNumber end)
 {
   m_loopBegin = begin;
   m_loopEnd = end;

@@ -22,8 +22,19 @@ if(MSVC)
 endif(MSVC)
 
 # Libraries in this directory
-set(aseprite_libraries app-lib css-lib doc-lib raster-lib
-  scripting-lib undo-lib filters-lib ui-lib she gfx-lib base-lib)
+set(aseprite_libraries
+  app-lib
+  fixmath-lib
+  cfg-lib
+  css-lib
+  doc-lib
+  scripting-lib
+  undo-lib
+  filters-lib
+  ui-lib
+  she
+  gfx-lib
+  base-lib)
 
 # Directories where .h files can be found
 include_directories(. .. ../third_party)
@@ -123,6 +134,9 @@ else()
   include_directories(${LOADPNG_DIR})
 endif()
 
+set(libs3rdparty simpleini ${libs3rdparty})
+include_directories(${SIMPLEINI_DIR})
+
 ######################################################################
 # Add C++11 support only for our code (avoid Allegro)
 
@@ -184,12 +198,13 @@ endif()
 # Aseprite Libraries (in preferred order to be built)
 
 add_subdirectory(base)
+add_subdirectory(cfg)
 add_subdirectory(css)
 add_subdirectory(doc)
 add_subdirectory(filters)
+add_subdirectory(fixmath)
 add_subdirectory(gen)
 add_subdirectory(gfx)
-add_subdirectory(raster)
 add_subdirectory(scripting)
 add_subdirectory(she)
 add_subdirectory(ui)
@@ -305,8 +320,7 @@ endfunction()
 
 find_tests(base base-lib ${sys_libs})
 find_tests(gfx gfx-lib base-lib ${sys_libs})
-find_tests(raster raster-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
-find_tests(doc doc-lib raster-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
+find_tests(doc doc-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(css css-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(ui ui-lib she gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(app/file ${all_libs})

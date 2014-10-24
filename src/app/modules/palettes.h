@@ -20,12 +20,12 @@
 #define APP_MODULES_PALETTES_H_INCLUDED
 #pragma once
 
-namespace raster {
+namespace doc {
   class Palette;
 }
 
 namespace app {
-  using namespace raster;
+  using namespace doc;
 
   int init_module_palette();
   void exit_module_palette();
@@ -36,7 +36,6 @@ namespace app {
   void set_default_palette(Palette* palette);
   bool set_current_palette(const Palette* palette, bool forced);
   void set_black_palette();
-  void set_current_color(int index, int r, int g, int b);
 
 } // namespace app
 

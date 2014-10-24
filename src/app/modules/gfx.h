@@ -27,9 +27,7 @@
 #include "ui/graphics.h"
 
 namespace app {
-  using namespace raster;
-
-  void dotted_mode(int offset);
+  using namespace doc;
 
   void draw_color_button(ui::Graphics* g,
     const gfx::Rect& rc, const app::Color& color,

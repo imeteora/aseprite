@@ -1,5 +1,5 @@
 /* Aseprite
- * Copyright (C) 2001-2013  David Capello
+ * Copyright (C) 2001-2014  David Capello
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,10 +29,11 @@
 #include "app/file/format_options.h"
 #include "app/find_widget.h"
 #include "app/ini_file.h"
+#include "app/ini_file.h"
 #include "app/load_widget.h"
 #include "base/file_handle.h"
 #include "base/memory.h"
-#include "raster/raster.h"
+#include "doc/doc.h"
 #include "ui/ui.h"
 
 #include <csetjmp>

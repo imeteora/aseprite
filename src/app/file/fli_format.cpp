@@ -27,10 +27,9 @@
 #include "app/file/format_options.h"
 #include "app/modules/palettes.h"
 #include "base/file_handle.h"
-#include "raster/raster.h"
+#include "doc/doc.h"
 
-#include <allegro/color.h>
-#include <stdio.h>
+#include <cstdio>
 
 namespace app {
 

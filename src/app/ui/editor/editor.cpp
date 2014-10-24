@@ -55,13 +55,12 @@
 #include "app/util/render.h"
 #include "base/bind.h"
 #include "base/unique_ptr.h"
-#include "raster/conversion_she.h"
-#include "raster/raster.h"
+#include "doc/conversion_she.h"
+#include "doc/doc.h"
 #include "she/surface.h"
 #include "she/system.h"
 #include "ui/ui.h"
 
-#include <allegro.h>
 #include <cstdio>
 
 namespace app {
@@ -544,7 +543,7 @@ void Editor::drawMask(Graphics* g)
   int nseg = m_document->getBoundariesSegmentsCount();
   const BoundSeg* seg = m_document->getBoundariesSegments();
 
-  dotted_mode(m_offset_count);
+  CheckedDrawMode checked(g, m_offset_count);
 
   for (int c=0; c<nseg; ++c, ++seg) {
     x1 = seg->x1 << m_zoom;
@@ -578,12 +577,9 @@ void Editor::drawMask(Graphics* g)
       }
     }
 
-    // The color doesn't matter, we are using dotted_mode()
-    // TODO send dotted_mode() to ui::Graphics domain.
+    // The color doesn't matter, we are using CheckedDrawMode
     g->drawLine(0, gfx::Point(x+x1, y+y1), gfx::Point(x+x2, y+y2));
   }
-
-  dotted_mode(-1);
 }
 
 void Editor::drawMaskSafe()
@@ -1166,7 +1162,7 @@ bool Editor::onProcessMessage(Message* msg)
     case kFocusLeaveMessage:
       // As we use keys like Space-bar as modifier, we can clear the
       // keyboard buffer when we lost the focus.
-      clear_keybuf();
+      she::clear_keyboard_buffer();
       break;
 
     case kMouseWheelMessage:

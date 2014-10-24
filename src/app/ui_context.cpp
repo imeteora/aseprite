@@ -34,11 +34,8 @@
 #include "app/ui/workspace.h"
 #include "app/ui_context.h"
 #include "base/mutex.h"
-#include "raster/sprite.h"
+#include "doc/sprite.h"
 #include "undo/undo_history.h"
-
-#include <allegro/file.h>
-#include <allegro/system.h>
 
 namespace app {
 
