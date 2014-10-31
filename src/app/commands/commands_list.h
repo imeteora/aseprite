@@ -1,5 +1,5 @@
 /* Aseprite
- * Copyright (C) 2001-2013  David Capello
+ * Copyright (C) 2001-2014  David Capello
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,6 +61,7 @@ FOR_EACH_COMMAND(GridSettings)
 FOR_EACH_COMMAND(ImportSpriteSheet)
 FOR_EACH_COMMAND(InvertColor)
 FOR_EACH_COMMAND(InvertMask)
+FOR_EACH_COMMAND(KeyboardShortcuts)
 FOR_EACH_COMMAND(Launch)
 FOR_EACH_COMMAND(LayerFromBackground)
 FOR_EACH_COMMAND(LayerProperties)
@@ -91,6 +92,7 @@ FOR_EACH_COMMAND(RemoveLayer)
 FOR_EACH_COMMAND(RepeatLastExport)
 FOR_EACH_COMMAND(ReplaceColor)
 FOR_EACH_COMMAND(ReselectMask)
+FOR_EACH_COMMAND(ReverseFrames)
 FOR_EACH_COMMAND(Rotate)
 FOR_EACH_COMMAND(SaveFile)
 FOR_EACH_COMMAND(SaveFileAs)
@@ -101,6 +103,7 @@ FOR_EACH_COMMAND(Scroll)
 FOR_EACH_COMMAND(SetPalette)
 FOR_EACH_COMMAND(ShowGrid)
 FOR_EACH_COMMAND(ShowOnionSkin)
+FOR_EACH_COMMAND(ShowPixelGrid)
 FOR_EACH_COMMAND(SnapToGrid)
 FOR_EACH_COMMAND(SplitEditorHorizontally)
 FOR_EACH_COMMAND(SplitEditorVertically)

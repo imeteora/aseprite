@@ -16,28 +16,39 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef APP_DOCUMENT_RANGE_OPS_H_INCLUDED
-#define APP_DOCUMENT_RANGE_OPS_H_INCLUDED
+#ifndef APP_UI_SELECT_ACCELERATOR_H_INCLUDED
+#define APP_UI_SELECT_ACCELERATOR_H_INCLUDED
 #pragma once
 
-#include <vector>
+#include "ui/accelerator.h"
+
+#include "generated_select_accelerator.h"
 
 namespace app {
-  class Document;
-  class DocumentRange;
 
-  enum DocumentRangePlace {
-    kDocumentRangeBefore,
-    kDocumentRangeAfter,
+  class SelectAccelerator : public app::gen::SelectAccelerator {
+  public:
+    explicit SelectAccelerator(const ui::Accelerator& accelerator);
+
+    bool isModified() const { return m_modified; }
+    const ui::Accelerator& accel() const { return m_accel; }
+
+  private:
+    void onModifierChange(ui::KeyModifiers modifier, ui::CheckBox* checkbox);
+    void onAccelChange(const ui::Accelerator* accel);
+    void onClear();
+    void onOK();
+    void onCancel();
+    void updateModifiers();
+    void updateAssignedTo();
+
+    class KeyField;
+
+    KeyField* m_keyField;
+    ui::Accelerator m_origAccel;
+    ui::Accelerator m_accel;
+    bool m_modified;
   };
-
-  // These functions returns the new location of the "from" range or
-  // throws an std::runtime_error() in case that the operation cannot
-  // be done. (E.g. the background layer cannot be moved.)
-  DocumentRange move_range(Document* doc, const DocumentRange& from, const DocumentRange& to, DocumentRangePlace place);
-  DocumentRange copy_range(Document* doc, const DocumentRange& from, const DocumentRange& to, DocumentRangePlace place);
-
-  void reverse_frames(Document* doc, const DocumentRange& range);
 
 } // namespace app
 

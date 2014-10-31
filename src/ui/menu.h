@@ -15,7 +15,6 @@
 
 namespace ui {
 
-  class Accelerator;
   class MenuItem;
   class Timer;
   struct MenuBaseData;
@@ -55,8 +54,7 @@ namespace ui {
     friend class MenuItem;
   };
 
-  class MenuBox : public Widget
-  {
+  class MenuBox : public Widget {
   public:
     MenuBox(WidgetType type = kMenuBoxWidget);
     ~MenuBox();
@@ -86,23 +84,24 @@ namespace ui {
     friend class Menu;
   };
 
-  class MenuBar : public MenuBox
-  {
+  class MenuBar : public MenuBox {
   public:
     MenuBar();
+
+    static bool expandOnMouseover();
+    static void setExpandOnMouseover(bool state);
+
+  private:
+    static bool m_expandOnMouseover;
   };
 
-  class MenuItem : public Widget
-  {
+  class MenuItem : public Widget {
   public:
     MenuItem(const std::string& text);
     ~MenuItem();
 
     Menu* getSubmenu();
     void setSubmenu(Menu* submenu);
-
-    Accelerator* getAccel();
-    void setAccel(Accelerator* accel);
 
     bool isHighlighted() const;
     void setHighlighted(bool state);
@@ -130,6 +129,8 @@ namespace ui {
     virtual void onPreferredSize(PreferredSizeEvent& ev) override;
     virtual void onClick();
 
+    bool inBar();
+
   private:
     void openSubmenu(bool select_first);
     void closeSubmenu(bool last_of_close_chain);
@@ -137,7 +138,6 @@ namespace ui {
     void stopTimer();
     void executeClick();
 
-    Accelerator* m_accel;         // Hot-key
     bool m_highlighted;           // Is it highlighted?
     Menu* m_submenu;              // The sub-menu
     MenuBox* m_submenu_menubox;   // The opened menubox for this menu-item

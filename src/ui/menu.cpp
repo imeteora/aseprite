@@ -123,6 +123,9 @@ static MenuItem* check_for_letter(Menu* menu, int ascii);
 static MenuItem* find_nextitem(Menu* menu, MenuItem* menuitem);
 static MenuItem* find_previtem(Menu* menu, MenuItem* menuitem);
 
+//////////////////////////////////////////////////////////////////////
+// Menu
+
 Menu::Menu()
   : Widget(kMenuWidget)
   , m_menuitem(NULL)
@@ -142,6 +145,9 @@ Menu::~Menu()
   }
 }
 
+//////////////////////////////////////////////////////////////////////
+// MenuBox
+
 MenuBox::MenuBox(WidgetType type)
  : Widget(type)
  , m_base(NULL)
@@ -160,16 +166,35 @@ MenuBox::~MenuBox()
   delete m_base;
 }
 
+//////////////////////////////////////////////////////////////////////
+// MenuBar
+
+bool MenuBar::m_expandOnMouseover = false;
+
 MenuBar::MenuBar()
   : MenuBox(kMenuBarWidget)
 {
   createBase();
 }
 
+// static
+bool MenuBar::expandOnMouseover()
+{
+  return m_expandOnMouseover;
+}
+
+// static
+void MenuBar::setExpandOnMouseover(bool state)
+{
+  m_expandOnMouseover = state;
+}
+
+//////////////////////////////////////////////////////////////////////
+// MenuItem
+
 MenuItem::MenuItem(const std::string& text)
   : Widget(kMenuItemWidget)
 {
-  m_accel = NULL;
   m_highlighted = false;
   m_submenu = NULL;
   m_submenu_menubox = NULL;
@@ -180,11 +205,7 @@ MenuItem::MenuItem(const std::string& text)
 
 MenuItem::~MenuItem()
 {
-  if (m_accel)
-    delete m_accel;
-
-  if (m_submenu)
-    delete m_submenu;
+  delete m_submenu;
 }
 
 Menu* MenuBox::getMenu()
@@ -205,11 +226,6 @@ MenuBaseData* MenuBox::createBase()
 Menu* MenuItem::getSubmenu()
 {
   return m_submenu;
-}
-
-Accelerator* MenuItem::getAccel()
-{
-  return m_accel;
 }
 
 void MenuBox::setMenu(Menu* menu)
@@ -234,21 +250,6 @@ void MenuItem::setSubmenu(Menu* menu)
     ASSERT_VALID_WIDGET(m_submenu);
     m_submenu->setOwnerMenuItem(this);
   }
-}
-
-/**
- * Changes the keyboard shortcuts (accelerators) for the specified
- * widget (a menu-item).
- *
- * @warning The specified @a accel will be freed automatically when
- *          the menu-item is deleted.
- */
-void MenuItem::setAccel(Accelerator* accel)
-{
-  if (m_accel)
-    delete m_accel;
-
-  m_accel = accel;
 }
 
 bool MenuItem::isHighlighted() const
@@ -689,7 +690,8 @@ bool MenuItem::onProcessMessage(Message* msg)
       // When a menu item receives the mouse, start a timer to open the submenu...
       if (isEnabled() && hasSubmenu()) {
         // Start the timer to open the submenu...
-        startTimer();
+        if (!inBar() || MenuBar::expandOnMouseover())
+          startTimer();
       }
       break;
 
@@ -723,7 +725,7 @@ bool MenuItem::onProcessMessage(Message* msg)
         // Menubox position
         Rect pos = window->getBounds();
 
-        if (this->getParent()->getParent()->type == kMenuBarWidget) {
+        if (inBar()) {
           pos.x = MID(0, getBounds().x, ui::display_w()-pos.w);
           pos.y = MID(0, getBounds().y2(), ui::display_h()-pos.h);
         }
@@ -872,25 +874,18 @@ void MenuItem::onClick()
 void MenuItem::onPreferredSize(PreferredSizeEvent& ev)
 {
   Size size(0, 0);
-  bool bar = (getParent() &&
-    getParent()->getParent() &&
-    getParent()->getParent()->type == kMenuBarWidget);
 
   if (hasText()) {
     size.w =
       + this->border_width.l
       + getTextWidth()
-      + (bar ? this->child_spacing/4: this->child_spacing)
+      + (inBar() ? this->child_spacing/4: this->child_spacing)
       + this->border_width.r;
 
     size.h =
       + this->border_width.t
       + getTextHeight()
       + this->border_width.b;
-
-    if (m_accel && !m_accel->isEmpty()) {
-      size.w += Graphics::measureUIStringLength(m_accel->toString().c_str(), getFont());
-    }
   }
 
   ev.setPreferredSize(size);
@@ -1001,6 +996,14 @@ void Menu::highlightItem(MenuItem* menuitem, bool click, bool open_submenu, bool
 void Menu::unhighlightItem()
 {
   highlightItem(NULL, false, false, false);
+}
+
+bool MenuItem::inBar()
+{
+  return
+    (getParent() &&
+     getParent()->getParent() &&
+     getParent()->getParent()->type == kMenuBarWidget);
 }
 
 void MenuItem::openSubmenu(bool select_first)

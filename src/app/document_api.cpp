@@ -472,7 +472,7 @@ void DocumentApi::moveFrame(Sprite* sprite, FrameNumber frame, FrameNumber befor
       frame <= sprite->lastFrame() &&
       beforeFrame >= 0 &&
       beforeFrame <= sprite->lastFrame().next()) {
-    // Change the frame-lengths...
+    // Change the frame-lengths.
     int frlen_aux = sprite->getFrameDuration(frame);
 
     // Moving the frame to the future.
@@ -490,7 +490,7 @@ void DocumentApi::moveFrame(Sprite* sprite, FrameNumber frame, FrameNumber befor
       setFrameDuration(sprite, beforeFrame, frlen_aux);
     }
 
-    // change the cels of position...
+    // Change cel positions.
     moveFrameLayer(sprite->folder(), frame, beforeFrame);
   }
 }
@@ -708,6 +708,7 @@ void DocumentApi::moveCel(
   ASSERT(dstSprite != NULL);
   ASSERT(srcFrame >= 0 && srcFrame < srcSprite->totalFrames());
   ASSERT(dstFrame >= 0);
+  (void)srcSprite;              // To avoid unused variable warning on Release mode
 
   clearCel(dstLayer, dstFrame);
   addEmptyFramesTo(dstSprite, dstFrame);
@@ -777,6 +778,7 @@ void DocumentApi::copyCel(
   ASSERT(dstSprite != NULL);
   ASSERT(srcFrame >= 0 && srcFrame < srcSprite->totalFrames());
   ASSERT(dstFrame >= 0);
+  (void)srcSprite;              // To avoid unused variable warning on Release mode
 
   clearCel(dstLayer, dstFrame);
   addEmptyFramesTo(dstSprite, dstFrame);
@@ -816,6 +818,22 @@ void DocumentApi::copyCel(
   }
 
   m_document->notifyCelCopied(srcLayer, srcFrame, dstLayer, dstFrame);
+}
+
+void DocumentApi::swapCel(
+  LayerImage* layer, FrameNumber frame1, FrameNumber frame2)
+{
+  Sprite* sprite = layer->sprite();
+  ASSERT(sprite != NULL);
+  ASSERT(frame1 >= 0 && frame1 < sprite->totalFrames());
+  ASSERT(frame2 >= 0 && frame2 < sprite->totalFrames());
+  (void)sprite;              // To avoid unused variable warning on Release mode
+
+  Cel* cel1 = layer->getCel(frame1);
+  Cel* cel2 = layer->getCel(frame2);
+
+  if (cel1) setCelFramePosition(layer, cel1, frame2);
+  if (cel2) setCelFramePosition(layer, cel2, frame1);
 }
 
 LayerImage* DocumentApi::newLayer(Sprite* sprite)
@@ -918,7 +936,6 @@ void DocumentApi::cropLayer(Layer* layer, int x, int y, int w, int h)
   if (!layer->isImage())
     return;
 
-  color_t bgcolor = bgColor(layer);
   Sprite* sprite = layer->sprite();
   CelIterator it = ((LayerImage*)layer)->getCelBegin();
   CelIterator end = ((LayerImage*)layer)->getCelEnd();
