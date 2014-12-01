@@ -58,6 +58,8 @@ namespace app {
     virtual bool onKeyDown(Editor* editor, ui::KeyMessage* msg) override;
     virtual bool onKeyUp(Editor* editor, ui::KeyMessage* msg) override;
     virtual bool onUpdateStatusBar(Editor* editor) override;
+    virtual bool acceptQuickTool(tools::Tool* tool) override;
+    virtual bool regenerateDrawingCursor() override { return false; }
 
     // EditorObserver
     virtual void onBeforeFrameChanged(Editor* editor) override;
@@ -77,6 +79,9 @@ namespace app {
 
     void setTransparentColor(const app::Color& color);
     void dropPixels(Editor* editor);
+
+    bool isActiveDocument() const;
+    bool isActiveEditor() const;
 
     // Helper member to move/translate selection and pixels.
     PixelsMovementPtr m_pixelsMovement;

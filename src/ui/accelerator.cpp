@@ -18,10 +18,15 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
+
 // #define REPORT_KEYS
 #define PREPROCESS_KEYS
 
 namespace ui {
+
+//////////////////////////////////////////////////////////////////////
+// Accelerator
 
 Accelerator::Accelerator()
   : m_modifiers(kKeyNoneModifier)
@@ -75,32 +80,40 @@ Accelerator::Accelerator(const std::string& str)
     // Scancode
 
     // Word with one character
-    else if (tok.size() == 1) {
-      if ((tok[0] >= 'a') && (tok[0] <= 'z')) {
-        m_unicodeChar = tok[0];
-      }
-      else {
-        m_unicodeChar = tok[0];
+    else if (base::utf8_length(tok) == 1) {
+      std::wstring wstr = base::from_utf8(tok);
+      if (wstr.size() != 1) {
+        ASSERT(false && "Something wrong converting utf-8 to wchar string");
+        continue;
       }
 
-      if ((tok[0] >= 'a') && (tok[0] <= 'z'))
-        m_scancode = (KeyScancode)((int)kKeyA + std::tolower(tok[0]) - 'a');
-      else if ((tok[0] >= '0') && (tok[0] <= '9'))
-        m_scancode = (KeyScancode)((int)kKey0 + tok[0] - '0');
+      wchar_t wchr = wstr[0];
+      wchr = tolower(wchr);
+
+      if ((wchr >= 'a') && (wchr <= 'z')) {
+        m_unicodeChar = wchr;
+        m_scancode = (KeyScancode)((int)kKeyA + wchr - 'a');
+      }
       else {
-        switch (tok[0]) {
-          case '~': m_scancode = kKeyTilde; break;
-          case '-': m_scancode = kKeyMinus; break;
-          case '=': m_scancode = kKeyEquals; break;
-          case '[': m_scancode = kKeyOpenbrace; break;
-          case ']': m_scancode = kKeyClosebrace; break;
-          case ';': m_scancode = kKeyColon; break;
-          case '\'': m_scancode = kKeyQuote; break;
-          case '\\': m_scancode = kKeyBackslash; break;
-          case ',': m_scancode = kKeyComma; break;
-          case '.': m_scancode = kKeyStop; break;
-          case '/': m_scancode = kKeySlash; break;
-          case '*': m_scancode = kKeyAsterisk; break;
+        m_unicodeChar = wchr;
+
+        if ((wchr >= '0') && (wchr <= '9'))
+          m_scancode = (KeyScancode)((int)kKey0 + wchr - '0');
+        else {
+          switch (wchr) {
+            case '~': m_scancode = kKeyTilde; break;
+            case '-': m_scancode = kKeyMinus; break;
+            case '=': m_scancode = kKeyEquals; break;
+            case '[': m_scancode = kKeyOpenbrace; break;
+            case ']': m_scancode = kKeyClosebrace; break;
+            case ';': m_scancode = kKeyColon; break;
+            case '\'': m_scancode = kKeyQuote; break;
+            case '\\': m_scancode = kKeyBackslash; break;
+            case ',': m_scancode = kKeyComma; break;
+            case '.': m_scancode = kKeyStop; break;
+            case '/': m_scancode = kKeySlash; break;
+            case '*': m_scancode = kKeyAsterisk; break;
+          }
         }
       }
     }
@@ -188,6 +201,8 @@ bool Accelerator::operator==(const Accelerator& other) const
       return true;
     else if (m_unicodeChar != 0)
       return (std::tolower(m_unicodeChar) == std::tolower(other.m_unicodeChar));
+    else               // Only comparing modifiers, and they are equal
+      return true;
   }
 
   return false;
@@ -321,8 +336,11 @@ std::string Accelerator::toString() const
   if (m_modifiers & kKeySpaceModifier) buf += "Space+";
 
   // Key
-  if (m_unicodeChar)
-    buf += (wchar_t)toupper(m_unicodeChar);
+  if (m_unicodeChar) {
+    std::wstring wideUnicodeChar;
+    wideUnicodeChar.push_back((wchar_t)toupper(m_unicodeChar));
+    buf += base::to_utf8(wideUnicodeChar);
+  }
   else if (m_scancode && m_scancode > 0 && m_scancode < (int)table_size)
     buf += table[m_scancode];
   else if (!buf.empty() && buf[buf.size()-1] == '+')
@@ -333,11 +351,6 @@ std::string Accelerator::toString() const
 
 bool Accelerator::check(KeyModifiers modifiers, KeyScancode scancode, int unicodeChar) const
 {
-#ifdef REPORT_KEYS
-  char buf[256];
-  std::string buf2;
-#endif
-
   // Preprocess the character to be compared with the accelerator
 #ifdef PREPROCESS_KEYS
   // Directly scancode
@@ -399,15 +412,18 @@ bool Accelerator::check(KeyModifiers modifiers, KeyScancode scancode, int unicod
 
   if ((m_modifiers == modifiers) &&
       ((m_scancode != kKeyNil && m_scancode == scancode) ||
-       (m_unicodeChar && m_unicodeChar == unicodeChar))) {
+       (m_unicodeChar && m_unicodeChar == unicodeChar) ||
+       (m_scancode == kKeyNil && scancode == kKeyNil && !m_unicodeChar && !unicodeChar))) {
 #ifdef REPORT_KEYS
     printf("true\n");
+    fflush(stdout);
 #endif
     return true;
   }
 
 #ifdef REPORT_KEYS
   printf("false\n");
+  fflush(stdout);
 #endif
   return false;
 }
@@ -425,6 +441,27 @@ bool Accelerator::checkFromAllegroKeyArray() const
 
   return ((m_scancode == 0 || she::is_key_pressed(m_scancode)) &&
           (m_modifiers == modifiers));
+}
+
+//////////////////////////////////////////////////////////////////////
+// Accelerators
+
+bool Accelerators::has(const Accelerator& accel) const
+{
+  return (std::find(begin(), end(), accel) != end());
+}
+
+void Accelerators::add(const Accelerator& accel)
+{
+  if (!has(accel))
+    m_list.push_back(accel);
+}
+
+void Accelerators::remove(const Accelerator& accel)
+{
+  auto it = std::find(begin(), end(), accel);
+  if (it != end())
+    m_list.erase(it);
 }
 
 } // namespace ui

@@ -289,6 +289,7 @@ static app::Color checked_bg_color2;
 
 static int global_opacity = 255;
 static const Layer* selected_layer = NULL;
+static FrameNumber selected_frame(0);
 static Image* preview_image = NULL;
 
 // static
@@ -367,9 +368,10 @@ RenderEngine::RenderEngine(const Document* document,
 }
 
 // static
-void RenderEngine::setPreviewImage(const Layer* layer, Image* image)
+void RenderEngine::setPreviewImage(const Layer* layer, FrameNumber frame, Image* image)
 {
   selected_layer = layer;
+  selected_frame = frame;
   preview_image = image;
 }
 
@@ -388,7 +390,7 @@ Image* RenderEngine::renderSprite(int source_x, int source_y,
 {
   void (*zoomed_func)(Image*, const Image*, const Palette*, int, int, int, int, int);
   const LayerImage* background = m_sprite->backgroundLayer();
-  bool need_checked_bg = (background != NULL ? !background->isReadable(): true);
+  bool need_checked_bg = (background != NULL ? !background->isVisible(): true);
   uint32_t bg_color = 0;
   Image *image;
 
@@ -571,7 +573,7 @@ void RenderEngine::renderLayer(
   int blend_mode)
 {
   // we can't read from this layer
-  if (!layer->isReadable())
+  if (!layer->isVisible())
     return;
 
   switch (layer->type()) {
@@ -586,8 +588,8 @@ void RenderEngine::renderLayer(
         Image* src_image;
 
         // Is the 'preview_image' set to be used with this layer?
-        if ((frame == m_currentFrame) &&
-            (selected_layer == layer) &&
+        if ((selected_layer == layer) &&
+            (selected_frame == frame) &&
             (preview_image != NULL)) {
           src_image = preview_image;
         }
@@ -635,8 +637,9 @@ void RenderEngine::renderLayer(
   }
 
   // Draw extras
-  if (layer == m_currentLayer &&
-      m_document->getExtraCel() != NULL) {
+  if (m_document->getExtraCel() &&
+      layer == m_currentLayer &&
+      frame == m_currentFrame) {
     Cel* extraCel = m_document->getExtraCel();
     if (extraCel->opacity() > 0) {
       Image* extraImage = m_document->getExtraCelImage();

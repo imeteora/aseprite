@@ -65,7 +65,7 @@ namespace doc {
     color_t transparentColor() const { return m_transparentColor; }
     void setTransparentColor(color_t color);
 
-    int getMemSize() const;
+    virtual int getMemSize() const override;
 
     ////////////////////////////////////////
     // Layers
@@ -132,6 +132,8 @@ namespace doc {
     // specified coordinates there're background this routine will
     // return the 0 color (the mask-color).
     int getPixel(int x, int y, FrameNumber frame) const;
+
+    void pickCels(int x, int y, FrameNumber frame, int opacityThreshold, CelList& cels) const;
 
   private:
     Sprite* m_self;                        // pointer to the Sprite

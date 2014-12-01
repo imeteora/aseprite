@@ -740,13 +740,10 @@ void DocumentApi::moveCel(
     // Move the cel between different layers.
     else {
       if (!dstCel) {
+        dstImage = Image::createCopy(srcImage);
+
         dstCel = new Cel(*srcCel);
         dstCel->setFrame(dstFrame);
-        dstImage = crop_image(srcImage,
-          -srcCel->x(),
-          -srcCel->y(),
-          dstSprite->width(),   // TODO dstSprite or srcSprite
-          dstSprite->height(), 0);
         dstCel->setImage(addImageInStock(dstSprite, dstImage));
       }
 
@@ -973,8 +970,8 @@ void DocumentApi::backgroundFromLayer(LayerImage* layer)
 {
   ASSERT(layer);
   ASSERT(layer->isImage());
-  ASSERT(layer->isReadable());
-  ASSERT(layer->isWritable());
+  ASSERT(layer->isVisible());
+  ASSERT(layer->isEditable());
   ASSERT(layer->sprite() != NULL);
   ASSERT(layer->sprite()->backgroundLayer() == NULL);
 
@@ -1044,8 +1041,8 @@ void DocumentApi::layerFromBackground(Layer* layer)
 {
   ASSERT(layer != NULL);
   ASSERT(layer->isImage());
-  ASSERT(layer->isReadable());
-  ASSERT(layer->isWritable());
+  ASSERT(layer->isVisible());
+  ASSERT(layer->isEditable());
   ASSERT(layer->isBackground());
   ASSERT(layer->sprite() != NULL);
   ASSERT(layer->sprite()->backgroundLayer() != NULL);
@@ -1056,7 +1053,7 @@ void DocumentApi::layerFromBackground(Layer* layer)
   }
 
   layer->setBackground(false);
-  layer->setMoveable(true);
+  layer->setMovable(true);
   layer->setName("Layer 0");
 }
 

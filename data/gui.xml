@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- ASE menus, tools and keyboard shortcuts -->
-<gui version="1.0.6-dev">
+<gui version="1.1.0-dev">
   <!-- Keyboard shortcuts -->
   <keyboard version="1">
 
@@ -18,7 +18,8 @@
       <key command="RepeatLastExport" shortcut="Ctrl+Shift+X" mac="Cmd+Shift+X" />
       <key command="AdvancedMode" shortcut="F11" />
       <key command="DeveloperConsole" shortcut="F12" />
-      <key command="Exit" shortcut="Alt+F4" mac="Cmd+Q" />
+      <key command="Exit" win="Ctrl+Q" linux="Ctrl+Q" mac="Cmd+Q" />
+      <key command="Exit" win="Alt+F4" />
       <key command="Cancel" shortcut="Esc">
         <param name="type" value="all" />
       </key>
@@ -91,6 +92,7 @@
       <key command="ShowGrid" shortcut="Shift+G" />
       <key command="ShowPixelGrid" shortcut="Alt+Shift+G" />
       <key command="SnapToGrid" shortcut="Shift+S" />
+      <key command="SetLoopSection" shortcut="F2" />
       <key command="ShowOnionSkin" shortcut="F3" />
       <key command="Timeline" shortcut="Tab">
         <param name="switch" value="true" />
@@ -342,7 +344,7 @@
          tool without changing the current one -->
     <quicktools>
       <key tool="eyedropper" shortcut="Alt" />
-      <key tool="move" shortcut="Ctrl" />
+      <key tool="move" shortcut="Ctrl" mac="Cmd" />
       <key tool="hand" shortcut="Space" />
     </quicktools>
 
@@ -370,7 +372,10 @@
 
       <!-- Modifiers for selection tool -->
       <key action="AddSelection" shortcut="Shift" />
-      <key action="SubtractSelection" shortcut="Alt" />
+      <key action="SubtractSelection" shortcut="Shift+Alt" />
+
+      <!-- Modifiers for move tool -->
+      <key action="AutoSelectLayer" shortcut="Ctrl" mac="Cmd" />
     </actions>
 
   </keyboard>
@@ -557,6 +562,7 @@
         <item command="SnapToGrid" text="&amp;Snap to Grid" />
         <item command="GridSettings" text="Gri&amp;d Settings" />
         <separator />
+        <item command="SetLoopSection" text="Set &amp;Loop Section" />
         <item command="ShowOnionSkin" text="Show &amp;Onion Skin" />
         <separator />
         <item command="Timeline" text="&amp;Timeline">
@@ -779,6 +785,9 @@
             ink="scroll"
             controller="freehand"
             />
+    </group>
+
+    <group id="move_tools" text="Move Tools">
       <tool id="move"
             text="Move Tool"
             ink="move"

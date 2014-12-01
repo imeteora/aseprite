@@ -216,6 +216,7 @@ public:
   Document* getDocument() override { return m_document; }
   Sprite* sprite() override { return m_sprite; }
   Layer* getLayer() override { return m_layer; }
+  FrameNumber getFrame() override { return m_frame; }
   Image* getSrcImage() override { return m_expandCelCanvas.getSourceCanvas(); }
   Image* getDstImage() override { return m_expandCelCanvas.getDestCanvas(); }
   RgbMap* getRgbMap() override { return m_sprite->getRgbMap(m_frame); }
@@ -302,7 +303,7 @@ tools::ToolLoop* create_tool_loop(Editor* editor, Context* context)
   }
 
   // If the active layer is not visible.
-  if (!layer->isReadable()) {
+  if (!layer->isVisible()) {
     Alert::show(PACKAGE
                 "<<The current layer is hidden,"
                 "<<make it visible and try again"
@@ -310,7 +311,7 @@ tools::ToolLoop* create_tool_loop(Editor* editor, Context* context)
     return NULL;
   }
   // If the active layer is read-only.
-  else if (!layer->isWritable()) {
+  else if (!layer->isEditable()) {
     Alert::show(PACKAGE
                 "<<The current layer is locked,"
                 "<<unlock it and try again"

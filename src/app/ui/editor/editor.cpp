@@ -680,6 +680,8 @@ void Editor::flashCurrentLayer()
   int x, y;
   const Image* src_image = loc.image(&x, &y);
   if (src_image) {
+    RenderEngine::setPreviewImage(NULL, FrameNumber(0), NULL);
+
     m_document->prepareExtraCel(0, 0, m_sprite->width(), m_sprite->height(), 255);
     Image* flash_image = m_document->getExtraCelImage();
 
@@ -964,7 +966,8 @@ Rect Editor::getVisibleSpriteBounds()
   screenToEditor(vp.x, vp.y, &x1, &y1);
   screenToEditor(vp.x+vp.w-1, vp.y+vp.h-1, &x2, &y2);
 
-  return Rect(x1, y1, x2-x1+1, y2-y1+1);
+  return Rect(0, 0, m_sprite->width(), m_sprite->height())
+    .createIntersect(Rect(x1, y1, x2-x1+1, y2-y1+1));
 }
 
 // Changes the scroll to see the given point as the center of the editor.
@@ -1005,15 +1008,29 @@ void Editor::updateQuicktool()
         return;
     }
 
+    tools::Tool* old_quicktool = m_quicktool;
+    tools::Tool* new_quicktool = m_customizationDelegate->getQuickTool(current_tool);
+
+    // Check if the current state accept the given quicktool.
+    if (new_quicktool && !m_state->acceptQuickTool(new_quicktool))
+      return;
+
     // Hide the drawing cursor with the current tool brush size before
     // we change the quicktool. In this way we avoid using the
     // quicktool brush size to clean the current tool cursor.
-    hideDrawingCursor();
+    //
+    // TODO Remove EditorState::regenerateDrawingCursor() creating a
+    // new Document concept of multiple extra cels: we need an extra
+    // cel for the drawing cursor, other for the moving pixels,
+    // etc. In this way we'll not have conflicts between different
+    // uses of the same extra cel.
+    if (m_state->regenerateDrawingCursor())
+      hideDrawingCursor();
 
-    tools::Tool* old_quicktool = m_quicktool;
-    m_quicktool = m_customizationDelegate->getQuickTool(current_tool);
+    m_quicktool = new_quicktool;
 
-    showDrawingCursor();
+    if (m_state->regenerateDrawingCursor())
+      showDrawingCursor();
 
     // If the tool has changed, we must to update the status bar because
     // the new tool can display something different in the status bar (e.g. Eyedropper)
@@ -1026,11 +1043,15 @@ void Editor::updateQuicktool()
   }
 }
 
-void Editor::updateSelectionMode()
+void Editor::updateContextBarFromModifiers()
 {
   // We update the selection mode only if we're not selecting.
   if (hasCapture())
     return;
+
+  ContextBar* ctxBar = App::instance()->getMainWindow()->getContextBar();
+
+  // Selection mode
 
   SelectionMode mode = UIContext::instance()->settings()->selection()->getSelectionMode();
 
@@ -1043,9 +1064,19 @@ void Editor::updateSelectionMode()
 
   if (mode != m_selectionMode) {
     m_selectionMode = mode;
+    ctxBar->updateSelectionMode(mode);
+  }
 
-    App::instance()->getMainWindow()->getContextBar()
-      ->updateForSelectionMode(mode);
+  // Move tool options
+
+  bool autoSelectLayer = UIContext::instance()->settings()->getAutoSelectLayer();
+
+  if (m_customizationDelegate && m_customizationDelegate->isAutoSelectLayerPressed())
+    autoSelectLayer = true;
+
+  if (m_autoSelectLayer != autoSelectLayer) {
+    m_autoSelectLayer = autoSelectLayer;
+    ctxBar->updateAutoSelectLayer(autoSelectLayer);
   }
 }
 
@@ -1075,7 +1106,7 @@ bool Editor::onProcessMessage(Message* msg)
 
     case kMouseEnterMessage:
       updateQuicktool();
-      updateSelectionMode();
+      updateContextBarFromModifiers();
       break;
 
     case kMouseLeaveMessage:
@@ -1092,7 +1123,7 @@ bool Editor::onProcessMessage(Message* msg)
           m_secondaryButton = mouseMsg->right();
 
           updateQuicktool();
-          updateSelectionMode();
+          updateContextBarFromModifiers();
           editor_setcursor();
         }
 
@@ -1117,7 +1148,7 @@ bool Editor::onProcessMessage(Message* msg)
           m_secondaryButton = false;
 
           updateQuicktool();
-          updateSelectionMode();
+          updateContextBarFromModifiers();
           editor_setcursor();
         }
 
@@ -1133,7 +1164,7 @@ bool Editor::onProcessMessage(Message* msg)
 
         if (hasMouse()) {
           updateQuicktool();
-          updateSelectionMode();
+          updateContextBarFromModifiers();
           editor_setcursor();
         }
 
@@ -1149,7 +1180,7 @@ bool Editor::onProcessMessage(Message* msg)
 
         if (hasMouse()) {
           updateQuicktool();
-          updateSelectionMode();
+          updateContextBarFromModifiers();
           editor_setcursor();
         }
 
@@ -1276,8 +1307,8 @@ bool Editor::canDraw()
 {
   return (m_layer != NULL &&
           m_layer->isImage() &&
-          m_layer->isReadable() &&
-          m_layer->isWritable());
+          m_layer->isVisible() &&
+          m_layer->isEditable());
 }
 
 bool Editor::isInsideSelection()
@@ -1301,7 +1332,7 @@ void Editor::setZoomAndCenterInMouse(int zoom, int mouse_x, int mouse_y, ZoomBeh
 
   switch (zoomBehavior) {
     case kCofiguredZoomBehavior:
-      centerMouse = get_config_bool("Editor", "CenterMouseInZoom", true);
+      centerMouse = get_config_bool("Editor", "CenterOnZoom", false);
       break;
     case kCenterOnZoom:
       centerMouse = true;
@@ -1359,10 +1390,6 @@ void Editor::pasteImage(const Image* image, int x, int y)
 
   // Check bounds where the image will be pasted.
   {
-    // First we limit the image inside the sprite's bounds.
-    x = MID(0, x, sprite->width() - image->width());
-    y = MID(0, y, sprite->height() - image->height());
-
     // Then we check if the image will be visible by the user.
     Rect visibleBounds = getVisibleSpriteBounds();
     x = MID(visibleBounds.x-image->width(), x, visibleBounds.x+visibleBounds.w-1);
@@ -1379,6 +1406,10 @@ void Editor::pasteImage(const Image* image, int x, int y)
       x = visibleBounds.x + visibleBounds.w/2 - image->width()/2;
       y = visibleBounds.y + visibleBounds.h/2 - image->height()/2;
     }
+
+    // We limit the image inside the sprite's bounds.
+    x = MID(0, x, sprite->width() - image->width());
+    y = MID(0, y, sprite->height() - image->height());
   }
 
   PixelsMovementPtr pixelsMovement(

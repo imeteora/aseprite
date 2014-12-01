@@ -177,12 +177,22 @@ bool MovingPixelsState::onMouseDown(Editor* editor, MouseMessage* msg)
 {
   ASSERT(m_pixelsMovement != NULL);
 
-  Decorator* decorator = static_cast<Decorator*>(editor->decorator());
-  Document* document = editor->document();
+  // Set this editor as the active one and setup the ContextBar for
+  // moving pixels. This is needed in case that the user is working
+  // with a couple of Editors, in one is moving pixels and the other
+  // one not.
+  UIContext* ctx = UIContext::instance();
+  ctx->setActiveView(editor->getDocumentView());
+
+  ContextBar* contextBar = App::instance()->getMainWindow()->getContextBar();
+  contextBar->updateForMovingPixels();
 
   // Start scroll loop
   if (checkForScroll(editor, msg))
     return true;
+
+  Decorator* decorator = static_cast<Decorator*>(editor->decorator());
+  Document* document = editor->document();
 
   // Transform selected pixels
   if (document->isMaskVisible() &&
@@ -403,9 +413,23 @@ bool MovingPixelsState::onUpdateStatusBar(Editor* editor)
   return true;
 }
 
+bool MovingPixelsState::acceptQuickTool(tools::Tool* tool)
+{
+  return
+    (!m_pixelsMovement ||
+     tool->getInk(0)->isSelection() ||
+     tool->getInk(0)->isEyedropper() ||
+     tool->getInk(0)->isScrollMovement() ||
+     tool->getInk(0)->isZoom());
+}
+
 // Before executing any command, we drop the pixels (go back to standby).
 void MovingPixelsState::onBeforeCommandExecution(Command* command)
 {
+  // If the command is for other editor, we don't drop pixels.
+  if (!isActiveEditor())
+    return;
+
   // We don't need to drop the pixels if a MoveMaskCommand of Content is executed.
   if (MoveMaskCommand* moveMaskCmd = dynamic_cast<MoveMaskCommand*>(command)) {
     if (moveMaskCmd->getTarget() == MoveMaskCommand::Content)
@@ -422,12 +446,18 @@ void MovingPixelsState::onBeforeCommandExecution(Command* command)
 
 void MovingPixelsState::onBeforeFrameChanged(Editor* editor)
 {
+  if (!isActiveDocument())
+    return;
+
   if (m_pixelsMovement)
     dropPixels(m_editor);
 }
 
 void MovingPixelsState::onBeforeLayerChanged(Editor* editor)
 {
+  if (!isActiveDocument())
+    return;
+
   if (m_pixelsMovement)
     dropPixels(m_editor);
 }
@@ -440,6 +470,9 @@ void MovingPixelsState::onSetMoveTransparentColor(app::Color newColor)
 
 void MovingPixelsState::onDropPixels(ContextBarObserver::DropAction action)
 {
+  if (!isActiveEditor())
+    return;
+
   switch (action) {
 
     case ContextBarObserver::DropPixels:
@@ -476,6 +509,18 @@ void MovingPixelsState::dropPixels(Editor* editor)
 gfx::Transformation MovingPixelsState::getTransformation(Editor* editor)
 {
   return m_pixelsMovement->getTransformation();
+}
+
+bool MovingPixelsState::isActiveDocument() const
+{
+  Document* doc = UIContext::instance()->activeDocument();
+  return (m_editor->document() == doc);
+}
+
+bool MovingPixelsState::isActiveEditor() const
+{
+  Editor* targetEditor = UIContext::instance()->activeEditor();
+  return (targetEditor == m_editor);
 }
 
 } // namespace app

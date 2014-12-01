@@ -1,5 +1,5 @@
 /* Aseprite
- * Copyright (C) 2001-2013  David Capello
+ * Copyright (C) 2001-2014  David Capello
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,12 +23,14 @@
 #include "app/context.h"
 
 #include "app/commands/command.h"
+#include "app/commands/commands.h"
 #include "app/console.h"
 #include "app/document.h"
 #include "app/document_location.h"
 #include "app/settings/settings.h"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace app {
 
@@ -67,6 +69,15 @@ DocumentLocation Context::activeLocation() const
   onGetActiveLocation(&location);
   ASSERT(location.document() == doc::Context::activeDocument());
   return location;
+}
+
+void Context::executeCommand(const char* commandName)
+{
+  Command* cmd = CommandsModule::instance()->getCommandByName(commandName);
+  if (cmd)
+    executeCommand(cmd);
+  else
+    throw std::runtime_error("Invalid command name");
 }
 
 void Context::executeCommand(Command* command, Params* params)
