@@ -74,14 +74,14 @@ bool ScrollingState::onMouseMove(Editor* editor, MouseMessage* msg)
   scroll -= newPos - m_oldPos;
   m_oldPos = newPos;
 
-  editor->setEditorScroll(scroll.x, scroll.y, true);
+  editor->setEditorScroll(scroll, true);
   return true;
 }
 
 bool ScrollingState::onSetCursor(Editor* editor)
 {
   editor->hideDrawingCursor();
-  jmouse_set_cursor(kScrollCursor);
+  ui::set_mouse_cursor(kScrollCursor);
   return true;
 }
 

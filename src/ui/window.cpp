@@ -309,7 +309,7 @@ bool Window::onProcessMessage(Message* msg)
     case kMouseUpMessage:
       if (hasCapture()) {
         releaseMouse();
-        jmouse_set_cursor(kArrowCursor);
+        set_mouse_cursor(kArrowCursor);
 
         if (clickedWindowPos != NULL) {
           delete clickedWindowPos;
@@ -409,7 +409,7 @@ bool Window::onProcessMessage(Message* msg)
           case HitTestBorderS: cursor = kSizeSCursor; break;
         }
 
-        jmouse_set_cursor(cursor);
+        set_mouse_cursor(cursor);
         return true;
       }
       break;
@@ -574,14 +574,14 @@ void Window::moveWindow(const gfx::Rect& rect, bool use_blit)
 
     // Move the window's graphics
     ScreenGraphics g;
-    jmouse_hide();
+    hide_mouse_cursor();
     {
       IntersectClip clip(&g, man_pos);
       if (clip) {
         ui::move_region(moveableRegion, dx, dy);
       }
     }
-    jmouse_show();
+    show_mouse_cursor();
 
     reg1.createSubtraction(reg1, moveableRegion);
     reg1.offset(dx, dy);

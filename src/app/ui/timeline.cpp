@@ -59,7 +59,7 @@
 // Size of the thumbnail in the screen (width x height), the really
 // size of the thumbnail bitmap is specified in the
 // 'generate_thumbnail' routine.
-#define THUMBSIZE       (12*jguiscale())
+#define THUMBSIZE       (12*guiscale())
 
 // Height of the headers.
 #define HDRSIZE         THUMBSIZE
@@ -71,9 +71,9 @@
 #define LAYSIZE         THUMBSIZE
 
 // Space between icons and other information in the layer.
-#define ICONSEP         (2*jguiscale())
+#define ICONSEP         (2*guiscale())
 
-#define OUTLINE_WIDTH   (2*jguiscale()) // TODO theme specific
+#define OUTLINE_WIDTH   (2*guiscale()) // TODO theme specific
 
 // Space between the icon-bitmap and the edge of the surrounding button.
 #define ICONBORDER      0
@@ -162,7 +162,7 @@ Timeline::Timeline()
   , m_document(NULL)
   , m_scroll_x(0)
   , m_scroll_y(0)
-  , m_separator_x(100 * jguiscale())
+  , m_separator_x(100 * guiscale())
   , m_separator_w(1)
   , m_confPopup(NULL)
   , m_clipboard_timer(100, this)
@@ -722,7 +722,7 @@ bool Timeline::onProcessMessage(Message* msg)
       }
 
       updateHotByMousePos(msg,
-        gfx::Point(jmouse_x(0), jmouse_y(0)) - getBounds().getOrigin());
+        ui::get_mouse_position() - getBounds().getOrigin());
 
       if (used)
         return true;
@@ -746,7 +746,7 @@ bool Timeline::onProcessMessage(Message* msg)
       }
 
       updateHotByMousePos(msg,
-        gfx::Point(jmouse_x(0), jmouse_y(0)) - getBounds().getOrigin());
+        ui::get_mouse_position() - getBounds().getOrigin());
 
       if (used)
         return true;
@@ -1003,32 +1003,32 @@ void Timeline::setCursor(ui::Message* msg, const gfx::Point& mousePos)
 {
   // Scrolling.
   if (m_state == STATE_SCROLLING || m_scroll) {
-    jmouse_set_cursor(kScrollCursor);
+    ui::set_mouse_cursor(kScrollCursor);
   }
   // Moving.
   else if (m_state == STATE_MOVING_RANGE) {
     if (isCopyKeyPressed(msg))
-      jmouse_set_cursor(kArrowPlusCursor);
+      ui::set_mouse_cursor(kArrowPlusCursor);
     else
-      jmouse_set_cursor(kMoveCursor);
+      ui::set_mouse_cursor(kMoveCursor);
   }
   // Normal state.
   else if (m_hot_part == A_PART_HEADER_ONIONSKIN_RANGE_LEFT
     || m_state == STATE_MOVING_ONIONSKIN_RANGE_LEFT) {
-    jmouse_set_cursor(kSizeWCursor);
+    ui::set_mouse_cursor(kSizeWCursor);
   }
   else if (m_hot_part == A_PART_HEADER_ONIONSKIN_RANGE_RIGHT
     || m_state == STATE_MOVING_ONIONSKIN_RANGE_RIGHT) {
-    jmouse_set_cursor(kSizeECursor);
+    ui::set_mouse_cursor(kSizeECursor);
   }
   else if (m_hot_part == A_PART_RANGE_OUTLINE) {
-    jmouse_set_cursor(kMoveCursor);
+    ui::set_mouse_cursor(kMoveCursor);
   }
   else if (m_hot_part == A_PART_SEPARATOR) {
-    jmouse_set_cursor(kSizeWECursor);
+    ui::set_mouse_cursor(kSizeWECursor);
   }
   else {
-    jmouse_set_cursor(kArrowCursor);
+    ui::set_mouse_cursor(kArrowCursor);
   }
 }
 
@@ -1295,7 +1295,7 @@ void Timeline::drawRangeOutline(ui::Graphics* g)
     }
 
     case Range::kFrames: {
-      int w = 5 * jguiscale(); // TODO get width from the skin info
+      int w = 5 * guiscale(); // TODO get width from the skin info
 
       if (m_dropTarget.hhit == DropTarget::Before)
         dropBounds.x -= w/2;
@@ -1311,7 +1311,7 @@ void Timeline::drawRangeOutline(ui::Graphics* g)
     }
 
     case Range::kLayers: {
-      int h = 5 * jguiscale(); // TODO get height from the skin info
+      int h = 5 * guiscale(); // TODO get height from the skin info
 
       if (m_dropTarget.vhit == DropTarget::Top)
         dropBounds.y -= h/2;
@@ -1671,12 +1671,8 @@ void Timeline::hotThis(int hot_part, LayerIndex hot_layer, FrameNumber hot_frame
     }
     // Invalidate the old and new 'hot' thing.
     else {
-      invalidatePart(m_hot_part,
-        m_hot_layer,
-        m_hot_frame);
-      invalidatePart(m_hot_part,
-        m_hot_layer,
-        m_hot_frame);
+      invalidatePart(m_hot_part, m_hot_layer, m_hot_frame);
+      invalidatePart(hot_part, hot_layer, hot_frame);
     }
 
     // Draw the new 'hot' thing.

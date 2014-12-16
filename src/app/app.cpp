@@ -124,9 +124,10 @@ App::App()
   m_instance = this;
 }
 
-void App::initialize(int argc, const char* argv[])
+void App::initialize(const AppOptions& options)
 {
-  AppOptions options(argc, argv);
+  if (options.startUI())
+    m_guiSystem.reset(new ui::GuiSystem);
 
   // Initializes the application loading the modules, setting the
   // graphics mode, loading the configuration and resources, etc.
@@ -187,7 +188,7 @@ void App::initialize(int argc, const char* argv[])
     ui::set_use_native_cursors(
       ctx->settings()->experimental()->useNativeCursor());
 
-    jmouse_set_cursor(kArrowCursor);
+    ui::set_mouse_cursor(kArrowCursor);
 
     ui::Manager::getDefault()->invalidate();
 
@@ -209,6 +210,8 @@ void App::initialize(int argc, const char* argv[])
 
   // Procress options
   PRINTF("Processing options...\n");
+
+  bool ignoreEmpty = false;
 
   // Open file specified in the command line
   if (!options.values().empty()) {
@@ -257,6 +260,10 @@ void App::initialize(int argc, const char* argv[])
         else if (opt == &options.importLayer()) {
           importLayer = value.value();
           importLayerSaveAs = value.value();
+        }
+        // --ignore-empty
+        else if (opt == &options.ignoreEmpty()) {
+          ignoreEmpty = true;
         }
         // --save-as <filename>
         else if (opt == &options.saveAs()) {
@@ -380,6 +387,9 @@ void App::initialize(int argc, const char* argv[])
   if (m_exporter != NULL) {
     PRINTF("Exporting sheet...\n");
 
+    if (ignoreEmpty)
+      m_exporter->setIgnoreEmptyCels(true);
+
     m_exporter->exportSheet();
     m_exporter.reset(NULL);
   }
@@ -410,8 +420,6 @@ void App::run()
 
   // Start shell to execute scripts.
   if (m_isShell) {
-    m_systemConsole.prepareShell();
-
     if (m_modules->m_scriptingEngine.supportEval()) {
       Shell shell;
       shell.run(m_modules->m_scriptingEngine);

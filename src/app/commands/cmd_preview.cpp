@@ -63,7 +63,8 @@ public:
     , m_pal(m_sprite->getPalette(editor->frame()))
     , m_index_bg_color(-1)
     , m_doublebuf(Image::create(IMAGE_RGB, ui::display_w(), ui::display_h()))
-    , m_doublesur(she::instance()->createRgbaSurface(ui::display_w(), ui::display_h())) {
+    , m_doublesur(she::instance()->createRgbaSurface(ui::display_w(), ui::display_h()))
+    , m_zoom(editor->zoom()) {
     // Do not use DocumentWriter (do not lock the document) because we
     // will call other sub-commands (e.g. previous frame, next frame,
     // etc.).
@@ -83,7 +84,6 @@ public:
     m_oldMousePos = ui::get_mouse_position();
     m_pos.x = -scroll.x + vp.x + editor->offsetX();
     m_pos.y = -scroll.y + vp.y + editor->offsetY();
-    m_zoom = editor->zoom();
 
     setFocusStop(true);
     captureMouse();
@@ -103,13 +103,13 @@ protected:
 
         gfx::Rect bounds = getBounds();
         gfx::Border border;
-        if (bounds.w > 64*jguiscale()) {
-          border.left(32*jguiscale());
-          border.right(32*jguiscale());
+        if (bounds.w > 64*guiscale()) {
+          border.left(32*guiscale());
+          border.right(32*guiscale());
         }
-        if (bounds.h > 64*jguiscale()) {
-          border.top(32*jguiscale());
-          border.bottom(32*jguiscale());
+        if (bounds.h > 64*guiscale()) {
+          border.top(32*guiscale());
+          border.bottom(32*guiscale());
         }
 
         m_delta += mousePos - m_oldMousePos;
@@ -173,7 +173,7 @@ protected:
       }
 
       case kSetCursorMessage:
-        jmouse_set_cursor(kNoCursor);
+        ui::set_mouse_cursor(kNoCursor);
         return true;
     }
 
@@ -190,17 +190,17 @@ protected:
         m_editor->layer(),
         m_editor->frame());
 
+      ImageBufferPtr buf = Editor::getRenderImageBuffer();
       m_render.reset(
-        renderEngine.renderSprite(
-          0, 0, m_sprite->width(), m_sprite->height(),
-          m_editor->frame(), 0, false, false));
+        renderEngine.renderSprite(m_sprite->bounds(),
+          m_editor->frame(), Zoom(1, 1), false, false, buf));
     }
 
     int x, y, w, h, u, v;
-    x = m_pos.x + ((m_delta.x >> m_zoom) << m_zoom);
-    y = m_pos.y + ((m_delta.y >> m_zoom) << m_zoom);
-    w = (m_sprite->width()<<m_zoom);
-    h = (m_sprite->height()<<m_zoom);
+    x = m_pos.x + m_zoom.apply(m_zoom.remove(m_delta.x));
+    y = m_pos.y + m_zoom.apply(m_zoom.remove(m_delta.y));
+    w = m_zoom.apply(m_sprite->width());
+    h = m_zoom.apply(m_sprite->height());
 
     if (m_tiled & TILED_X_AXIS) x = SGN(x) * (ABS(x)%w);
     if (m_tiled & TILED_Y_AXIS) y = SGN(y) * (ABS(y)%h);
@@ -243,7 +243,7 @@ private:
   gfx::Point m_pos;
   gfx::Point m_oldMousePos;
   gfx::Point m_delta;
-  int m_zoom;
+  Zoom m_zoom;
   int m_index_bg_color;
   base::UniquePtr<Image> m_render;
   base::UniquePtr<Image> m_doublebuf;

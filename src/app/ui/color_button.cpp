@@ -133,12 +133,10 @@ bool ColorButton::onProcessMessage(Message* msg)
             Editor* editor = static_cast<Editor*>(picked);
             DocumentLocation location = editor->getDocumentLocation();
             if (location.sprite()) {
-              int x = mousePos.x;
-              int y = mousePos.y;
-              editor->screenToEditor(x, y, &x, &y);
+              gfx::Point editorPos = editor->screenToEditor(mousePos);
 
               ColorPicker picker;
-              picker.pickColor(location, x, y, ColorPicker::FromComposition);
+              picker.pickColor(location, editorPos, ColorPicker::FromComposition);
               color = picker.color();
             }
           }
@@ -153,7 +151,7 @@ bool ColorButton::onProcessMessage(Message* msg)
 
     case kSetCursorMessage:
       if (hasCapture()) {
-        jmouse_set_cursor(kEyedropperCursor);
+        ui::set_mouse_cursor(kEyedropperCursor);
         return true;
       }
       break;
@@ -167,7 +165,7 @@ void ColorButton::onPreferredSize(PreferredSizeEvent& ev)
 {
   gfx::Rect box;
   getTextIconInfo(&box);
-  box.w = 64*jguiscale();
+  box.w = 64*guiscale();
 
   ev.setPreferredSize(box.w + border_width.l + border_width.r,
                       box.h + border_width.t + border_width.b);
@@ -235,7 +233,6 @@ void ColorButton::openSelectorDialog()
 
   if (m_window == NULL) {
     m_window = new ColorSelector();
-    m_window->user_data[0] = this;
     m_window->ColorChange.connect(&ColorButton::onWindowColorChange, this);
   }
 

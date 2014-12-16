@@ -1,5 +1,5 @@
 /* Aseprite
- * Copyright (C) 2001-2013  David Capello
+ * Copyright (C) 2001-2014  David Capello
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,15 +27,15 @@
 #include "app/ui/editor/editor_observers.h"
 #include "app/ui/editor/editor_state.h"
 #include "app/ui/editor/editor_states_history.h"
+#include "app/zoom.h"
 #include "base/connection.h"
-#include "gfx/fwd.h"
+#include "doc/document_observer.h"
 #include "doc/frame_number.h"
+#include "doc/image_buffer.h"
+#include "gfx/fwd.h"
 #include "ui/base.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
-
-#define MIN_ZOOM 0
-#define MAX_ZOOM 5
 
 namespace doc {
   class Sprite;
@@ -67,9 +67,10 @@ namespace app {
   };
 
   class Editor : public ui::Widget,
+                 public doc::DocumentObserver,
                  public DocumentSettingsObserver {
   public:
-    typedef void (*PixelDelegate)(ui::Graphics* g, int x, int y, gfx::Color color);
+    typedef void (*PixelDelegate)(ui::Graphics*, const gfx::Point&, gfx::Color);
 
     enum EditorFlags {
       kNoneFlag = 0,
@@ -122,18 +123,18 @@ namespace app {
     void setLayer(const Layer* layer);
     void setFrame(FrameNumber frame);
 
-    int zoom() const { return m_zoom; }
+    const Zoom& zoom() const { return m_zoom; }
     int offsetX() const { return m_offset_x; }
     int offsetY() const { return m_offset_y; }
-    int cursorThick() { return m_cursor_thick; }
+    int cursorThick() { return m_cursorThick; }
 
-    void setZoom(int zoom) { m_zoom = zoom; }
+    void setZoom(Zoom zoom) { m_zoom = zoom; }
     void setOffsetX(int x) { m_offset_x = x; }
     void setOffsetY(int y) { m_offset_y = y; }
 
     void setDefaultScroll();
-    void setEditorScroll(int x, int y, bool blit_valid_rgn);
-    void setEditorZoom(int zoom);
+    void setEditorScroll(const gfx::Point& scroll, bool blit_valid_rgn);
+    void setEditorZoom(Zoom zoom);
 
     // Updates the Editor's view.
     void updateEditor();
@@ -144,10 +145,10 @@ namespace app {
 
     void flashCurrentLayer();
 
-    void screenToEditor(int xin, int yin, int* xout, int* yout);
-    void screenToEditor(const gfx::Rect& in, gfx::Rect* out);
-    void editorToScreen(int xin, int yin, int* xout, int* yout);
-    void editorToScreen(const gfx::Rect& in, gfx::Rect* out);
+    gfx::Point screenToEditor(const gfx::Point& pt);
+    gfx::Point editorToScreen(const gfx::Point& pt);
+    gfx::Rect screenToEditor(const gfx::Rect& rc);
+    gfx::Rect editorToScreen(const gfx::Rect& rc);
 
     void showDrawingCursor();
     void hideDrawingCursor();
@@ -166,7 +167,7 @@ namespace app {
     gfx::Rect getVisibleSpriteBounds();
 
     // Changes the scroll to see the given point as the center of the editor.
-    void centerInSpritePoint(int x, int y);
+    void centerInSpritePoint(const gfx::Point& spritePos);
 
     void updateStatusBar();
 
@@ -187,15 +188,20 @@ namespace app {
     // Returns true if the cursor is inside the active mask/selection.
     bool isInsideSelection();
 
-    void setZoomAndCenterInMouse(int zoom, int mouse_x, int mouse_y, ZoomBehavior zoomBehavior);
+    void setZoomAndCenterInMouse(Zoom zoom,
+      const gfx::Point& mousePos, ZoomBehavior zoomBehavior);
 
-    void pasteImage(const Image* image, int x, int y);
+    void pasteImage(const Image* image, const gfx::Point& pos);
 
     void startSelectionTransformation(const gfx::Point& move);
 
     // Used by EditorView to notify changes in the view's scroll
     // position.
     void notifyScrollChanged();
+
+    // Returns the buffer used to render editor viewports.
+    // E.g. It can be re-used by PreviewCommand
+    static ImageBufferPtr getRenderImageBuffer();
 
     // in cursor.cpp
 
@@ -212,6 +218,8 @@ namespace app {
     void onCurrentToolChange();
     void onFgColorChange();
 
+    void onExposeSpritePixels(doc::DocumentEvent& ev);
+
     void onSetTiledMode(filters::TiledMode mode);
     void onSetGridVisible(bool state);
     void onSetGridBounds(const gfx::Rect& rect);
@@ -221,22 +229,23 @@ namespace app {
     void setStateInternal(const EditorStatePtr& newState);
     void updateQuicktool();
     void updateContextBarFromModifiers();
-    void drawBrushPreview(int x, int y, bool refresh = true);
-    void moveBrushPreview(int x, int y, bool refresh = true);
+    void drawBrushPreview(const gfx::Point& pos, bool refresh = true);
+    void moveBrushPreview(const gfx::Point& pos, bool refresh = true);
     void clearBrushPreview(bool refresh = true);
     bool doesBrushPreviewNeedSubpixel();
     bool isCurrentToolAffectedByRightClickMode();
 
     void drawMaskSafe();
     void drawMask(ui::Graphics* g);
-    void drawGrid(ui::Graphics* g, const gfx::Rect& spriteBounds, const gfx::Rect& gridBounds, const app::Color& color);
+    void drawGrid(ui::Graphics* g, const gfx::Rect& spriteBounds, const gfx::Rect& gridBounds,
+      const app::Color& color, int alpha);
 
     void editor_setcursor();
 
     void forEachBrushPixel(
       ui::Graphics* g,
-      int screen_x, int screen_y,
-      int sprite_x, int sprite_y,
+      const gfx::Point& screenPos,
+      const gfx::Point& spritePos,
       gfx::Color color,
       PixelDelegate pixelDelegate);
 
@@ -259,14 +268,12 @@ namespace app {
     Sprite* m_sprite;             // Active sprite in the editor
     Layer* m_layer;               // Active layer in the editor
     FrameNumber m_frame;          // Active frame in the editor
-    int m_zoom;                   // Zoom in the editor
+    Zoom m_zoom;                  // Zoom in the editor
 
     // Drawing cursor
-    int m_cursor_thick;
-    int m_cursor_screen_x; // Position in the screen (view)
-    int m_cursor_screen_y;
-    int m_cursor_editor_x; // Position in the editor (model)
-    int m_cursor_editor_y;
+    int m_cursorThick;
+    gfx::Point m_cursorScreen; // Position in the screen (view)
+    gfx::Point m_cursorEditor; // Position in the editor (model)
 
     // Current selected quicktool (this genererally should be NULL if
     // the user is not pressing any keyboard key).

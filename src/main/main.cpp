@@ -21,16 +21,17 @@
 #endif
 
 #include "app/app.h"
+#include "app/app_options.h"
 #include "app/console.h"
 #include "app/resource_finder.h"
 #include "app/send_crash.h"
 #include "base/exception.h"
 #include "base/memory.h"
 #include "base/memory_dump.h"
+#include "base/system_console.h"
 #include "she/error.h"
 #include "she/scoped_handle.h"
 #include "she/system.h"
-#include "ui/base.h"
 
 #include <cstdlib>
 #include <ctime>
@@ -67,9 +68,10 @@ int app_main(int argc, char* argv[])
 
   try {
     base::MemoryDump memoryDump;
-    she::ScopedHandle<she::System> system(she::create_system());
     MemLeak memleak;
-    ui::GuiSystem guiSystem;
+    base::SystemConsole systemConsole;
+    app::AppOptions options(argc, const_cast<const char**>(argv));
+    she::ScopedHandle<she::System> system(she::create_system());
     app::App app;
 
     // Change the name of the memory dump file
@@ -79,7 +81,11 @@ int app_main(int argc, char* argv[])
         memoryDump.setFileName(filename);
     }
 
-    app.initialize(argc, const_cast<const char**>(argv));
+    app.initialize(options);
+
+    if (options.startShell())
+      systemConsole.prepareShell();
+
     app.run();
     return 0;
   }

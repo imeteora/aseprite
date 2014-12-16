@@ -83,16 +83,6 @@ Widget::Widget(WidgetType type)
   this->m_font = (this->m_theme ? this->m_theme->default_font: NULL);
   this->m_bgColor = gfx::ColorNone;
 
-  this->theme_data[0] = NULL;
-  this->theme_data[1] = NULL;
-  this->theme_data[2] = NULL;
-  this->theme_data[3] = NULL;
-
-  this->user_data[0] = NULL;
-  this->user_data[1] = NULL;
-  this->user_data[2] = NULL;
-  this->user_data[3] = NULL;
-
   m_preferredSize = NULL;
   m_doubleBuffered = false;
   m_transparent = false;
@@ -1049,20 +1039,20 @@ void Widget::invalidateRegion(const Region& region)
   onInvalidateRegion(region);
 }
 
-void Widget::scrollRegion(const Region& region, int dx, int dy)
+void Widget::scrollRegion(const Region& region, const Point& delta)
 {
-  if (dx == 0 && dy == 0)
+  if (delta.x == 0 && delta.y == 0)
     return;
 
   Region reg2 = region;
-  reg2.offset(dx, dy);
+  reg2.offset(delta);
   reg2.createIntersection(reg2, region);
-  reg2.offset(-dx, -dy);
+  reg2.offset(-delta);
 
   // Move screen pixels
-  ui::move_region(reg2, dx, dy);
+  ui::move_region(reg2, delta.x, delta.y);
 
-  reg2.offset(dx, dy);
+  reg2.offset(delta);
 
   m_updateRegion.createUnion(m_updateRegion, region);
   m_updateRegion.createSubtraction(m_updateRegion, reg2);
@@ -1281,7 +1271,7 @@ bool Widget::hasMouse()
 
 bool Widget::hasMouseOver()
 {
-  return (this == this->pick(gfx::Point(jmouse_x(0), jmouse_y(0))));
+  return (this == pick(get_mouse_position()));
 }
 
 bool Widget::hasCapture()
@@ -1365,7 +1355,7 @@ bool Widget::onProcessMessage(Message* msg)
       if (getParent() != NULL)
         return getParent()->sendMessage(msg);
       else {
-        jmouse_set_cursor(kArrowCursor);
+        set_mouse_cursor(kArrowCursor);
         return true;
       }
 

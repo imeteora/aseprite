@@ -37,10 +37,8 @@ static bool native_cursor_set = false; // If we displayed a native cursor
 
 /* Mouse information (button and position).  */
 
-static volatile int m_b[2];
-static int m_x[2];
-static int m_y[2];
-static int m_z[2];
+static volatile MouseButtons m_buttons;
+static gfx::Point m_mouse_pos;
 
 static int mouse_scares = 0;
 
@@ -52,7 +50,7 @@ static void update_mouse_overlay(Cursor* cursor)
     if (!mouse_cursor_overlay) {
       mouse_cursor_overlay = new Overlay(
         mouse_cursor->getSurface(),
-        gfx::Point(m_x[0], m_y[0]),
+        get_mouse_position(),
         Overlay::MouseZOrder);
 
       OverlayManager::instance()->addOverlay(mouse_cursor_overlay);
@@ -165,9 +163,9 @@ int clock()
 
 void set_display(she::Display* display)
 {
-  CursorType cursor = jmouse_get_cursor();
+  CursorType cursor = get_mouse_cursor();
 
-  jmouse_set_cursor(kNoCursor);
+  set_mouse_cursor(kNoCursor);
   mouse_display = display;
 
   if (display) {
@@ -182,7 +180,7 @@ void set_display(she::Display* display)
       }
     }
 
-    jmouse_set_cursor(cursor);  // Restore mouse cursor
+    set_mouse_cursor(cursor);  // Restore mouse cursor
   }
 }
 
@@ -205,8 +203,8 @@ int display_h()
 void update_cursor_overlay()
 {
   if (mouse_cursor_overlay != NULL && mouse_scares == 0) {
-    gfx::Point newPos(m_x[0]-mouse_cursor->getFocus().x,
-                      m_y[0]-mouse_cursor->getFocus().y);
+    gfx::Point newPos =
+      get_mouse_position() - mouse_cursor->getFocus();
 
     if (newPos != mouse_cursor_overlay->getPosition()) {
       mouse_cursor_overlay->moveOverlay(newPos);
@@ -220,12 +218,12 @@ void set_use_native_cursors(bool state)
   use_native_mouse_cursor = state;
 }
 
-CursorType jmouse_get_cursor()
+CursorType get_mouse_cursor()
 {
   return mouse_cursor_type;
 }
 
-void jmouse_set_cursor(CursorType type)
+void set_mouse_cursor(CursorType type)
 {
   if (mouse_cursor_type == type)
     return;
@@ -234,31 +232,19 @@ void jmouse_set_cursor(CursorType type)
   update_mouse_cursor();
 }
 
-void jmouse_hide()
+void hide_mouse_cursor()
 {
   ASSERT(mouse_scares >= 0);
   mouse_scares++;
 }
 
-void jmouse_show()
+void show_mouse_cursor()
 {
   ASSERT(mouse_scares > 0);
   mouse_scares--;
 
   if (mouse_scares == 0)
     update_mouse_cursor();
-}
-
-bool jmouse_is_hidden()
-{
-  ASSERT(mouse_scares >= 0);
-  return mouse_scares > 0;
-}
-
-bool jmouse_is_shown()
-{
-  ASSERT(mouse_scares >= 0);
-  return mouse_scares == 0;
 }
 
 void _internal_no_mouse_position()
@@ -268,27 +254,22 @@ void _internal_no_mouse_position()
 
 void _internal_set_mouse_position(const gfx::Point& newPos)
 {
-  if (m_x[0] >= 0) {
-    m_x[1] = m_x[0];
-    m_y[1] = m_y[0];
-  }
-  else {
-    m_x[1] = newPos.x;
-    m_y[1] = newPos.y;
-  }
-  m_x[0] = newPos.x;
-  m_y[0] = newPos.y;
+  m_mouse_pos = newPos;
 }
 
 void _internal_set_mouse_buttons(MouseButtons buttons)
 {
-  m_b[1] = m_b[0];
-  m_b[0] = buttons;
+  m_buttons = buttons;
 }
 
-gfx::Point get_mouse_position()
+MouseButtons _internal_get_mouse_buttons()
 {
-  return gfx::Point(jmouse_x(0), jmouse_y(0));
+  return m_buttons;
+}
+
+const gfx::Point& get_mouse_position()
+{
+  return m_mouse_pos;
 }
 
 void set_mouse_position(const gfx::Point& newPos)
@@ -298,14 +279,5 @@ void set_mouse_position(const gfx::Point& newPos)
 
   _internal_set_mouse_position(newPos);
 }
-
-MouseButtons jmouse_b(int antique)
-{
-  return (MouseButtons)m_b[antique & 1];
-}
-
-int jmouse_x(int antique) { return m_x[antique & 1]; }
-int jmouse_y(int antique) { return m_y[antique & 1]; }
-int jmouse_z(int antique) { return m_z[antique & 1]; }
 
 } // namespace ui

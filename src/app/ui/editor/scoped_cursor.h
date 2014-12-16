@@ -16,33 +16,36 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef APP_COLOR_UTILS_H_INCLUDED
-#define APP_COLOR_UTILS_H_INCLUDED
+#ifndef APP_UI_EDITOR_SCOPED_CURSOR_H_INCLUDED
+#define APP_UI_EDITOR_SCOPED_CURSOR_H_INCLUDED
 #pragma once
 
-#include "app/color.h"
-#include "app/color_target.h"
-#include "gfx/color.h"
-#include "doc/color.h"
-#include "doc/pixel_format.h"
-
-namespace doc {
-  class Layer;
-}
-
 namespace app {
-  namespace color_utils {
 
-    gfx::Color blackandwhite(gfx::Color color);
-    gfx::Color blackandwhite_neg(gfx::Color color);
+  class ShowHideDrawingCursor {
+  public:
+    ShowHideDrawingCursor(Editor* editor) : m_editor(editor) {
+      m_editor->showDrawingCursor();
+    }
+    ~ShowHideDrawingCursor() {
+      m_editor->hideDrawingCursor();
+    }
+  private:
+    Editor* m_editor;
+  };
 
-    gfx::Color color_for_ui(const app::Color& color);
-    doc::color_t color_for_image(const app::Color& color, doc::PixelFormat format);
-    doc::color_t color_for_layer(const app::Color& color, doc::Layer* layer);
-    doc::color_t color_for_target_mask(const app::Color& color, const ColorTarget& colorTarget);
-    doc::color_t color_for_target(const app::Color& color, const ColorTarget& colorTarget);
+  class HideShowDrawingCursor {
+  public:
+    HideShowDrawingCursor(Editor* editor) : m_editor(editor) {
+      m_editor->hideDrawingCursor();
+    }
+    ~HideShowDrawingCursor() {
+      m_editor->showDrawingCursor();
+    }
+  private:
+    Editor* m_editor;
+  };
 
-  } // namespace color_utils
 } // namespace app
 
 #endif

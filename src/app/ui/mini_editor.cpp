@@ -91,9 +91,9 @@ protected:
     rect.w = playSize.w;
     rect.h = playSize.h;
 
-    rect.offset(window->getBounds().x2() - 3*jguiscale()
-                - playSize.w - 1*jguiscale() - closeSize.w,
-                window->getBounds().y + 3*jguiscale());
+    rect.offset(window->getBounds().x2() - 3*guiscale()
+                - playSize.w - 1*guiscale() - closeSize.w,
+                window->getBounds().y + 3*guiscale());
 
     setBounds(rect);
   }
@@ -103,7 +103,7 @@ protected:
     switch (msg->type()) {
 
       case kSetCursorMessage:
-        jmouse_set_cursor(kArrowCursor);
+        ui::set_mouse_cursor(kArrowCursor);
         return true;
     }
 
@@ -154,7 +154,7 @@ bool MiniEditorWindow::onProcessMessage(ui::Message* msg)
         // Default bounds
         int width = ui::display_w()/4;
         int height = ui::display_h()/4;
-        int extra = 2*kEditorViewScrollbarWidth*jguiscale();
+        int extra = 2*kEditorViewScrollbarWidth*guiscale();
         setBounds(
           gfx::Rect(
             ui::display_w() - width - ToolBar::instance()->getBounds().w - extra,
@@ -245,12 +245,12 @@ void MiniEditorWindow::updateUsingEditor(Editor* editor)
     addChild(m_docView);
 
     miniEditor = m_docView->getEditor();
-    miniEditor->setZoom(0);
+    miniEditor->setZoom(Zoom(1, 1));
     miniEditor->setState(EditorStatePtr(new EditorState));
     layout();
   }
 
-  miniEditor->centerInSpritePoint(pt.x, pt.y);
+  miniEditor->centerInSpritePoint(pt);
   miniEditor->setLayer(editor->layer());
   miniEditor->setFrame(editor->frame());
 }

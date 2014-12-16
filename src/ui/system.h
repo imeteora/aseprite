@@ -38,26 +38,19 @@ namespace ui {
   void update_cursor_overlay();
 
   void set_use_native_cursors(bool state);
-  CursorType jmouse_get_cursor();
-  void jmouse_set_cursor(CursorType type);
+  CursorType get_mouse_cursor();
+  void set_mouse_cursor(CursorType type);
 
-  void jmouse_hide();
-  void jmouse_show();
-
-  bool jmouse_is_hidden();
-  bool jmouse_is_shown();
+  void hide_mouse_cursor();
+  void show_mouse_cursor();
 
   void _internal_no_mouse_position();
   void _internal_set_mouse_position(const gfx::Point& newPos);
   void _internal_set_mouse_buttons(MouseButtons buttons);
+  MouseButtons _internal_get_mouse_buttons();
 
-  gfx::Point get_mouse_position();
+  const gfx::Point& get_mouse_position();
   void set_mouse_position(const gfx::Point& newPos);
-
-  MouseButtons jmouse_b(int antique);
-  int jmouse_x(int antique);
-  int jmouse_y(int antique);
-  int jmouse_z(int antique);
 
 } // namespace ui
 

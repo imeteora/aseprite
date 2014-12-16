@@ -86,16 +86,16 @@ ColorBar::ColorBar(int align)
 {
   m_instance = this;
 
-  setBorder(gfx::Border(2*jguiscale(), 0, 0, 0));
-  child_spacing = 2*jguiscale();
+  setBorder(gfx::Border(2*guiscale(), 0, 0, 0));
+  child_spacing = 2*guiscale();
 
-  m_paletteView.setBoxSize(6*jguiscale());
+  m_paletteView.setBoxSize(6*guiscale());
   m_paletteView.setColumns(8);
   m_fgColor.setPreferredSize(0, m_fgColor.getPreferredSize().h);
   m_bgColor.setPreferredSize(0, m_bgColor.getPreferredSize().h);
 
   // TODO hardcoded scroll bar width should be get from skin.xml file
-  int scrollBarWidth = 6*jguiscale();
+  int scrollBarWidth = 6*guiscale();
   m_scrollableView.getHorizontalBar()->setBarWidth(scrollBarWidth);
   m_scrollableView.getVerticalBar()->setBarWidth(scrollBarWidth);
   setup_mini_look(m_scrollableView.getHorizontalBar());
@@ -202,14 +202,13 @@ void ColorBar::onPaletteButtonDropDownClick()
   }
 }
 
-void ColorBar::onPaletteIndexChange(int index)
+void ColorBar::onPaletteIndexChange(PaletteIndexChangeEvent& ev)
 {
   m_lock = true;
 
-  app::Color color = app::Color::fromIndex(index);
+  app::Color color = app::Color::fromIndex(ev.index());
 
-  // TODO create a PaletteChangeEvent and take left/right mouse button from there
-  if ((jmouse_b(0) & kButtonRight) == kButtonRight)
+  if ((ev.buttons() & kButtonRight) == kButtonRight)
     setBgColor(color);
   else
     setFgColor(color);

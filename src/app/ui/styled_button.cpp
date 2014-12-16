@@ -40,7 +40,7 @@ StyledButton::StyledButton(const std::string& styleName) : Button("") {
 bool StyledButton::onProcessMessage(Message* msg) {
   switch (msg->type()) {
     case kSetCursorMessage:
-      jmouse_set_cursor(kHandCursor);
+      ui::set_mouse_cursor(kHandCursor);
       return true;
   }
   return Button::onProcessMessage(msg);
@@ -48,7 +48,7 @@ bool StyledButton::onProcessMessage(Message* msg) {
 
 void StyledButton::onPreferredSize(PreferredSizeEvent& ev) {
   ev.setPreferredSize(
-    m_style->preferredSize(NULL, skin::Style::State()) + 4*jguiscale());
+    m_style->preferredSize(NULL, skin::Style::State()) + 4*guiscale());
 }
 
 void StyledButton::onPaint(PaintEvent& ev) {

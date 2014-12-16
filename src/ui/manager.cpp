@@ -119,7 +119,7 @@ Manager::~Manager()
   // Finish the main manager.
   if (m_defaultManager == this) {
     // No more cursor
-    jmouse_set_cursor(kNoCursor);
+    set_mouse_cursor(kNoCursor);
 
     // Destroy timers
     Timer::checkNoTimers();
@@ -161,7 +161,7 @@ void Manager::run()
     first_time = false;
 
     Manager::getDefault()->invalidate();
-    jmouse_set_cursor(kArrowCursor);
+    set_mouse_cursor(kArrowCursor);
   }
 
   while (!getChildren().empty())
@@ -219,9 +219,9 @@ void Manager::generateSetCursorMessage(const gfx::Point& mousePos)
   Widget* dst = (capture_widget ? capture_widget: mouse_widget);
   if (dst)
     enqueueMessage(newMouseMessage(kSetCursorMessage, dst,
-        mousePos, currentMouseButtons(0)));
+        mousePos, _internal_get_mouse_buttons()));
   else
-    jmouse_set_cursor(kArrowCursor);
+    set_mouse_cursor(kArrowCursor);
 }
 
 static MouseButtons mouse_buttons_from_she_to_ui(const she::Event& sheEvent)
@@ -276,12 +276,12 @@ void Manager::generateMessagesFromSheEvents()
       }
 
       case she::Event::MouseEnter: {
-        jmouse_set_cursor(kArrowCursor);
+        set_mouse_cursor(kArrowCursor);
         break;
       }
 
       case she::Event::MouseLeave: {
-        jmouse_set_cursor(kOutsideDisplay);
+        set_mouse_cursor(kOutsideDisplay);
         setMouse(NULL);
 
         _internal_no_mouse_position();
@@ -447,7 +447,7 @@ void Manager::dispatchMessages()
 {
   // Add the "Queue Processing" message for the manager.
   enqueueMessage(newMouseMessage(kQueueProcessingMessage, this,
-      gfx::Point(jmouse_x(0), jmouse_y(0)), currentMouseButtons(0)));
+      get_mouse_position(), _internal_get_mouse_buttons()));
 
   pumpQueue();
 }
@@ -660,7 +660,7 @@ void Manager::setMouse(Widget* widget)
         it = widget_parents.begin();
 
       Message* msg = newMouseMessage(kMouseEnterMessage, NULL,
-        gfx::Point(jmouse_x(0), jmouse_y(0)), currentMouseButtons(0));
+        get_mouse_position(), _internal_get_mouse_buttons());
 
       for (; it != widget_parents.end(); ++it) {
         (*it)->flags |= JI_HASMOUSE;
@@ -668,7 +668,7 @@ void Manager::setMouse(Widget* widget)
       }
 
       enqueueMessage(msg);
-      generateSetCursorMessage(gfx::Point(jmouse_x(0), jmouse_y(0)));
+      generateSetCursorMessage(get_mouse_position());
     }
   }
 }
@@ -1261,12 +1261,6 @@ Message* Manager::newMouseMessage(MessageType type,
     msg->addRecipient(widget);
 
   return msg;
-}
-
-// static
-MouseButtons Manager::currentMouseButtons(int antique)
-{
-  return jmouse_b(antique);
 }
 
 // static

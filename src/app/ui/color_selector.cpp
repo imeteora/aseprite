@@ -79,7 +79,7 @@ ColorSelector::ColorSelector()
   m_topBox.setBorder(gfx::Border(0));
   m_topBox.child_spacing = 0;
 
-  m_colorPalette.setBoxSize(6*jguiscale());
+  m_colorPalette.setBoxSize(6*guiscale());
   m_colorPaletteContainer.attachToView(&m_colorPalette);
 
   m_colorPaletteContainer.setExpansive(true);
@@ -125,7 +125,7 @@ ColorSelector::ColorSelector()
   m_hexColorEntry.ColorChange.connect(&ColorSelector::onColorHexEntryChange, this);
 
   selectColorType(app::Color::RgbType);
-  setPreferredSize(gfx::Size(300*jguiscale(), getPreferredSize().h));
+  setPreferredSize(gfx::Size(300*guiscale(), getPreferredSize().h));
 
   m_onPaletteChangeConn =
     App::instance()->PaletteChange.connect(&ColorSelector::onPaletteChange, this);
@@ -172,9 +172,9 @@ app::Color ColorSelector::getColor() const
   return m_color;
 }
 
-void ColorSelector::onColorPaletteIndexChange(int index)
+void ColorSelector::onColorPaletteIndexChange(PaletteIndexChangeEvent& ev)
 {
-  setColorWithSignal(app::Color::fromIndex(index));
+  setColorWithSignal(app::Color::fromIndex(ev.index()));
 }
 
 void ColorSelector::onColorSlidersChange(ColorSlidersChangeEvent& ev)

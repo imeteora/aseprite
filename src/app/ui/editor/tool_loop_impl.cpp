@@ -28,8 +28,10 @@
 #include "app/context.h"
 #include "app/context_access.h"
 #include "app/document_undo.h"
+#include "app/modules/gui.h"
 #include "app/settings/document_settings.h"
 #include "app/settings/settings.h"
+#include "app/tools/controller.h"
 #include "app/tools/ink.h"
 #include "app/tools/shade_table.h"
 #include "app/tools/shading_options.h"
@@ -86,7 +88,6 @@ class ToolLoopImpl : public tools::ToolLoop,
   UndoTransaction m_undoTransaction;
   ExpandCelCanvas m_expandCelCanvas;
   gfx::Region m_dirtyArea;
-  gfx::Rect m_dirtyBounds;
   tools::ShadeTable8* m_shadeTable;
 
 public:
@@ -121,7 +122,18 @@ public:
                           getInk()->isSlice() ||
                           getInk()->isZoom()) ? undo::DoesntModifyDocument:
                                                 undo::ModifyDocument))
-    , m_expandCelCanvas(m_context, m_docSettings->getTiledMode(), m_undoTransaction)
+    , m_expandCelCanvas(m_context,
+        m_docSettings->getTiledMode(),
+        m_undoTransaction,
+        ExpandCelCanvas::Flags(
+          ExpandCelCanvas::NeedsSource |
+          // If the tool is freehand-like, we can use the modified
+          // region directly as undo information to save the modified
+          // pixels (it's faster than creating a Dirty object).
+          // See ExpandCelCanvas::commit() for details about this flag.
+          (getController()->isFreehand() ?
+            ExpandCelCanvas::UseModifiedRegionAsUndoInfo:
+            ExpandCelCanvas::None)))
     , m_shadeTable(NULL)
   {
     // Settings
@@ -188,26 +200,34 @@ public:
 
   ~ToolLoopImpl()
   {
+    bool redraw = false;
+
     if (!m_canceled) {
       // Paint ink
       if (getInk()->isPaint()) {
-        m_expandCelCanvas.commit(m_dirtyBounds);
+        m_expandCelCanvas.commit();
       }
       // Selection ink
       else if (getInk()->isSelection()) {
         m_document->generateMaskBoundaries();
+        redraw = true;
       }
 
       m_undoTransaction.commit();
     }
+    else
+      redraw = true;
 
-    // If the trace was not canceled or it is not a 'paint' ink...
+    // If the trace was canceled or it is not a 'paint' ink...
     if (m_canceled || !getInk()->isPaint()) {
       m_expandCelCanvas.rollback();
     }
 
     delete m_brush;
     delete m_shadeTable;
+
+    if (redraw)
+      update_screen_for_document(m_document);
   }
 
   // IToolLoop interface
@@ -217,12 +237,30 @@ public:
   Sprite* sprite() override { return m_sprite; }
   Layer* getLayer() override { return m_layer; }
   FrameNumber getFrame() override { return m_frame; }
-  Image* getSrcImage() override { return m_expandCelCanvas.getSourceCanvas(); }
+
+  const Image* getSrcImage() override { return m_expandCelCanvas.getSourceCanvas(); }
   Image* getDstImage() override { return m_expandCelCanvas.getDestCanvas(); }
+  void validateSrcImage(const gfx::Region& rgn) override {
+    return m_expandCelCanvas.validateSourceCanvas(rgn);
+  }
+  void validateDstImage(const gfx::Region& rgn) override {
+    return m_expandCelCanvas.validateDestCanvas(rgn);
+  }
+  void invalidateDstImage() override {
+    return m_expandCelCanvas.invalidateDestCanvas();
+  }
+  void invalidateDstImage(const gfx::Region& rgn) override {
+    return m_expandCelCanvas.invalidateDestCanvas(rgn);
+  }
+  void copyValidDstToSrcImage(const gfx::Region& rgn) override {
+    return m_expandCelCanvas.copyValidDestToSourceCanvas(rgn);
+  }
+
   RgbMap* getRgbMap() override { return m_sprite->getRgbMap(m_frame); }
   bool useMask() override { return m_useMask; }
   Mask* getMask() override { return m_mask; }
   gfx::Point getMaskOrigin() override { return m_maskOrigin; }
+  const Zoom& zoom() override { return m_editor->zoom(); }
   ToolLoop::Button getMouseButton() override { return m_button; }
   int getPrimaryColor() override { return m_primary_color; }
   void setPrimaryColor(int color) override { m_primary_color = color; }
@@ -253,10 +291,7 @@ public:
 
   gfx::Point screenToSprite(const gfx::Point& screenPoint) override
   {
-    gfx::Point spritePoint;
-    m_editor->screenToEditor(screenPoint.x, screenPoint.y,
-                             &spritePoint.x, &spritePoint.y);
-    return spritePoint;
+    return m_editor->screenToEditor(screenPoint);
   }
 
   gfx::Region& getDirtyArea() override
@@ -266,8 +301,9 @@ public:
 
   void updateDirtyArea() override
   {
-    m_dirtyBounds = m_dirtyBounds.createUnion(m_dirtyArea.bounds());
+    m_editor->hideDrawingCursor();
     m_document->notifySpritePixelsModified(m_sprite, m_dirtyArea);
+    m_editor->showDrawingCursor();
   }
 
   void updateStatusBar(const char* text) override
@@ -298,24 +334,21 @@ tools::ToolLoop* create_tool_loop(Editor* editor, Context* context)
 
   Layer* layer = editor->layer();
   if (!layer) {
-    Alert::show(PACKAGE "<<The current sprite does not have any layer.||&Close");
+    StatusBar::instance()->showTip(1000,
+      "There is no active layer");
     return NULL;
   }
 
   // If the active layer is not visible.
   if (!layer->isVisible()) {
-    Alert::show(PACKAGE
-                "<<The current layer is hidden,"
-                "<<make it visible and try again"
-                "||&Close");
+    StatusBar::instance()->showTip(1000,
+      "Layer '%s' is hidden", layer->name().c_str());
     return NULL;
   }
   // If the active layer is read-only.
   else if (!layer->isEditable()) {
-    Alert::show(PACKAGE
-                "<<The current layer is locked,"
-                "<<unlock it and try again"
-                "||&Close");
+    StatusBar::instance()->showTip(1000,
+      "Layer '%s' is locked", layer->name().c_str());
     return NULL;
   }
 

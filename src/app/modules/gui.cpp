@@ -277,13 +277,14 @@ void gui_setup_screen(bool reload_font)
   ui::set_display(main_display);
 
   // Update guiscale factor
-  int old_guiscale = jguiscale();
-  CurrentTheme::get()->guiscale = (screen_scaling == 1 &&
-    ui::display_w() > 512 &&
-    ui::display_h() > 256) ? 2: 1;
+  int old_guiscale = guiscale();
+  CurrentTheme::get()->setScale(
+    (screen_scaling == 1 &&
+      ui::display_w() > 512 &&
+      ui::display_h() > 256) ? 2: 1);
 
   // If the guiscale have changed
-  if (old_guiscale != jguiscale()) {
+  if (old_guiscale != guiscale()) {
     reload_font = true;
     regen = true;
   }
@@ -427,10 +428,24 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
           CommandsModule::instance()->getCommandByName(CommandId::OpenFile);
         Params params;
 
-        for (DropFilesMessage::Files::const_iterator
-               it = files.begin(); it != files.end(); ++it) {
-          params.set("filename", it->c_str());
-          UIContext::instance()->executeCommand(cmd_open_file, &params);
+        UIContext* ctx = UIContext::instance();
+
+        for (const auto& fn : files) {
+          // If the document is already open, select it.
+          Document* doc = static_cast<Document*>(ctx->documents().getByFileName(fn));
+          if (doc) {
+            DocumentView* docView = ctx->getFirstDocumentView(doc);
+            if (docView)
+              ctx->setActiveView(docView);
+            else {
+              ASSERT(false);    // Must be some DocumentView available
+            }
+          }
+          // Load the file
+          else {
+            params.set("filename", fn.c_str());
+            ctx->executeCommand(cmd_open_file, &params);
+          }
         }
       }
       break;

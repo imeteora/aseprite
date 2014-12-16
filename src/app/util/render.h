@@ -21,7 +21,10 @@
 #pragma once
 
 #include "app/color.h"
+#include "app/zoom.h"
 #include "doc/frame_number.h"
+#include "doc/image_buffer.h"
+#include "gfx/rect.h"
 
 namespace doc {
   class Image;
@@ -66,31 +69,32 @@ namespace app {
     static void setPreviewImage(const Layer* layer, FrameNumber frame, Image* drawable);
 
     //////////////////////////////////////////////////////////////////////
-    // Main function used by sprite-editors to render the sprite
-
-    Image* renderSprite(int source_x, int source_y,
-      int width, int height,
-      FrameNumber frame, int zoom,
+    // Main function used by sprite-editors to render the sprite.
+    // Draws the given sprite frame in a new image and return it.
+    // Note: zoomedRect must have the zoom applied (zoomedRect = zoom.apply(spriteRect)).
+    Image* renderSprite(const gfx::Rect& zoomedRect,
+      FrameNumber frame, Zoom zoom,
       bool draw_tiled_bg,
-      bool enable_onionskin);
+      bool enable_onionskin,
+      ImageBufferPtr& buffer);
 
     //////////////////////////////////////////////////////////////////////
     // Extra functions
 
     static void renderCheckedBackground(Image* image,
                                         int source_x, int source_y,
-                                        int zoom);
+                                        Zoom zoom);
 
     static void renderImage(Image* rgb_image, Image* src_image, const Palette* pal,
-                            int x, int y, int zoom);
+                            int x, int y, Zoom zoom);
 
   private:
     void renderLayer(
       const Layer* layer,
       Image* image,
       int source_x, int source_y,
-      FrameNumber frame, int zoom,
-      void (*zoomed_func)(Image*, const Image*, const Palette*, int, int, int, int, int),
+      FrameNumber frame, Zoom zoom,
+      void (*zoomed_func)(Image*, const Image*, const Palette*, int, int, int, int, Zoom),
       bool render_background,
       bool render_transparent,
       int blend_mode);

@@ -121,6 +121,11 @@ void StandbyState::onCurrentToolChange(Editor* editor)
   editor->invalidate();
 }
 
+void StandbyState::onQuickToolChange(Editor* editor)
+{
+  editor->invalidate();
+}
+
 bool StandbyState::checkForScroll(Editor* editor, MouseMessage* msg)
 {
   tools::Ink* clickedInk = editor->getCurrentEditorInk();
@@ -159,7 +164,6 @@ bool StandbyState::onMouseDown(Editor* editor, MouseMessage* msg)
     return true;
 
   UIContext* context = UIContext::instance();
-  tools::Tool* currentTool = editor->getCurrentEditorTool();
   tools::Ink* clickedInk = editor->getCurrentEditorInk();
   DocumentLocation location;
   editor->getDocumentLocation(&location);
@@ -177,14 +181,10 @@ bool StandbyState::onMouseDown(Editor* editor, MouseMessage* msg)
   if (clickedInk->isCelMovement()) {
     // Handle "Auto Select Layer"
     if (editor->isAutoSelectLayer()) {
+      gfx::Point cursor = editor->screenToEditor(msg->position());
+
       ColorPicker picker;
-      int x, y;
-
-      editor->screenToEditor(
-        msg->position().x,
-        msg->position().y, &x, &y);
-
-      picker.pickColor(location, x, y, ColorPicker::FromComposition);
+      picker.pickColor(location, cursor, ColorPicker::FromComposition);
 
       if (layer != picker.layer()) {
         layer = picker.layer();
@@ -196,15 +196,19 @@ bool StandbyState::onMouseDown(Editor* editor, MouseMessage* msg)
     }
 
     if ((layer) &&
-      (layer->type() == ObjectType::LayerImage)) {
-      // TODO you can move the `Background' with tiled mode
+        (layer->type() == ObjectType::LayerImage)) {
+      // TODO we should be able to move the `Background' with tiled mode
       if (layer->isBackground()) {
-        Alert::show(PACKAGE
-                    "<<You can't move the `Background' layer."
-                    "||&Close");
+        StatusBar::instance()->showTip(1000,
+          "The background layer cannot be moved");
       }
-      else if (!layer->isMovable()) {
-        Alert::show(PACKAGE "<<The layer movement is locked.||&Close");
+      else if (!layer->isVisible()) {
+        StatusBar::instance()->showTip(1000,
+          "Layer '%s' is hidden", layer->name().c_str());
+      }
+      else if (!layer->isMovable() || !layer->isEditable()) {
+        StatusBar::instance()->showTip(1000,
+          "Layer '%s' is locked", layer->name().c_str());
       }
       else {
         // Change to MovingCelState
@@ -236,7 +240,8 @@ bool StandbyState::onMouseDown(Editor* editor, MouseMessage* msg)
         Image* image = location.image(&x, &y, &opacity);
         if (image) {
           if (!layer->isEditable()) {
-            Alert::show(PACKAGE "<<The layer is locked.||&Close");
+            StatusBar::instance()->showTip(1000,
+              "Layer '%s' is locked", layer->name().c_str());
             return true;
           }
 
@@ -250,7 +255,8 @@ bool StandbyState::onMouseDown(Editor* editor, MouseMessage* msg)
     // Move selected pixels
     if (editor->isInsideSelection() && msg->left()) {
       if (!layer->isEditable()) {
-        Alert::show(PACKAGE "<<The layer is locked.||&Close");
+        StatusBar::instance()->showTip(1000,
+          "Layer '%s' is locked", layer->name().c_str());
         return true;
       }
 
@@ -263,8 +269,13 @@ bool StandbyState::onMouseDown(Editor* editor, MouseMessage* msg)
   // Start the Tool-Loop
   if (layer) {
     tools::ToolLoop* toolLoop = create_tool_loop(editor, context);
-    if (toolLoop)
-      editor->setState(EditorStatePtr(new DrawingState(toolLoop, editor, msg)));
+    if (toolLoop) {
+      EditorStatePtr newState(new DrawingState(toolLoop));
+      editor->setState(newState);
+
+      static_cast<DrawingState*>(newState.get())
+        ->initToolLoop(editor, msg);
+    }
     return true;
   }
 
@@ -364,11 +375,20 @@ bool StandbyState::onMouseWheel(Editor* editor, MouseMessage* msg)
 
     case WHEEL_ZOOM: {
       MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-      int zoom = MID(MIN_ZOOM, editor->zoom()-dz, MAX_ZOOM);
-      if (editor->zoom() != zoom)
+      Zoom zoom = editor->zoom();
+      if (dz < 0) {
+        while (dz++ < 0)
+          zoom.in();
+      }
+      else {
+        while (dz-- > 0)
+          zoom.out();
+      }
+
+      if (editor->zoom() != zoom) {
         editor->setZoomAndCenterInMouse(zoom,
-          mouseMsg->position().x, mouseMsg->position().y,
-          Editor::kDontCenterOnZoom);
+          mouseMsg->position(), Editor::kDontCenterOnZoom);
+      }
       break;
     }
 
@@ -376,29 +396,26 @@ bool StandbyState::onMouseWheel(Editor* editor, MouseMessage* msg)
     case WHEEL_VSCROLL: {
       View* view = View::getView(editor);
       gfx::Rect vp = view->getViewportBounds();
-      int dx = 0;
-      int dy = 0;
+      gfx::Point delta(0, 0);
 
       if (wheelAction == WHEEL_HSCROLL) {
-        dx = dz * vp.w;
+        delta.x = dz * vp.w;
       }
       else {
-        dy = dz * vp.h;
+        delta.y = dz * vp.h;
       }
 
       if (scrollBigSteps) {
-        dx /= 2;
-        dy /= 2;
+        delta /= 2;
       }
       else {
-        dx /= 10;
-        dy /= 10;
+        delta /= 10;
       }
 
       gfx::Point scroll = view->getViewScroll();
 
       editor->hideDrawingCursor();
-      editor->setEditorScroll(scroll.x+dx, scroll.y+dy, true);
+      editor->setEditorScroll(scroll+delta, true);
       editor->showDrawingCursor();
       break;
     }
@@ -425,35 +442,35 @@ bool StandbyState::onSetCursor(Editor* editor)
         editor->hideDrawingCursor();
 
         if (customization && customization->isCopySelectionKeyPressed())
-          jmouse_set_cursor(kArrowPlusCursor);
+          ui::set_mouse_cursor(kArrowPlusCursor);
         else
-          jmouse_set_cursor(kMoveCursor);
+          ui::set_mouse_cursor(kMoveCursor);
 
         return true;
       }
     }
     else if (ink->isEyedropper()) {
       editor->hideDrawingCursor();
-      jmouse_set_cursor(kEyedropperCursor);
+      ui::set_mouse_cursor(kEyedropperCursor);
       return true;
     }
     else if (ink->isZoom()) {
       editor->hideDrawingCursor();
-      jmouse_set_cursor(kMagnifierCursor);
+      ui::set_mouse_cursor(kMagnifierCursor);
       return true;
     }
     else if (ink->isScrollMovement()) {
       editor->hideDrawingCursor();
-      jmouse_set_cursor(kScrollCursor);
+      ui::set_mouse_cursor(kScrollCursor);
       return true;
     }
     else if (ink->isCelMovement()) {
       editor->hideDrawingCursor();
-      jmouse_set_cursor(kMoveCursor);
+      ui::set_mouse_cursor(kMoveCursor);
       return true;
     }
     else if (ink->isSlice()) {
-      jmouse_set_cursor(kNoCursor);
+      ui::set_mouse_cursor(kNoCursor);
       editor->showDrawingCursor();
       return true;
     }
@@ -461,13 +478,13 @@ bool StandbyState::onSetCursor(Editor* editor)
 
   // Draw
   if (editor->canDraw()) {
-    jmouse_set_cursor(kNoCursor);
+    ui::set_mouse_cursor(kNoCursor);
     editor->showDrawingCursor();
   }
   // Forbidden
   else {
     editor->hideDrawingCursor();
-    jmouse_set_cursor(kForbiddenCursor);
+    ui::set_mouse_cursor(kForbiddenCursor);
   }
 
   return true;
@@ -487,9 +504,7 @@ bool StandbyState::onUpdateStatusBar(Editor* editor)
 {
   tools::Ink* ink = editor->getCurrentEditorInk();
   const Sprite* sprite = editor->sprite();
-  int x, y;
-
-  editor->screenToEditor(jmouse_x(0), jmouse_y(0), &x, &y);
+  gfx::Point spritePos = editor->screenToEditor(ui::get_mouse_position());
 
   if (!sprite) {
     StatusBar::instance()->clearText();
@@ -498,13 +513,14 @@ bool StandbyState::onUpdateStatusBar(Editor* editor)
   else if (ink->isEyedropper()) {
     bool grabAlpha = UIContext::instance()->settings()->getGrabAlpha();
     ColorPicker picker;
-    picker.pickColor(editor->getDocumentLocation(), x, y,
+    picker.pickColor(editor->getDocumentLocation(),
+      spritePos,
       grabAlpha ?
       ColorPicker::FromActiveLayer:
       ColorPicker::FromComposition);
 
     char buf[256];
-    sprintf(buf, "- Pos %d %d", x, y);
+    sprintf(buf, "- Pos %d %d", spritePos.x, spritePos.y);
 
     StatusBar::instance()->showColor(0, buf, picker.color(), picker.alpha());
   }
@@ -515,7 +531,7 @@ bool StandbyState::onUpdateStatusBar(Editor* editor)
 
     StatusBar::instance()->setStatusText(0,
       "Pos %d %d, Size %d %d, Frame %d [%d msecs]",
-      x, y,
+      spritePos.x, spritePos.y,
       (mask ? mask->bounds().w: sprite->width()),
       (mask ? mask->bounds().h: sprite->height()),
       editor->frame()+1,
@@ -535,7 +551,7 @@ void StandbyState::startSelectionTransformation(Editor* editor, const gfx::Point
   transformSelection(editor, NULL, NoHandle);
 
   if (MovingPixelsState* movingPixels = dynamic_cast<MovingPixelsState*>(editor->getState().get()))
-    movingPixels->translate(move.x, move.y);
+    movingPixels->translate(move);
 }
 
 void StandbyState::transformSelection(Editor* editor, MouseMessage* msg, HandleType handle)
@@ -544,15 +560,14 @@ void StandbyState::transformSelection(Editor* editor, MouseMessage* msg, HandleT
     EditorCustomizationDelegate* customization = editor->getCustomizationDelegate();
     Document* document = editor->document();
     base::UniquePtr<Image> tmpImage(NewImageFromMask(editor->getDocumentLocation()));
-    int x = document->mask()->bounds().x;
-    int y = document->mask()->bounds().y;
+    gfx::Point origin = document->mask()->bounds().getOrigin();
     int opacity = 255;
     Sprite* sprite = editor->sprite();
     Layer* layer = editor->layer();
     PixelsMovementPtr pixelsMovement(
       new PixelsMovement(UIContext::instance(),
         document, sprite, layer,
-        tmpImage, x, y, opacity,
+        tmpImage, origin, opacity,
         "Transformation"));
 
     // If the Ctrl key is pressed start dragging a copy of the selection
@@ -568,7 +583,7 @@ void StandbyState::transformSelection(Editor* editor, MouseMessage* msg, HandleT
 
     // TODO steal the PixelsMovement of the other editor and use it for this one.
     StatusBar::instance()->showTip(1000, "The sprite is locked in other editor");
-    jmouse_set_cursor(kForbiddenCursor);
+    ui::set_mouse_cursor(kForbiddenCursor);
   }
 }
 
@@ -618,8 +633,7 @@ bool StandbyState::Decorator::onSetCursor(Editor* editor)
   const gfx::Transformation transformation(m_standbyState->getTransformation(editor));
   TransformHandles* tr = getTransformHandles(editor);
   HandleType handle = tr->getHandleAtPoint(editor,
-                                           gfx::Point(jmouse_x(0), jmouse_y(0)),
-                                           transformation);
+    ui::get_mouse_position(), transformation);
 
   CursorType newCursor = kArrowCursor;
 
@@ -673,7 +687,7 @@ bool StandbyState::Decorator::onSetCursor(Editor* editor)
 
   // Hide the drawing cursor (just in case) and show the new system cursor.
   editor->hideDrawingCursor();
-  jmouse_set_cursor(newCursor);
+  ui::set_mouse_cursor(newCursor);
   return true;
 }
 

@@ -26,7 +26,7 @@ endif()
 # Note: This needs to be done before the project command
 set(CMAKE_CONFIGURATION_TYPES "${CMAKE_BUILD_TYPE}" CACHE INTERNAL "internal")
 
-# ASE project
+# Aseprite project
 project(aseprite C CXX)
 
 ######################################################################
@@ -61,26 +61,44 @@ mark_as_advanced(
     CMAKE_EXE_LINKER_FLAGS_PROFILE
     )
 
-if(COMPILER_GCC)
+if(CMAKE_COMPILER_IS_GNUCC)
     set(CMAKE_C_FLAGS_PROFILE "-pg"
-        CACHE STRING "profiling flags")
+        CACHE STRING "Profiling C flags")
     set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_C_FLAGS_PROFILE}"
-        CACHE STRING "profiling flags")
+        CACHE STRING "Profiling C++ flags")
     set(CMAKE_EXE_LINKER_FLAGS_PROFILE "-pg"
-        CACHE STRING "profiling flags")
-endif(COMPILER_GCC)
+        CACHE STRING "Profiling linker flags")
+endif()
 
-if(COMPILER_MSVC)
-    set(CMAKE_C_FLAGS_PROFILE "-Gd -Ox"
-        CACHE STRING "profiling flags")
+if(MSVC)
+    set(CMAKE_C_FLAGS_PROFILE "/MD /Zi /Ox /Gd /D NDEBUG"
+        CACHE STRING "Profiling C flags")
     set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_C_FLAGS_PROFILE}"
-        CACHE STRING "profiling flags")
-    set(CMAKE_EXE_LINKER_FLAGS_PROFILE "-profile"
-        CACHE STRING "profiling flags")
-endif(COMPILER_MSVC)
+        CACHE STRING "Profiling C++ flags")
+    set(CMAKE_EXE_LINKER_FLAGS_PROFILE "/PROFILE /DEBUG"
+        CACHE STRING "Profiling linker flags")
+endif()
 
 ######################################################################
 # Directories
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+# We need to specify the output for each configuration to make it work
+# on Visual Studio solutions.
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_PROFILE "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_PROFILE "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_PROFILE "${CMAKE_BINARY_DIR}/bin")
 
 set(CURL_DIR            ${CMAKE_SOURCE_DIR}/third_party/curl)
 set(GIFLIB_DIR          ${CMAKE_SOURCE_DIR}/third_party/giflib)

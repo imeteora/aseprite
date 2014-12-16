@@ -59,11 +59,6 @@ namespace ui {
     int max_w, max_h;
 
   public:
-    // Extra data for the theme
-    void *theme_data[4];
-
-    /* for user */
-    void *user_data[4];
 
     // ===============================================================
     // CTOR & DTOR
@@ -305,7 +300,7 @@ namespace ui {
 
     void flushRedraw();
 
-    void scrollRegion(const gfx::Region& region, int dx, int dy);
+    void scrollRegion(const gfx::Region& region, const gfx::Point& delta);
 
     GraphicsPtr getGraphics(const gfx::Rect& clip);
 

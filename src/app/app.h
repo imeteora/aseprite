@@ -22,7 +22,6 @@
 
 #include "base/signal.h"
 #include "base/string.h"
-#include "base/system_console.h"
 #include "base/unique_ptr.h"
 #include "doc/pixel_format.h"
 
@@ -33,8 +32,13 @@ namespace doc {
   class Layer;
 }
 
+namespace ui {
+  class GuiSystem;
+}
+
 namespace app {
 
+  class AppOptions;
   class Document;
   class DocumentExporter;
   class INotificationDelegate;
@@ -65,7 +69,7 @@ namespace app {
     // Runs the Aseprite application. In GUI mode it's the top-level
     // window, in console/scripting it just runs the specified
     // scripts.
-    void initialize(int argc, const char* argv[]);
+    void initialize(const AppOptions& options);
     void run();
 
     tools::ToolBox* getToolBox() const;
@@ -90,7 +94,7 @@ namespace app {
 
     static App* m_instance;
 
-    base::SystemConsole m_systemConsole;
+    base::UniquePtr<ui::GuiSystem> m_guiSystem;
     Modules* m_modules;
     LegacyModules* m_legacy;
     bool m_isGui;
