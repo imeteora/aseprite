@@ -22,8 +22,7 @@
 
 #include "app/settings/selection_mode.h"
 #include "app/tools/trace_policy.h"
-#include "app/zoom.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
 #include "filters/tiled_mode.h"
 #include "gfx/point.h"
 
@@ -38,6 +37,10 @@ namespace doc {
   class Brush;
   class RgbMap;
   class Sprite;
+}
+
+namespace render {
+  class Zoom;
 }
 
 namespace app {
@@ -85,7 +88,7 @@ namespace app {
       virtual Layer* getLayer() = 0;
 
       // Returns the frame where we're paiting
-      virtual FrameNumber getFrame() = 0;
+      virtual frame_t getFrame() = 0;
 
       // Should return an image where we can read pixels (readonly image)
       virtual const Image* getSrcImage() = 0;
@@ -129,7 +132,7 @@ namespace app {
       virtual gfx::Point getMaskOrigin() = 0;
 
       // Returns the zoom
-      virtual const Zoom& zoom() = 0;
+      virtual const render::Zoom& zoom() = 0;
 
       // Return the mouse button which start the tool-loop. It can be used
       // by some tools that instead of using the primary/secondary color

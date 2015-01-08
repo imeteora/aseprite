@@ -7,7 +7,6 @@
 file(GLOB widget_files ${CMAKE_SOURCE_DIR}/data/widgets/*.xml)
 foreach(widget_file ${widget_files})
   get_filename_component(widget_name ${widget_file} NAME_WE)
-  set(target_name generated_${widget_name})
   set(output_fn ${CMAKE_CURRENT_BINARY_DIR}/generated_${widget_name}.h)
 
   add_custom_command(
@@ -17,8 +16,29 @@ foreach(widget_file ${widget_files})
     MAIN_DEPENDENCY ${widget_file}
     DEPENDS gen)
 
-  list(APPEND generated_header_files ${output_fn})
+  list(APPEND generated_files ${output_fn})
 endforeach()
+
+# pref.h and pref.cpp
+set(pref_xml ${CMAKE_SOURCE_DIR}/data/pref.xml)
+
+set(output_fn ${CMAKE_CURRENT_BINARY_DIR}/generated_pref_types.h)
+add_custom_command(
+  OUTPUT ${output_fn}
+  COMMAND ${CMAKE_BINARY_DIR}/bin/gen --input ${pref_xml} --pref-h > ${output_fn}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  MAIN_DEPENDENCY ${pref_xml}
+  DEPENDS gen)
+list(APPEND generated_files ${output_fn})
+
+set(output_fn ${CMAKE_CURRENT_BINARY_DIR}/generated_pref_types.cpp)
+add_custom_command(
+  OUTPUT ${output_fn}
+  COMMAND ${CMAKE_BINARY_DIR}/bin/gen --input ${pref_xml} --pref-cpp > ${output_fn}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+  MAIN_DEPENDENCY ${pref_xml}
+  DEPENDS gen)
+list(APPEND generated_files ${output_fn})
 
 # Directory where generated files by "gen" utility will stay.
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
@@ -30,6 +50,7 @@ add_library(app-lib
   app.cpp
   app_menus.cpp
   app_options.cpp
+  app_render.cpp
   backup.cpp
   check_update.cpp
   color.cpp
@@ -77,6 +98,7 @@ add_library(app-lib
   commands/cmd_load_palette.cpp
   commands/cmd_mask_all.cpp
   commands/cmd_mask_by_color.cpp
+  commands/cmd_mask_content.cpp
   commands/cmd_merge_down_layer.cpp
   commands/cmd_move_cel.cpp
   commands/cmd_move_mask.cpp
@@ -168,6 +190,7 @@ add_library(app-lib
   modules/gui.cpp
   modules/palettes.cpp
   objects_container_impl.cpp
+  pref/preferences.cpp
   project.cpp
   recent_files.cpp
   res/palettes_loader_delegate.cpp
@@ -242,7 +265,6 @@ add_library(app-lib
   undo_transaction.cpp
   undoers/add_cel.cpp
   undoers/add_frame.cpp
-  undoers/add_image.cpp
   undoers/add_layer.cpp
   undoers/add_palette.cpp
   undoers/close_group.cpp
@@ -251,11 +273,11 @@ add_library(app-lib
   undoers/image_area.cpp
   undoers/modified_region.cpp
   undoers/move_layer.cpp
+  undoers/object_io.cpp
   undoers/open_group.cpp
   undoers/remap_palette.cpp
   undoers/remove_cel.cpp
   undoers/remove_frame.cpp
-  undoers/remove_image.cpp
   undoers/remove_layer.cpp
   undoers/remove_palette.cpp
   undoers/replace_image.cpp
@@ -281,10 +303,8 @@ add_library(app-lib
   util/msk_file.cpp
   util/pic_file.cpp
   util/range_utils.cpp
-  util/render.cpp
   webserver.cpp
   widget_loader.cpp
   xml_document.cpp
   xml_exception.cpp
-  zoom.cpp
-  ${generated_header_files})
+  ${generated_files})

@@ -13,9 +13,9 @@
 #include "base/memory.h"
 #include "base/remove_from_container.h"
 #include "base/unique_ptr.h"
+#include "doc/doc.h"
 #include "doc/image_bits.h"
 #include "doc/primitives.h"
-#include "doc/doc.h"
 
 #include <cstring>
 #include <vector>
@@ -38,11 +38,10 @@ Sprite::Sprite(PixelFormat format, int width, int height, int ncolors)
   ASSERT(width > 0 && height > 0);
 
   m_frlens.push_back(100);      // First frame with 100 msecs of duration
-  m_stock = new Stock(this, format);
   m_folder = new LayerFolder(this);
 
   // Generate palette
-  Palette pal(FrameNumber(0), ncolors);
+  Palette pal(frame_t(0), ncolors);
 
   switch (format) {
 
@@ -77,10 +76,6 @@ Sprite::~Sprite()
   // Destroy layers
   delete m_folder;
 
-  // Destroy images' stock
-  if (m_stock)
-    delete m_stock;
-
   // Destroy palettes
   {
     PalettesList::iterator end = m_palettes.end();
@@ -98,20 +93,11 @@ Sprite* Sprite::createBasicSprite(doc::PixelFormat format, int width, int height
 {
   // Create the sprite.
   base::UniquePtr<doc::Sprite> sprite(new doc::Sprite(format, width, height, ncolors));
-  sprite->setTotalFrames(doc::FrameNumber(1));
+  sprite->setTotalFrames(doc::frame_t(1));
 
   // Create the main image.
-  int indexInStock;
-  {
-    base::UniquePtr<doc::Image> image(doc::Image::create(format, width, height));
-
-    // Clear the image with mask color.
-    doc::clear_image(image, 0);
-
-    // Add image in the sprite's stock.
-    indexInStock = sprite->stock()->addImage(image);
-    image.release();            // Release the image because it is in the sprite's stock.
-  }
+  doc::ImageRef image(doc::Image::create(format, width, height));
+  doc::clear_image(image, 0);
 
   // Create the first transparent layer.
   {
@@ -120,7 +106,7 @@ Sprite* Sprite::createBasicSprite(doc::PixelFormat format, int width, int height
 
     // Create the cel.
     {
-      base::UniquePtr<doc::Cel> cel(new doc::Cel(doc::FrameNumber(0), indexInStock));
+      base::UniquePtr<doc::Cel> cel(new doc::Cel(doc::frame_t(0), image));
       cel->setPosition(0, 0);
 
       // Add the cel in the layer.
@@ -177,22 +163,20 @@ void Sprite::setTransparentColor(color_t color)
   m_transparentColor = color;
 
   // Change the mask color of all images.
-  for (int i=0; i<m_stock->size(); i++) {
-    Image* image = m_stock->getImage(i);
-    if (image != NULL)
-      image->setMaskColor(color);
-  }
+  std::vector<Image*> images;
+  getImages(images);
+  for (Image* image : images)
+    image->setMaskColor(color);
 }
 
 int Sprite::getMemSize() const
 {
   int size = 0;
 
-  for (int i=0; i<m_stock->size(); i++) {
-    Image* image = m_stock->getImage(i);
-    if (image != NULL)
-      size += image->getRowStrideSize() * image->height();
-  }
+  std::vector<Image*> images;
+  getImages(images);
+  for (Image* image : images)
+    size += image->getRowStrideSize() * image->height();
 
   return size;
 }
@@ -221,6 +205,11 @@ LayerImage* Sprite::backgroundLayer() const
 LayerIndex Sprite::countLayers() const
 {
   return LayerIndex(folder()->getLayersCount());
+}
+
+Layer* Sprite::layer(int layerIndex) const
+{
+  return indexToLayer(LayerIndex(layerIndex));
 }
 
 Layer* Sprite::indexToLayer(LayerIndex index) const
@@ -252,7 +241,7 @@ void Sprite::getLayersList(std::vector<Layer*>& layers) const
 //////////////////////////////////////////////////////////////////////
 // Palettes
 
-Palette* Sprite::getPalette(FrameNumber frame) const
+Palette* Sprite::palette(frame_t frame) const
 {
   ASSERT(frame >= 0);
 
@@ -284,7 +273,7 @@ void Sprite::setPalette(const Palette* pal, bool truncate)
   ASSERT(pal != NULL);
 
   if (!truncate) {
-    Palette* sprite_pal = getPalette(pal->frame());
+    Palette* sprite_pal = palette(pal->frame());
     pal->copyColorsTo(sprite_pal);
   }
   else {
@@ -330,16 +319,16 @@ void Sprite::deletePalette(Palette* pal)
   delete pal;                   // palette
 }
 
-RgbMap* Sprite::getRgbMap(FrameNumber frame)
+RgbMap* Sprite::rgbMap(frame_t frame)
 {
   int mask_color = (backgroundLayer() ? -1: transparentColor());
 
   if (m_rgbMap == NULL) {
     m_rgbMap = new RgbMap();
-    m_rgbMap->regenerate(getPalette(frame), mask_color);
+    m_rgbMap->regenerate(palette(frame), mask_color);
   }
-  else if (!m_rgbMap->match(getPalette(frame))) {
-    m_rgbMap->regenerate(getPalette(frame), mask_color);
+  else if (!m_rgbMap->match(palette(frame))) {
+    m_rgbMap->regenerate(palette(frame), mask_color);
   }
 
   return m_rgbMap;
@@ -348,35 +337,35 @@ RgbMap* Sprite::getRgbMap(FrameNumber frame)
 //////////////////////////////////////////////////////////////////////
 // Frames
 
-void Sprite::addFrame(FrameNumber newFrame)
+void Sprite::addFrame(frame_t newFrame)
 {
-  setTotalFrames(m_frames.next());
-  for (FrameNumber i=m_frames.previous(); i>=newFrame; i=i.previous())
-    setFrameDuration(i, getFrameDuration(i.previous()));
+  setTotalFrames(m_frames+1);
+  for (frame_t i=m_frames-1; i>=newFrame; --i)
+    setFrameDuration(i, frameDuration(i-1));
 }
 
-void Sprite::removeFrame(FrameNumber newFrame)
+void Sprite::removeFrame(frame_t newFrame)
 {
-  FrameNumber newTotal = m_frames.previous();
-  for (FrameNumber i=newFrame; i<newTotal; i=i.next())
-    setFrameDuration(i, getFrameDuration(i.next()));
+  frame_t newTotal = m_frames-1;
+  for (frame_t i=newFrame; i<newTotal; ++i)
+    setFrameDuration(i, frameDuration(i+1));
   setTotalFrames(newTotal);
 }
 
-void Sprite::setTotalFrames(FrameNumber frames)
+void Sprite::setTotalFrames(frame_t frames)
 {
-  frames = MAX(FrameNumber(1), frames);
+  frames = MAX(frame_t(1), frames);
   m_frlens.resize(frames);
 
   if (frames > m_frames) {
-    for (FrameNumber c=m_frames; c<frames; ++c)
-      m_frlens[c] = m_frlens[m_frames.previous()];
+    for (frame_t c=m_frames; c<frames; ++c)
+      m_frlens[c] = m_frlens[m_frames-1];
   }
 
   m_frames = frames;
 }
 
-int Sprite::getFrameDuration(FrameNumber frame) const
+int Sprite::frameDuration(frame_t frame) const
 {
   if (frame >= 0 && frame < m_frames)
     return m_frlens[frame];
@@ -384,13 +373,13 @@ int Sprite::getFrameDuration(FrameNumber frame) const
     return 0;
 }
 
-void Sprite::setFrameDuration(FrameNumber frame, int msecs)
+void Sprite::setFrameDuration(frame_t frame, int msecs)
 {
   if (frame >= 0 && frame < m_frames)
     m_frlens[frame] = MID(1, msecs, 65535);
 }
 
-void Sprite::setFrameRangeDuration(FrameNumber from, FrameNumber to, int msecs)
+void Sprite::setFrameRangeDuration(frame_t from, frame_t to, int msecs)
 {
   std::fill(
     m_frlens.begin()+(size_t)from,
@@ -405,9 +394,25 @@ void Sprite::setDurationForAllFrames(int msecs)
 //////////////////////////////////////////////////////////////////////
 // Images
 
-Stock* Sprite::stock() const
+ImageRef Sprite::getImage(ObjectId imageId)
 {
-  return m_stock;
+  CelList cels;
+  getCels(cels);
+  for (auto& cel : cels) {
+    if (cel->image()->id() == imageId)
+      return cel->imageRef();
+  }
+  return ImageRef(NULL);
+}
+
+void Sprite::replaceImage(ObjectId curImageId, const ImageRef& newImage)
+{
+  CelList cels;
+  getCels(cels);
+  for (auto& cel : cels) {
+    if (cel->image()->id() == curImageId)
+      cel->setImage(newImage);
+  }
 }
 
 void Sprite::getCels(CelList& cels) const
@@ -415,20 +420,18 @@ void Sprite::getCels(CelList& cels) const
   folder()->getCels(cels);
 }
 
-size_t Sprite::getImageRefs(int imageIndex) const
+// TODO replace it with a images iterator
+void Sprite::getImages(std::vector<Image*>& images) const
 {
   CelList cels;
-  getCels(cels);
+  getCels(cels);                // TODO create a cel iterator
 
-  size_t refs = 0;
-  for (CelList::iterator it=cels.begin(), end=cels.end(); it != end; ++it)
-    if ((*it)->imageIndex() == imageIndex)
-      ++refs;
-
-  return refs;
+  for (const auto& cel : cels)
+    if (!cel->link())
+      images.push_back(cel->image());
 }
 
-void Sprite::remapImages(FrameNumber frameFrom, FrameNumber frameTo, const std::vector<uint8_t>& mapping)
+void Sprite::remapImages(frame_t frameFrom, frame_t frameTo, const std::vector<uint8_t>& mapping)
 {
   ASSERT(m_format == IMAGE_INDEXED);
   ASSERT(mapping.size() == 256);
@@ -457,29 +460,7 @@ void Sprite::remapImages(FrameNumber frameFrom, FrameNumber frameTo, const std::
 //////////////////////////////////////////////////////////////////////
 // Drawing
 
-void Sprite::render(Image* image, int x, int y, FrameNumber frame) const
-{
-  fill_rect(image, x, y, x+m_width-1, y+m_height-1,
-            (m_format == IMAGE_INDEXED ? transparentColor(): 0));
-
-  layer_render(folder(), image, x, y, frame);
-}
-
-int Sprite::getPixel(int x, int y, FrameNumber frame) const
-{
-  int color = 0;
-
-  if ((x >= 0) && (y >= 0) && (x < m_width) && (y < m_height)) {
-    base::UniquePtr<Image> image(Image::create(m_format, 1, 1));
-    clear_image(image, (m_format == IMAGE_INDEXED ? transparentColor(): 0));
-    render(image, -x, -y, frame);
-    color = get_pixel(image, 0, 0);
-  }
-
-  return color;
-}
-
-void Sprite::pickCels(int x, int y, FrameNumber frame, int opacityThreshold, CelList& cels) const
+void Sprite::pickCels(int x, int y, frame_t frame, int opacityThreshold, CelList& cels) const
 {
   std::vector<Layer*> layers;
   getLayersList(layers);
@@ -489,7 +470,7 @@ void Sprite::pickCels(int x, int y, FrameNumber frame, int opacityThreshold, Cel
     if (!layer->isImage() || !layer->isVisible())
       continue;
 
-    Cel* cel = static_cast<LayerImage*>(layer)->getCel(frame);
+    Cel* cel = layer->cel(frame);
     if (!cel)
       continue;
 

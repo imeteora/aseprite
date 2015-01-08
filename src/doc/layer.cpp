@@ -15,7 +15,6 @@
 #include "doc/image.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 
 #include <algorithm>
 #include <string.h>
@@ -76,6 +75,11 @@ Layer* Layer::getNext() const
   return NULL;
 }
 
+Cel* Layer::cel(frame_t frame) const
+{
+  return NULL;
+}
+
 //////////////////////////////////////////////////////////////////////
 // LayerImage class
 
@@ -113,15 +117,23 @@ void LayerImage::destroyAllCels()
 
   for (; it != end; ++it) {
     Cel* cel = *it;
-    Image* image = cel->image();
-
-    ASSERT(image != NULL);
-
-    sprite()->stock()->removeImage(image);
-    delete image;
     delete cel;
   }
   m_cels.clear();
+}
+
+Cel* LayerImage::cel(frame_t frame) const
+{
+  CelConstIterator it = getCelBegin();
+  CelConstIterator end = getCelEnd();
+
+  for (; it != end; ++it) {
+    Cel* cel = *it;
+    if (cel->frame() == frame)
+      return cel;
+  }
+
+  return NULL;
 }
 
 void LayerImage::getCels(CelList& cels) const
@@ -162,39 +174,22 @@ void LayerImage::addCel(Cel *cel)
  * It doesn't destroy the cel, you have to delete it after calling
  * this routine.
  */
-void LayerImage::removeCel(Cel *cel)
+void LayerImage::removeCel(Cel* cel)
 {
   CelIterator it = std::find(m_cels.begin(), m_cels.end(), cel);
 
   ASSERT(it != m_cels.end());
 
   m_cels.erase(it);
+
+  cel->setParentLayer(NULL);
 }
 
-void LayerImage::moveCel(Cel* cel, FrameNumber frame)
+void LayerImage::moveCel(Cel* cel, frame_t frame)
 {
   removeCel(cel);
   cel->setFrame(frame);
   addCel(cel);
-}
-
-const Cel* LayerImage::getCel(FrameNumber frame) const
-{
-  CelConstIterator it = getCelBegin();
-  CelConstIterator end = getCelEnd();
-
-  for (; it != end; ++it) {
-    const Cel* cel = *it;
-    if (cel->frame() == frame)
-      return cel;
-  }
-
-  return NULL;
-}
-
-Cel* LayerImage::getCel(FrameNumber frame)
-{
-  return const_cast<Cel*>(static_cast<const LayerImage*>(this)->getCel(frame));
 }
 
 /**
@@ -298,48 +293,6 @@ void LayerFolder::stackLayer(Layer* layer, Layer* after)
   }
   else
     m_layers.push_front(layer);
-}
-
-void layer_render(const Layer* layer, Image* image, int x, int y, FrameNumber frame)
-{
-  if (!layer->isVisible())
-    return;
-
-  switch (layer->type()) {
-
-    case ObjectType::LayerImage: {
-      const Cel* cel = static_cast<const LayerImage*>(layer)->getCel(frame);
-      Image* src_image;
-
-      if (cel) {
-        ASSERT((cel->imageIndex() >= 0) &&
-               (cel->imageIndex() < layer->sprite()->stock()->size()));
-
-        src_image = cel->image();
-        ASSERT(src_image != NULL);
-
-        ASSERT(src_image->maskColor() == layer->sprite()->transparentColor());
-
-        composite_image(image, src_image,
-          cel->x() + x,
-          cel->y() + y,
-          MID(0, cel->opacity(), 255),
-          static_cast<const LayerImage*>(layer)->getBlendMode());
-      }
-      break;
-    }
-
-    case ObjectType::LayerFolder: {
-      LayerConstIterator it = static_cast<const LayerFolder*>(layer)->getLayerBegin();
-      LayerConstIterator end = static_cast<const LayerFolder*>(layer)->getLayerEnd();
-
-      for (; it != end; ++it)
-        layer_render(*it, image, x, y, frame);
-
-      break;
-    }
-
-  }
 }
 
 } // namespace doc

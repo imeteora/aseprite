@@ -28,7 +28,6 @@
 #include "app/document_location.h"
 #include "app/undo_transaction.h"
 #include "app/undoers/add_cel.h"
-#include "app/undoers/add_image.h"
 #include "app/undoers/dirty_area.h"
 #include "app/undoers/modified_region.h"
 #include "app/undoers/replace_image.h"
@@ -40,7 +39,6 @@
 #include "doc/layer.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 
 namespace {
 
@@ -86,16 +84,16 @@ ExpandCelCanvas::ExpandCelCanvas(Context* context, TiledMode tiledMode, UndoTran
   m_layer = location.layer();
 
   if (m_layer->isImage()) {
-    m_cel = static_cast<LayerImage*>(m_layer)->getCel(location.frame());
+    m_cel = m_layer->cel(location.frame());
     if (m_cel)
-      m_celImage = m_cel->image();
+      m_celImage = m_cel->imageRef();
   }
 
   // If there is no Cel
   if (m_cel == NULL) {
     // Create the cel
     m_celCreated = true;
-    m_cel = new Cel(location.frame(), 0);
+    m_cel = new Cel(location.frame(), ImageRef(NULL));
     static_cast<LayerImage*>(m_layer)->addCel(m_cel);
   }
 
@@ -152,25 +150,21 @@ void ExpandCelCanvas::commit()
     // don't have a m_celImage)
     validateDestCanvas(gfx::Region(m_bounds));
 
+    // We can temporary remove the cel.
+    static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
+
     // Add a copy of m_dstImage in the sprite's image stock
-    m_cel->setImage(m_sprite->stock()->addImage(
-        Image::createCopy(m_dstImage)));
+    ImageRef newImage(Image::createCopy(m_dstImage));
+    m_cel->setImage(newImage);
 
     // Is the undo enabled?.
     if (m_undo.isEnabled()) {
-      // We can temporary remove the cel.
-      static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
-
-      // We create the undo information (for the new m_celImage
-      // in the stock and the new cel in the layer)...
-      m_undo.pushUndoer(new undoers::AddImage(m_undo.getObjects(),
-          m_sprite->stock(), m_cel->imageIndex()));
       m_undo.pushUndoer(new undoers::AddCel(m_undo.getObjects(),
           m_layer, m_cel));
-
-      // And finally we add the cel again in the layer.
-      static_cast<LayerImage*>(m_layer)->addCel(m_cel);
     }
+
+    // And finally we add the cel again in the layer.
+    static_cast<LayerImage*>(m_layer)->addCel(m_cel);
   }
   else if (m_celImage) {
     // If the size of each image is the same, we can create an undo
@@ -206,9 +200,6 @@ void ExpandCelCanvas::commit()
           m_undo.pushUndoer(new undoers::SetCelPosition(m_undo.getObjects(), m_cel));
           m_cel->setPosition(newPos);
         }
-
-        m_undo.pushUndoer(new undoers::ReplaceImage(m_undo.getObjects(),
-            m_sprite->stock(), m_cel->imageIndex()));
       }
 
       // Validate the whole m_dstImage copying invalid areas from m_celImage
@@ -216,11 +207,13 @@ void ExpandCelCanvas::commit()
 
       // Replace the image in the stock. We need to create a copy of
       // image because m_dstImage's ImageBuffer cannot be shared.
-      m_sprite->stock()->replaceImage(m_cel->imageIndex(),
-        Image::createCopy(m_dstImage));
+      ImageRef newImage(Image::createCopy(m_dstImage));
 
-      // Destroy the old cel image.
-      delete m_celImage;
+      if (m_undo.isEnabled())
+        m_undo.pushUndoer(new undoers::ReplaceImage(m_undo.getObjects(),
+            m_sprite, m_celImage, newImage));
+
+      m_sprite->replaceImage(m_celImage->id(), newImage);
     }
   }
   else {
@@ -241,7 +234,7 @@ void ExpandCelCanvas::rollback()
   if (m_celCreated) {
     static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
     delete m_cel;
-    delete m_celImage;
+    m_celImage.reset(NULL);
   }
 
   m_closed = true;
@@ -290,9 +283,10 @@ void ExpandCelCanvas::validateSourceCanvas(const gfx::Region& rgn)
       fill_rect(m_srcImage, rc, m_srcImage->maskColor());
 
     for (const auto& rc : rgnToValidate)
-      m_srcImage->copy(m_celImage, rc.x, rc.y,
-        rc.x+m_bounds.x-m_origCelPos.x,
-        rc.y+m_bounds.y-m_origCelPos.y, rc.w, rc.h);
+      m_srcImage->copy(m_celImage,
+        gfx::Clip(rc.x, rc.y,
+          rc.x+m_bounds.x-m_origCelPos.x,
+          rc.y+m_bounds.y-m_origCelPos.y, rc.w, rc.h));
   }
   else {
     for (const auto& rc : rgnToValidate)
@@ -335,9 +329,10 @@ void ExpandCelCanvas::validateDestCanvas(const gfx::Region& rgn)
       fill_rect(m_dstImage, rc, m_dstImage->maskColor());
 
     for (const auto& rc : rgnToValidate)
-      m_dstImage->copy(src, rc.x, rc.y,
-        rc.x+m_bounds.x-src_x,
-        rc.y+m_bounds.y-src_y, rc.w, rc.h);
+      m_dstImage->copy(src,
+        gfx::Clip(rc.x, rc.y,
+          rc.x+m_bounds.x-src_x,
+          rc.y+m_bounds.y-src_y, rc.w, rc.h));
   }
   else {
     for (const auto& rc : rgnToValidate)
@@ -366,7 +361,8 @@ void ExpandCelCanvas::copyValidDestToSourceCanvas(const gfx::Region& rgn)
   rgn2.createIntersection(rgn2, m_validSrcRegion);
   rgn2.createIntersection(rgn2, m_validDstRegion);
   for (const auto& rc : rgn2)
-    m_srcImage->copy(m_dstImage, rc.x, rc.y, rc.x, rc.y, rc.w, rc.h);
+    m_srcImage->copy(m_dstImage,
+      gfx::Clip(rc.x, rc.y, rc.x, rc.y, rc.w, rc.h));
 }
 
 void ExpandCelCanvas::copyValidDestToOriginalCel()
@@ -374,9 +370,10 @@ void ExpandCelCanvas::copyValidDestToOriginalCel()
   // Copy valid destination region to the m_celImage
   for (const auto& rc : m_validDstRegion) {
     m_celImage->copy(m_dstImage,
-      rc.x-m_bounds.x+m_origCelPos.x,
-      rc.y-m_bounds.y+m_origCelPos.y,
-      rc.x, rc.y, rc.w, rc.h);
+      gfx::Clip(
+        rc.x-m_bounds.x+m_origCelPos.x,
+        rc.y-m_bounds.y+m_origCelPos.y,
+        rc.x, rc.y, rc.w, rc.h));
   }
 }
 

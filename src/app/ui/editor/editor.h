@@ -20,6 +20,7 @@
 #define APP_UI_EDITOR_H_INCLUDED
 #pragma once
 
+#include "app/app_render.h"
 #include "app/color.h"
 #include "app/document.h"
 #include "app/settings/selection_mode.h"
@@ -27,12 +28,12 @@
 #include "app/ui/editor/editor_observers.h"
 #include "app/ui/editor/editor_state.h"
 #include "app/ui/editor/editor_states_history.h"
-#include "app/zoom.h"
 #include "base/connection.h"
 #include "doc/document_observer.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
 #include "doc/image_buffer.h"
 #include "gfx/fwd.h"
+#include "render/zoom.h"
 #include "ui/base.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
@@ -115,26 +116,26 @@ namespace app {
     Document* document() { return m_document; }
     Sprite* sprite() { return m_sprite; }
     Layer* layer() { return m_layer; }
-    FrameNumber frame() { return m_frame; }
+    frame_t frame() { return m_frame; }
 
     void getDocumentLocation(DocumentLocation* location) const;
     DocumentLocation getDocumentLocation() const;
 
     void setLayer(const Layer* layer);
-    void setFrame(FrameNumber frame);
+    void setFrame(frame_t frame);
 
-    const Zoom& zoom() const { return m_zoom; }
+    const render::Zoom& zoom() const { return m_zoom; }
     int offsetX() const { return m_offset_x; }
     int offsetY() const { return m_offset_y; }
     int cursorThick() { return m_cursorThick; }
 
-    void setZoom(Zoom zoom) { m_zoom = zoom; }
+    void setZoom(render::Zoom zoom) { m_zoom = zoom; }
     void setOffsetX(int x) { m_offset_x = x; }
     void setOffsetY(int y) { m_offset_y = y; }
 
     void setDefaultScroll();
     void setEditorScroll(const gfx::Point& scroll, bool blit_valid_rgn);
-    void setEditorZoom(Zoom zoom);
+    void setEditorZoom(render::Zoom zoom);
 
     // Updates the Editor's view.
     void updateEditor();
@@ -188,7 +189,7 @@ namespace app {
     // Returns true if the cursor is inside the active mask/selection.
     bool isInsideSelection();
 
-    void setZoomAndCenterInMouse(Zoom zoom,
+    void setZoomAndCenterInMouse(render::Zoom zoom,
       const gfx::Point& mousePos, ZoomBehavior zoomBehavior);
 
     void pasteImage(const Image* image, const gfx::Point& pos);
@@ -202,6 +203,8 @@ namespace app {
     // Returns the buffer used to render editor viewports.
     // E.g. It can be re-used by PreviewCommand
     static ImageBufferPtr getRenderImageBuffer();
+
+    static AppRender& renderEngine() { return m_renderEngine; }
 
     // in cursor.cpp
 
@@ -267,8 +270,8 @@ namespace app {
     Document* m_document;         // Active document in the editor
     Sprite* m_sprite;             // Active sprite in the editor
     Layer* m_layer;               // Active layer in the editor
-    FrameNumber m_frame;          // Active frame in the editor
-    Zoom m_zoom;                  // Zoom in the editor
+    frame_t m_frame;          // Active frame in the editor
+    render::Zoom m_zoom;          // Zoom in the editor
 
     // Drawing cursor
     int m_cursorThick;
@@ -311,6 +314,9 @@ namespace app {
     EditorFlags m_flags;
 
     bool m_secondaryButton;
+
+    static doc::ImageBufferPtr m_renderBuffer;
+    static AppRender m_renderEngine;
   };
 
   ui::WidgetType editor_type();

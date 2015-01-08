@@ -47,7 +47,6 @@
 #include "doc/image_bits.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 #include "ui/ui.h"
 
 namespace app {
@@ -243,12 +242,9 @@ void ColorSelector::onFixWarningClick(ui::Event& ev)
       if (sprite->pixelFormat() == IMAGE_INDEXED) {
         lastUsed = sprite->transparentColor();
 
-        Stock* stock = sprite->stock();
-        for (int i=0; i<(int)stock->size(); ++i) {
-          Image* image = stock->getImage(i);
-          if (!image)
-            continue;
-
+        std::vector<Image*> images;
+        sprite->getImages(images);
+        for (Image* image : images) {
           const LockImageBits<IndexedTraits> bits(image);
           for (LockImageBits<IndexedTraits>::const_iterator it=bits.begin(); it!=bits.end(); ++it) {
             if (lastUsed < *it)
@@ -287,12 +283,12 @@ void ColorSelector::onFixWarningClick(ui::Event& ev)
     }
 
     if (document) {
-      FrameNumber frame = writer.frame();
+      frame_t frame = writer.frame();
 
       UndoTransaction undoTransaction(writer.context(), "Add palette entry", undo::ModifyDocument);
       undoTransaction.pushUndoer
         (new undoers::SetPaletteColors(undoTransaction.getObjects(),
-          sprite, sprite->getPalette(frame),
+          sprite, sprite->palette(frame),
           frame, index, index));
 
       sprite->setPalette(newPalette, false);

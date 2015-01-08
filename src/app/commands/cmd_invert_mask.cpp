@@ -82,27 +82,25 @@ void InvertMaskCommand::onExecute(Context* context)
     if (undo.isEnabled())
       undo.pushUndoer(new undoers::SetMask(undo.getObjects(), document));
 
-    /* create a new mask */
+    // Select all the sprite area
     base::UniquePtr<Mask> mask(new Mask());
+    mask->replace(sprite->bounds());
 
-    /* select all the sprite area */
-    mask->replace(0, 0, sprite->width(), sprite->height());
-
-    /* remove in the new mask the current sprite marked region */
+    // Remove in the new mask the current sprite marked region
     const gfx::Rect& maskBounds = document->mask()->bounds();
     doc::fill_rect(mask->bitmap(),
-                      maskBounds.x, maskBounds.y,
-                      maskBounds.x + maskBounds.w-1,
-                      maskBounds.y + maskBounds.h-1, 0);
+      maskBounds.x, maskBounds.y,
+      maskBounds.x + maskBounds.w-1,
+      maskBounds.y + maskBounds.h-1, 0);
 
     // Invert the current mask in the sprite
     document->mask()->invert();
     if (document->mask()->bitmap()) {
       // Copy the inverted region in the new mask
       doc::copy_image(mask->bitmap(),
-                         document->mask()->bitmap(),
-                         document->mask()->bounds().x,
-                         document->mask()->bounds().y);
+        document->mask()->bitmap(),
+        document->mask()->bounds().x,
+        document->mask()->bounds().y);
     }
 
     // We need only need the area inside the sprite

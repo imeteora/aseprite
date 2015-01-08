@@ -38,9 +38,9 @@
 #include "doc/palette.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 #include "gfx/packing_rects.h"
 #include "gfx/size.h"
+#include "render/render.h"
 
 #include <cstdio>
 #include <fstream>
@@ -53,7 +53,7 @@ namespace app {
 class DocumentExporter::Sample {
 public:
   Sample(Document* document, Sprite* sprite, Layer* layer,
-    FrameNumber frame, const std::string& filename) :
+    frame_t frame, const std::string& filename) :
     m_document(document),
     m_sprite(sprite),
     m_layer(layer),
@@ -64,7 +64,7 @@ public:
   Document* document() const { return m_document; }
   Sprite* sprite() const { return m_sprite; }
   Layer* layer() const { return m_layer; }
-  FrameNumber frame() const { return m_frame; }
+  frame_t frame() const { return m_frame; }
   std::string filename() const { return m_filename; }
   const gfx::Size& originalSize() const { return m_originalSize; }
   const gfx::Rect& trimmedBounds() const { return m_trimmedBounds; }
@@ -85,7 +85,7 @@ private:
   Document* m_document;
   Sprite* m_sprite;
   Layer* m_layer;
-  FrameNumber m_frame;
+  frame_t m_frame;
   std::string m_filename;
   gfx::Size m_originalSize;
   gfx::Rect m_trimmedBounds;
@@ -248,9 +248,8 @@ void DocumentExporter::exportSheet()
     createEmptyTexture(samples));
 
   Sprite* texture = textureDocument->sprite();
-  Image* textureImage = static_cast<LayerImage*>(
-    texture->folder()->getFirstLayer())
-    ->getCel(FrameNumber(0))->image();
+  Image* textureImage = texture->folder()->getFirstLayer()
+    ->cel(frame_t(0))->image();
 
   renderTexture(samples, textureImage);
 
@@ -274,11 +273,11 @@ void DocumentExporter::captureSamples(Samples& samples)
     Sprite* sprite = doc->sprite();
     Layer* layer = item.layer;
 
-    for (FrameNumber frame=FrameNumber(0);
+    for (frame_t frame=frame_t(0);
          frame<sprite->totalFrames(); ++frame) {
       std::string filename = doc->filename();
 
-      if (sprite->totalFrames() > FrameNumber(1)) {
+      if (sprite->totalFrames() > frame_t(1)) {
         std::string path = base::get_file_path(filename);
         std::string title = base::get_file_title(filename);
         if (layer) {
@@ -295,8 +294,7 @@ void DocumentExporter::captureSamples(Samples& samples)
       Sample sample(doc, sprite, layer, frame, filename);
 
       if (m_ignoreEmptyCels) {
-        if (layer && layer->isImage() &&
-            !static_cast<LayerImage*>(layer)->getCel(frame)) {
+        if (layer && layer->isImage() && !layer->cel(frame)) {
           // Empty cel this sample completely
           continue;
         }
@@ -346,11 +344,11 @@ Document* DocumentExporter::createEmptyTexture(const Samples& samples)
         pixelFormat = IMAGE_RGB;
       }
       else if (palette != NULL
-        && palette->countDiff(it->sprite()->getPalette(FrameNumber(0)), NULL, NULL) > 0) {
+        && palette->countDiff(it->sprite()->palette(frame_t(0)), NULL, NULL) > 0) {
         pixelFormat = IMAGE_RGB;
       }
       else
-        palette = it->sprite()->getPalette(FrameNumber(0));
+        palette = it->sprite()->palette(frame_t(0));
     }
 
     fullTextureBounds = fullTextureBounds.createUnion(it->inTextureBounds());
@@ -380,7 +378,7 @@ void DocumentExporter::renderTexture(const Samples& samples, Image* textureImage
       docApi.setPixelFormat(
         sample.sprite(),
         textureImage->pixelFormat(),
-        DITHERING_NONE);
+        DitheringMethod::NONE);
     }
 
     int x = sample.inTextureBounds().x - sample.trimmedBounds().x;
@@ -417,7 +415,7 @@ void DocumentExporter::createDataFile(const Samples& samples, std::ostream& os, 
        << "    \"sourceSize\": { "
        << "\"w\": " << srcSize.w << ", "
        << "\"h\": " << srcSize.h << " },\n"
-       << "    \"duration\": " << sample.sprite()->getFrameDuration(sample.frame()) << "\n"
+       << "    \"duration\": " << sample.sprite()->frameDuration(sample.frame()) << "\n"
        << "   }";
 
     if (++it != samples.end())
@@ -443,11 +441,15 @@ void DocumentExporter::createDataFile(const Samples& samples, std::ostream& os, 
 
 void DocumentExporter::renderSample(const Sample& sample, doc::Image* dst, int x, int y)
 {
+  render::Render render;
+
   if (sample.layer()) {
-    layer_render(sample.layer(), dst, x, y, sample.frame());
+    render.renderLayer(dst, sample.layer(), sample.frame(),
+      gfx::Clip(x, y, sample.sprite()->bounds()));
   }
   else {
-    sample.sprite()->render(dst, x, y, sample.frame());
+    render.renderSprite(dst, sample.sprite(), sample.frame(),
+      gfx::Clip(x, y, sample.sprite()->bounds()));
   }
 }
 

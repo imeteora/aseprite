@@ -10,7 +10,7 @@
 
 #include "doc/blend.h"
 #include "doc/cel_list.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
 #include "doc/layer_list.h"
 #include "doc/object.h"
 
@@ -87,6 +87,7 @@ namespace doc {
         m_flags = LayerFlags(int(m_flags) & ~int(flags));
     }
 
+    virtual Cel* cel(frame_t frame) const;
     virtual void getCels(CelList& cels) const = 0;
 
   private:
@@ -113,9 +114,8 @@ namespace doc {
 
     void addCel(Cel *cel);
     void removeCel(Cel *cel);
-    void moveCel(Cel *cel, FrameNumber frame);
-    const Cel* getCel(FrameNumber frame) const;
-    Cel* getCel(FrameNumber frame);
+    void moveCel(Cel *cel, frame_t frame);
+    Cel* cel(frame_t frame) const override;
     void getCels(CelList& cels) const override;
     Cel* getLastCel() const;
 
@@ -164,8 +164,6 @@ namespace doc {
 
     LayerList m_layers;
   };
-
-  void layer_render(const Layer* layer, Image *image, int x, int y, FrameNumber frame);
 
 } // namespace doc
 

@@ -28,8 +28,10 @@ set(aseprite_libraries
   cfg-lib
   css-lib
   doc-lib
+  render-lib
   scripting-lib
   undo-lib
+  undo2-lib
   filters-lib
   ui-lib
   she
@@ -210,6 +212,7 @@ add_subdirectory(base)
 add_subdirectory(cfg)
 add_subdirectory(css)
 add_subdirectory(doc)
+add_subdirectory(render)
 add_subdirectory(filters)
 add_subdirectory(fixmath)
 add_subdirectory(gen)
@@ -218,6 +221,7 @@ add_subdirectory(scripting)
 add_subdirectory(she)
 add_subdirectory(ui)
 add_subdirectory(undo)
+add_subdirectory(undo2)
 
 add_subdirectory(app)
 
@@ -326,8 +330,10 @@ function(find_tests dir dependencies)
 endfunction()
 
 find_tests(base base-lib ${sys_libs})
+find_tests(undo2 undo2-lib ${sys_libs})
 find_tests(gfx gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(doc doc-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
+find_tests(render render-lib doc-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(css css-lib gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(ui ui-lib she gfx-lib base-lib ${libs3rdparty} ${sys_libs})
 find_tests(app/file ${all_libs})

@@ -21,43 +21,40 @@
 #endif
 
 #include "base/unique_ptr.h"
-#include "gfx/rect.h"
 #include "doc/cel.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
+#include "gfx/rect.h"
+#include "render/render.h"
 
 namespace app {
 
 using namespace doc;
 
-static bool has_cels(const Layer* layer, FrameNumber frame);
+static bool has_cels(const Layer* layer, frame_t frame);
 
 LayerImage* create_flatten_layer_copy(Sprite* dstSprite, const Layer* srcLayer,
                                       const gfx::Rect& bounds,
-                                      FrameNumber frmin, FrameNumber frmax)
+                                      frame_t frmin, frame_t frmax)
 {
   base::UniquePtr<LayerImage> flatLayer(new LayerImage(dstSprite));
+  render::Render render;
 
-  for (FrameNumber frame=frmin; frame<=frmax; ++frame) {
+  for (frame_t frame=frmin; frame<=frmax; ++frame) {
     // Does this frame have cels to render?
     if (has_cels(srcLayer, frame)) {
       // Create a new image to render each frame.
-      base::UniquePtr<Image> imageWrap(Image::create(flatLayer->sprite()->pixelFormat(), bounds.w, bounds.h));
-
-      // Add the image into the sprite's stock too.
-      int imageIndex = flatLayer->sprite()->stock()->addImage(imageWrap);
-      Image* image = imageWrap.release();
+      ImageRef image(Image::create(flatLayer->sprite()->pixelFormat(), bounds.w, bounds.h));
 
       // Create the new cel for the output layer.
-      base::UniquePtr<Cel> cel(new Cel(frame, imageIndex));
+      base::UniquePtr<Cel> cel(new Cel(frame, image));
       cel->setPosition(bounds.x, bounds.y);
 
-      // Clear the image and render this frame.
-      image->clear(0);
-      layer_render(srcLayer, image, -bounds.x, -bounds.y, frame);
+      // Render this frame.
+      render.renderLayer(image, srcLayer, frame,
+        gfx::Clip(0, 0, bounds));
 
       // Add the cel (and release the base::UniquePtr).
       flatLayer->addCel(cel);
@@ -70,7 +67,7 @@ LayerImage* create_flatten_layer_copy(Sprite* dstSprite, const Layer* srcLayer,
 
 // Returns true if the "layer" or its children have any cel to render
 // in the given "frame".
-static bool has_cels(const Layer* layer, FrameNumber frame)
+static bool has_cels(const Layer* layer, frame_t frame)
 {
   if (!layer->isVisible())
     return false;
@@ -78,7 +75,7 @@ static bool has_cels(const Layer* layer, FrameNumber frame)
   switch (layer->type()) {
 
     case ObjectType::LayerImage:
-      return static_cast<const LayerImage*>(layer)->getCel(frame) ? true: false;
+      return (layer->cel(frame) ? true: false);
 
     case ObjectType::LayerFolder: {
       LayerConstIterator it = static_cast<const LayerFolder*>(layer)->getLayerBegin();

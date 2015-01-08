@@ -35,7 +35,6 @@
 #include "doc/layer.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 #include "ui/manager.h"
 #include "ui/view.h"
 #include "ui/widget.h"
@@ -116,9 +115,10 @@ void FilterManagerImpl::beginForPreview()
     m_preview_mask.reset(new Mask(*document->mask()));
   else {
     m_preview_mask.reset(new Mask());
-    m_preview_mask->replace(m_offset_x, m_offset_y,
-      m_src->width(),
-      m_src->height());
+    m_preview_mask->replace(
+      gfx::Rect(m_offset_x, m_offset_y,
+        m_src->width(),
+        m_src->height()));
   }
 
   m_row = 0;
@@ -154,30 +154,31 @@ void FilterManagerImpl::end()
 
 bool FilterManagerImpl::applyStep()
 {
-  if ((m_row >= 0) && (m_row < m_h)) {
-    if ((m_mask) && (m_mask->bitmap())) {
-      int x = m_x - m_mask->bounds().x + m_offset_x;
-      int y = m_row + m_y - m_mask->bounds().y + m_offset_y;
-
-      m_maskBits = m_mask->bitmap()
-        ->lockBits<BitmapTraits>(Image::ReadLock,
-                                 gfx::Rect(x, y, m_w - x, m_h - y));
-
-      m_maskIterator = m_maskBits.begin();
-    }
-
-    switch (m_location.sprite()->pixelFormat()) {
-      case IMAGE_RGB:       m_filter->applyToRgba(this); break;
-      case IMAGE_GRAYSCALE: m_filter->applyToGrayscale(this); break;
-      case IMAGE_INDEXED:   m_filter->applyToIndexed(this); break;
-    }
-    ++m_row;
-
-    return true;
-  }
-  else {
+  if (m_row < 0 || m_row >= m_h)
     return false;
+
+  if ((m_mask) && (m_mask->bitmap())) {
+    int x = m_x - m_mask->bounds().x + m_offset_x;
+    int y = m_y - m_mask->bounds().y + m_offset_y + m_row;
+
+    if ((m_w - x < 1) || (m_h - y < 1))
+      return false;
+
+    m_maskBits = m_mask->bitmap()
+      ->lockBits<BitmapTraits>(Image::ReadLock,
+        gfx::Rect(x, y, m_w - x, m_h - y));
+
+    m_maskIterator = m_maskBits.begin();
   }
+
+  switch (m_location.sprite()->pixelFormat()) {
+    case IMAGE_RGB:       m_filter->applyToRgba(this); break;
+    case IMAGE_GRAYSCALE: m_filter->applyToGrayscale(this); break;
+    case IMAGE_INDEXED:   m_filter->applyToIndexed(this); break;
+  }
+  ++m_row;
+
+  return true;
 }
 
 void FilterManagerImpl::apply()
@@ -203,7 +204,7 @@ void FilterManagerImpl::apply()
       undo.pushUndoer(new undoers::ImageArea(undo.getObjects(), m_src, m_x, m_y, m_w, m_h));
 
     // Copy "dst" to "src"
-    copy_image(m_src, m_dst, 0, 0);
+    copy_image(m_src, m_dst);
 
     undo.commit();
   }
@@ -295,12 +296,12 @@ bool FilterManagerImpl::skipPixel()
 
 Palette* FilterManagerImpl::getPalette()
 {
-  return m_location.sprite()->getPalette(m_location.frame());
+  return m_location.sprite()->palette(m_location.frame());
 }
 
 RgbMap* FilterManagerImpl::getRgbMap()
 {
-  return m_location.sprite()->getRgbMap(m_location.frame());
+  return m_location.sprite()->rgbMap(m_location.frame());
 }
 
 void FilterManagerImpl::init(const Layer* layer, Image* image, int offset_x, int offset_y)

@@ -38,7 +38,6 @@
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 #include "ui/ui.h"
 
 namespace app {
@@ -116,12 +115,12 @@ protected:
         }
 
         // rotate the image
-        Image* new_image = Image::create(image->pixelFormat(),
-          m_angle == 180 ? image->width(): image->height(),
-          m_angle == 180 ? image->height(): image->width());
+        ImageRef new_image(Image::create(image->pixelFormat(),
+            m_angle == 180 ? image->width(): image->height(),
+            m_angle == 180 ? image->height(): image->width()));
         doc::rotate_image(image, new_image, m_angle);
 
-        api.replaceStockImage(m_sprite, cel->imageIndex(), new_image);
+        api.replaceImage(m_sprite, cel->imageRef(), new_image);
       }
 
       jobProgress((float)i / m_cels.size());
@@ -155,9 +154,10 @@ protected:
       }
 
       // create the new rotated mask
-      new_mask->replace(x, y,
-                        m_angle == 180 ? origBounds.w: origBounds.h,
-                        m_angle == 180 ? origBounds.h: origBounds.w);
+      new_mask->replace(
+        gfx::Rect(x, y,
+          m_angle == 180 ? origBounds.w: origBounds.h,
+          m_angle == 180 ? origBounds.h: origBounds.w));
       doc::rotate_image(origMask->bitmap(), new_mask->bitmap(), m_angle);
 
       // Copy new mask

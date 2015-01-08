@@ -43,10 +43,14 @@
 
 # Refactoring
 
-* Merge everything related to configuration/settings in one class
-  (allow configuration per document). Use cfg.cpp and settings/ dir.
+* Convert doc::PixelFormat to a enum class
+* Add doc::Spec with width/height/channels/ColorMode/ncolors
+* Convert doc::LayerIndex -> typedef int doc::layer_t;
+* Replace doc::Palette::getEntry() with doc::Palette::entry()
+* Remove LayerFolder, replace it with an array of layers
+* Add new "level" into Layer class
 * Refactor src/file/ in several layers.
-* Use streams instead of FILEs.
+* Use streams instead of FILEs and create load/save tests with streams.
 * Destroy modules/gui.h.
 * Convert update_screen_for_document in an event from contexts or
   something similar.

@@ -74,9 +74,9 @@ Palette* load_palette(const char *filename)
 
         if (fop->document &&
             fop->document->sprite() &&
-            fop->document->sprite()->getPalette(FrameNumber(0))) {
+            fop->document->sprite()->palette(frame_t(0))) {
           pal = new Palette(
-            *fop->document->sprite()->getPalette(FrameNumber(0)));
+            *fop->document->sprite()->palette(frame_t(0)));
 
           // TODO remove this line when support for palettes with less
           // than 256 colors is added.
@@ -117,8 +117,8 @@ bool save_palette(const char *filename, Palette* pal)
       Sprite* sprite = doc->sprite();
       doc->sprite()->setPalette(pal, false);
 
-      LayerImage* layer = dynamic_cast<LayerImage*>(sprite->folder()->getFirstLayer());
-      Image* image = layer->getCel(FrameNumber(0))->image();
+      Layer* layer = sprite->folder()->getFirstLayer();
+      Image* image = layer->cel(frame_t(0))->image();
 
       int x, y, c;
       for (y=c=0; y<16; y++)

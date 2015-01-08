@@ -38,6 +38,7 @@
 #include "doc/mask.h"
 #include "doc/sprite.h"
 #include "gfx/region.h"
+#include "render/render.h"
 
 namespace app {
 
@@ -455,7 +456,7 @@ void PixelsMovement::stampImage()
       gfx::Region modifiedRegion(expand.getDestCanvas()->bounds());
       expand.validateDestCanvas(modifiedRegion);
 
-      composite_image(
+      render::composite_image(
         expand.getDestCanvas(), image,
         -expand.getCel()->x(),
         -expand.getCel()->y(),
@@ -588,7 +589,7 @@ void PixelsMovement::redrawCurrentMask()
 
   // Transform mask
 
-  m_currentMask->replace(0, 0, m_sprite->width(), m_sprite->height());
+  m_currentMask->replace(m_sprite->bounds());
   m_currentMask->freeze();
   clear_image(m_currentMask->bitmap(), 0);
   drawParallelogram(m_currentMask->bitmap(), m_initialMask->bitmap(),

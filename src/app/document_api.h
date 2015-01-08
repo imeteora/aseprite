@@ -20,12 +20,13 @@
 #define APP_DOCUMENT_API_H_INCLUDED
 #pragma once
 
-#include "gfx/rect.h"
 #include "doc/algorithm/flip_type.h"
 #include "doc/color.h"
 #include "doc/dithering_method.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
+#include "doc/image_ref.h"
 #include "doc/pixel_format.h"
+#include "gfx/rect.h"
 
 namespace doc {
   class Cel;
@@ -67,31 +68,32 @@ namespace app {
     void setPixelFormat(Sprite* sprite, PixelFormat newFormat, DitheringMethod dithering_method);
 
     // Frames API
-    void addFrame(Sprite* sprite, FrameNumber newFrame);
-    void addEmptyFrame(Sprite* sprite, FrameNumber newFrame);
-    void addEmptyFramesTo(Sprite* sprite, FrameNumber newFrame);
-    void copyFrame(Sprite* sprite, FrameNumber fromFrame, FrameNumber newFrame);
-    void removeFrame(Sprite* sprite, FrameNumber frame);
-    void setTotalFrames(Sprite* sprite, FrameNumber frames);
-    void setFrameDuration(Sprite* sprite, FrameNumber frame, int msecs);
-    void setFrameRangeDuration(Sprite* sprite, FrameNumber from, FrameNumber to, int msecs);
-    void moveFrame(Sprite* sprite, FrameNumber frame, FrameNumber beforeFrame);
+    void addFrame(Sprite* sprite, frame_t newFrame);
+    void addEmptyFrame(Sprite* sprite, frame_t newFrame);
+    void addEmptyFramesTo(Sprite* sprite, frame_t newFrame);
+    void copyFrame(Sprite* sprite, frame_t fromFrame, frame_t newFrame);
+    void removeFrame(Sprite* sprite, frame_t frame);
+    void setTotalFrames(Sprite* sprite, frame_t frames);
+    void setFrameDuration(Sprite* sprite, frame_t frame, int msecs);
+    void setFrameRangeDuration(Sprite* sprite, frame_t from, frame_t to, int msecs);
+    void moveFrame(Sprite* sprite, frame_t frame, frame_t beforeFrame);
 
     // Cels API
     void addCel(LayerImage* layer, Cel* cel);
-    void clearCel(LayerImage* layer, FrameNumber frame);
+    Cel* addCel(LayerImage* layer, frame_t frameNumber, const ImageRef& image);
+    void clearCel(LayerImage* layer, frame_t frame);
     void clearCel(Cel* cel);
     void setCelPosition(Sprite* sprite, Cel* cel, int x, int y);
     void setCelOpacity(Sprite* sprite, Cel* cel, int newOpacity);
     void cropCel(Sprite* sprite, Cel* cel, int x, int y, int w, int h);
     void moveCel(
-      LayerImage* srcLayer, FrameNumber srcFrame,
-      LayerImage* dstLayer, FrameNumber dstFrame);
+      LayerImage* srcLayer, frame_t srcFrame,
+      LayerImage* dstLayer, frame_t dstFrame);
     void copyCel(
-      LayerImage* srcLayer, FrameNumber srcFrame,
-      LayerImage* dstLayer, FrameNumber dstFrame);
+      LayerImage* srcLayer, frame_t srcFrame,
+      LayerImage* dstLayer, frame_t dstFrame);
     void swapCel(
-      LayerImage* layer, FrameNumber frame1, FrameNumber frame2);
+      LayerImage* layer, frame_t frame1, frame_t frame2);
 
     // Layers API
     LayerImage* newLayer(Sprite* sprite);
@@ -108,18 +110,14 @@ namespace app {
     void duplicateLayerAfter(Layer* sourceLayer, Layer* afterLayer);
     void duplicateLayerBefore(Layer* sourceLayer, Layer* beforeLayer);
 
-    // Images stock API
-    Cel* addImage(LayerImage* layer, FrameNumber frameNumber, Image* image);
-    int addImageInStock(Sprite* sprite, Image* image);
-    void removeImageFromStock(Sprite* sprite, int imageIndex);
-    void replaceStockImage(Sprite* sprite, int imageIndex, Image* newImage);
+    // Images API
+    void replaceImage(Sprite* sprite, const ImageRef& oldImage, const ImageRef& newImage);
 
     // Image API
     void clearImage(Image* image, color_t bgcolor);
     void clearMask(Cel* cel);
     void flipImage(Image* image, const gfx::Rect& bounds, doc::algorithm::FlipType flipType);
     void flipImageWithMask(Layer* layer, Image* image, const Mask* mask, doc::algorithm::FlipType flipType);
-    void pasteImage(Sprite* sprite, Cel* cel, const Image* src_image, int x, int y, int opacity);
 
     // Mask API
     void copyToCurrentMask(Mask* mask);
@@ -127,16 +125,16 @@ namespace app {
     void deselectMask();
 
     // Palette API
-    void setPalette(Sprite* sprite, FrameNumber frame, Palette* newPalette);
+    void setPalette(Sprite* sprite, frame_t frame, Palette* newPalette);
 
   private:
     undo::ObjectsContainer* getObjects() const;
     void removeCel(Cel* cel);
-    void setCelFramePosition(LayerImage* layer, Cel* cel, FrameNumber frame);
-    void displaceFrames(Layer* layer, FrameNumber frame);
-    void copyFrameForLayer(Layer* layer, FrameNumber fromFrame, FrameNumber frame);
-    void removeFrameOfLayer(Layer* layer, FrameNumber frame);
-    void moveFrameLayer(Layer* layer, FrameNumber frame, FrameNumber beforeFrame);
+    void setCelFramePosition(LayerImage* layer, Cel* cel, frame_t frame);
+    void displaceFrames(Layer* layer, frame_t frame);
+    void copyFrameForLayer(Layer* layer, frame_t fromFrame, frame_t frame);
+    void removeFrameOfLayer(Layer* layer, frame_t frame);
+    void moveFrameLayer(Layer* layer, frame_t frame, frame_t beforeFrame);
     void configureLayerAsBackground(LayerImage* layer);
     bool undoEnabled();
 

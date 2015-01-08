@@ -16,36 +16,24 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
-#ifndef APP_UNDOERS_ADD_IMAGE_H_INCLUDED
-#define APP_UNDOERS_ADD_IMAGE_H_INCLUDED
+#ifndef APP_RENDER_H_INCLUDED
+#define APP_RENDER_H_INCLUDED
 #pragma once
 
-#include "app/undoers/undoer_base.h"
-#include "undo/object_id.h"
-
-namespace doc {
-  class Stock;
-}
+#include "doc/pixel_format.h"
+#include "render/render.h"
 
 namespace app {
-  namespace undoers {
-    using namespace doc;
-    using namespace undo;
+  class Document;
 
-    class AddImage : public UndoerBase {
-    public:
-      AddImage(ObjectsContainer* objects, Stock* stock, int imageIndex);
+  class AppRender : public render::Render {
+  public:
+    AppRender();
+    AppRender(app::Document* doc, doc::PixelFormat pixelFormat);
 
-      void dispose() override;
-      size_t getMemSize() const override { return sizeof(*this); }
-      void revert(ObjectsContainer* objects, UndoersCollector* redoers) override;
+    void setupBackground(app::Document* doc, doc::PixelFormat pixelFormat);
+  };
 
-    private:
-      undo::ObjectId m_stockId;
-      uint32_t m_imageIndex;
-    };
-
-  } // namespace undoers
 } // namespace app
 
-#endif  // UNDOERS_ADD_IMAGE_H_INCLUDED
+#endif // APP_RENDER_H_INCLUDED

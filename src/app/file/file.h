@@ -21,7 +21,8 @@
 #pragma once
 
 #include "base/shared_ptr.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
+#include "doc/image_ref.h"
 #include "doc/pixel_format.h"
 
 #include <stdio.h>
@@ -95,12 +96,12 @@ namespace app {
     struct {
       std::vector<std::string> filename_list; // All file names to load/save.
       Palette* palette;           // Palette of the sequence.
-      Image* image;               // Image to be saved/loaded.
+      ImageRef image;             // Image to be saved/loaded.
       // For the progress bar.
       double progress_offset;      // Progress offset from the current frame.
       double progress_fraction;    // Progress fraction for one frame.
       // To load sequences.
-      FrameNumber frame;
+      frame_t frame;
       bool has_alpha;
       LayerImage* layer;
       Cel* last_cel;

@@ -1,33 +1,23 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite Render Library
+// Copyright (c) 2001-2014 David Capello
+//
+// This file is released under the terms of the MIT license.
+// Read LICENSE.txt for more information.
 
-#ifndef APP_ZOOM_H_INCLUDED
-#define APP_ZOOM_H_INCLUDED
+#ifndef RENDER_ZOOM_H_INCLUDED
+#define RENDER_ZOOM_H_INCLUDED
 #pragma once
 
 #include "gfx/rect.h"
 
-namespace app {
+namespace render {
 
   class Zoom {
   public:
     Zoom(int num, int den)
       : m_num(num), m_den(den) {
+      ASSERT(m_num > 0);
+      ASSERT(m_den > 0);
     }
 
     double scale() const { return static_cast<double>(m_num) / static_cast<double>(m_den); }
@@ -62,11 +52,13 @@ namespace app {
       return !operator==(other);
     }
 
+    static Zoom fromScale(double scale);
+
   private:
     int m_num;
     int m_den;
   };
 
-} // namespace app
+} // namespace render
 
-#endif // APP_ZOOM_H_INCLUDED
+#endif // RENDER_ZOOM_H_INCLUDED

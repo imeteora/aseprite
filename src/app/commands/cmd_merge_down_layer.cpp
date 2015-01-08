@@ -28,7 +28,6 @@
 #include "app/modules/gui.h"
 #include "app/undo_transaction.h"
 #include "app/undoers/add_cel.h"
-#include "app/undoers/add_image.h"
 #include "app/undoers/remove_layer.h"
 #include "app/undoers/replace_image.h"
 #include "app/undoers/set_cel_position.h"
@@ -38,7 +37,7 @@
 #include "doc/layer.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
+#include "render/render.h"
 #include "ui/ui.h"
 
 namespace app {
@@ -86,12 +85,11 @@ void MergeDownLayerCommand::onExecute(Context* context)
   UndoTransaction undo(writer.context(), "Merge Down Layer", undo::ModifyDocument);
   Layer* src_layer = writer.layer();
   Layer* dst_layer = src_layer->getPrevious();
-  int index;
 
-  for (FrameNumber frpos(0); frpos<sprite->totalFrames(); ++frpos) {
+  for (frame_t frpos = 0; frpos<sprite->totalFrames(); ++frpos) {
     // Get frames
-    Cel* src_cel = static_cast<LayerImage*>(src_layer)->getCel(frpos);
-    Cel* dst_cel = static_cast<LayerImage*>(dst_layer)->getCel(frpos);
+    Cel* src_cel = src_layer->cel(frpos);
+    Cel* dst_cel = dst_layer->cel(frpos);
 
     // Get images
     Image* src_image;
@@ -100,29 +98,21 @@ void MergeDownLayerCommand::onExecute(Context* context)
     else
       src_image = NULL;
 
-    Image* dst_image;
-    if (dst_cel != NULL)
-      dst_image = dst_cel->image();
-    else
-      dst_image = NULL;
+    ImageRef dst_image;
+    if (dst_cel)
+      dst_image = dst_cel->imageRef();
 
     // With source image?
-    if (src_image != NULL) {
+    if (src_image) {
       // No destination image
       if (dst_image == NULL) {  // Only a transparent layer can have a null cel
         // Copy this cel to the destination layer...
 
         // Creating a copy of the image
-        dst_image = Image::createCopy(src_image);
-
-        // Adding it in the stock of images
-        index = sprite->stock()->addImage(dst_image);
-        if (undo.isEnabled())
-          undo.pushUndoer(new undoers::AddImage(
-              undo.getObjects(), sprite->stock(), index));
+        dst_image.reset(Image::createCopy(src_image));
 
         // Creating a copy of the cell
-        dst_cel = new Cel(frpos, index);
+        dst_cel = new Cel(frpos, dst_image);
         dst_cel->setPosition(src_cel->x(), src_cel->y());
         dst_cel->setOpacity(src_cel->opacity());
 
@@ -152,17 +142,17 @@ void MergeDownLayerCommand::onExecute(Context* context)
 
         doc::color_t bgcolor = app_get_color_to_clear_layer(dst_layer);
 
-        Image* new_image = doc::crop_image(dst_image,
-          x1-dst_cel->x(),
-          y1-dst_cel->y(),
-          x2-x1+1, y2-y1+1, bgcolor);
+        ImageRef new_image(doc::crop_image(dst_image,
+            x1-dst_cel->x(),
+            y1-dst_cel->y(),
+            x2-x1+1, y2-y1+1, bgcolor));
 
         // Merge src_image in new_image
-        doc::composite_image(new_image, src_image,
-                                src_cel->x()-x1,
-                                src_cel->y()-y1,
-                                src_cel->opacity(),
-                                static_cast<LayerImage*>(src_layer)->getBlendMode());
+        render::composite_image(new_image, src_image,
+          src_cel->x()-x1,
+          src_cel->y()-y1,
+          src_cel->opacity(),
+          static_cast<LayerImage*>(src_layer)->getBlendMode());
 
         if (undo.isEnabled())
           undo.pushUndoer(new undoers::SetCelPosition(undo.getObjects(), dst_cel));
@@ -171,10 +161,9 @@ void MergeDownLayerCommand::onExecute(Context* context)
 
         if (undo.isEnabled())
           undo.pushUndoer(new undoers::ReplaceImage(undo.getObjects(),
-              sprite->stock(), dst_cel->imageIndex()));
+              sprite, dst_cel->image(), new_image));
 
-        sprite->stock()->replaceImage(dst_cel->imageIndex(), new_image);
-        delete dst_image;
+        sprite->replaceImage(dst_cel->image()->id(), new_image);
       }
     }
   }

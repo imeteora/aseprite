@@ -42,11 +42,11 @@ CelList get_cels_in_range(Sprite* sprite, const DocumentRange& range)
 
     LayerImage* layerImage = static_cast<LayerImage*>(layer);
 
-    for (FrameNumber frame = range.frameEnd(),
-           begin = range.frameBegin().previous();
+    for (frame_t frame = range.frameEnd(),
+           begin = range.frameBegin()-1;
          frame != begin;
-         frame = frame.previous()) {
-      Cel* cel = layerImage->getCel(frame);
+         --frame) {
+      Cel* cel = layerImage->cel(frame);
       if (cel)
         cels.push_back(cel);
     }

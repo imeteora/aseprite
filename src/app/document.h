@@ -26,7 +26,8 @@
 #include "base/shared_ptr.h"
 #include "base/unique_ptr.h"
 #include "doc/document.h"
-#include "doc/frame_number.h"
+#include "doc/frame.h"
+#include "doc/image_ref.h"
 #include "doc/pixel_format.h"
 #include "gfx/rect.h"
 #include "gfx/transformation.h"
@@ -39,7 +40,6 @@ namespace base {
 
 namespace doc {
   class Cel;
-  class Image;
   class Layer;
   class Mask;
   class Sprite;
@@ -93,8 +93,8 @@ namespace app {
     void notifySpritePixelsModified(Sprite* sprite, const gfx::Region& region);
     void notifyExposeSpritePixels(Sprite* sprite, const gfx::Region& region);
     void notifyLayerMergedDown(Layer* srcLayer, Layer* targetLayer);
-    void notifyCelMoved(Layer* fromLayer, FrameNumber fromFrame, Layer* toLayer, FrameNumber toFrame);
-    void notifyCelCopied(Layer* fromLayer, FrameNumber fromFrame, Layer* toLayer, FrameNumber toFrame);
+    void notifyCelMoved(Layer* fromLayer, frame_t fromFrame, Layer* toLayer, frame_t toFrame);
+    void notifyCelCopied(Layer* fromLayer, frame_t fromFrame, Layer* toLayer, frame_t toFrame);
     void notifySelectionChanged();
 
     //////////////////////////////////////////////////////////////////////
@@ -219,7 +219,7 @@ namespace app {
     Cel* m_extraCel;
 
     // Image of the extra cel.
-    Image* m_extraImage;
+    ImageRef m_extraImage;
     int m_extraCelBlendMode;
 
     // Current mask.

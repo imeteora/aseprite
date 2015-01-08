@@ -33,6 +33,8 @@
 #include "base/file_handle.h"
 #include "base/unique_ptr.h"
 #include "doc/doc.h"
+#include "render/quantization.h"
+#include "render/render.h"
 #include "ui/alert.h"
 #include "ui/button.h"
 
@@ -155,8 +157,8 @@ bool GifFormat::onLoad(FileOp* fop)
   data->sprite_w = gif_file->SWidth;
   data->sprite_h = gif_file->SHeight;
 
-  UniquePtr<Palette> current_palette(new Palette(FrameNumber(0), 256));
-  UniquePtr<Palette> previous_palette(new Palette(FrameNumber(0), 256));
+  UniquePtr<Palette> current_palette(new Palette(frame_t(0), 256));
+  UniquePtr<Palette> previous_palette(new Palette(frame_t(0), 256));
 
   // If the GIF image has a global palette, it has a valid
   // background color (so the GIF is not transparent).
@@ -179,7 +181,7 @@ bool GifFormat::onLoad(FileOp* fop)
 
   // Scan the content of the GIF file (read record by record)
   GifRecordType record_type;
-  FrameNumber frame_num(0);
+  frame_t frame_num(0);
   DisposalMethod disposal_method = DISPOSAL_METHOD_NONE;
   int transparent_index = -1;
   int frame_delay = -1;
@@ -205,8 +207,8 @@ bool GifFormat::onLoad(FileOp* fop)
           throw Exception("Image %d is out of sprite bounds.\n", (int)frame_num);
 
         // Add a new frames.
-        if (frame_num >= FrameNumber(data->frames.size()))
-          data->frames.resize(frame_num.next());
+        if (frame_num >= frame_t(data->frames.size()))
+          data->frames.resize(frame_num+1);
 
         data->frames[frame_num].x = frame_x;
         data->frames[frame_num].y = frame_y;
@@ -407,10 +409,10 @@ bool GifFormat::onPostLoad(FileOp* fop)
   clear_image(previous_image, bgcolor);
 
   // Add all frames in the sprite.
-  sprite->setTotalFrames(FrameNumber(data->frames.size()));
+  sprite->setTotalFrames(frame_t(data->frames.size()));
   Palette* current_palette = NULL;
 
-  FrameNumber frame_num(0);
+  frame_t frame_num(0);
   for (GifFrames::iterator
          frame_it=data->frames.begin(),
          frame_end=data->frames.end(); frame_it != frame_end; ++frame_it, ++frame_num) {
@@ -454,16 +456,15 @@ bool GifFormat::onPostLoad(FileOp* fop)
     }
 
     // Create a new Cel and a image with the whole content of "current_image"
-    Cel* cel = new Cel(frame_num, 0);
+    Cel* cel = new Cel(frame_num, ImageRef(0));
     try {
-      Image* cel_image = Image::createCopy(current_image);
+      ImageRef cel_image(Image::createCopy(current_image));
       try {
         // Add the image in the sprite's stock and update the cel's
         // reference to the new stock's image.
-        cel->setImage(sprite->stock()->addImage(cel_image));
+        cel->setImage(cel_image);
       }
       catch (...) {
-        delete cel_image;
         throw;
       }
 
@@ -495,7 +496,7 @@ bool GifFormat::onPostLoad(FileOp* fop)
         break;
 
       case DISPOSAL_METHOD_RESTORE_PREVIOUS:
-        copy_image(current_image, previous_image, 0, 0);
+        copy_image(current_image, previous_image);
         break;
     }
 
@@ -504,7 +505,7 @@ bool GifFormat::onPostLoad(FileOp* fop)
     // that we have already updated current_image from
     // previous_image).
     if (frame_it->disposal_method != DISPOSAL_METHOD_RESTORE_PREVIOUS)
-      copy_image(previous_image, current_image, 0, 0);
+      copy_image(previous_image, current_image);
   }
 
   fop->document->sprites().add(sprite);
@@ -549,7 +550,7 @@ bool GifFormat::onSave(FileOp* fop)
   int background_color = (sprite_format == IMAGE_INDEXED ? sprite->transparentColor(): 0);
   int transparent_index = (has_background ? -1: sprite->transparentColor());
 
-  Palette current_palette = *sprite->getPalette(FrameNumber(0));
+  Palette current_palette = *sprite->palette(frame_t(0));
   Palette previous_palette(current_palette);
   RgbMap rgbmap;
 
@@ -610,14 +611,17 @@ bool GifFormat::onSave(FileOp* fop)
 
   ColorMapObject* image_color_map = NULL;
 
+  render::Render render;
+  render.setBgType(render::BgType::NONE);
+
   // Check if the user wants one optimized palette for all frames.
   if (sprite_format != IMAGE_INDEXED &&
       gif_options->quantize() == GifOptions::QuantizeAll) {
     // Feed the optimizer with all rendered frames.
-    doc::quantization::PaletteOptimizer optimizer;
-    for (FrameNumber frame_num(0); frame_num<sprite->totalFrames(); ++frame_num) {
+    render::PaletteOptimizer optimizer;
+    for (frame_t frame_num(0); frame_num<sprite->totalFrames(); ++frame_num) {
       clear_image(buffer_image, background_color);
-      layer_render(sprite->folder(), buffer_image, 0, 0, frame_num);
+      render.renderSprite(buffer_image, sprite, frame_num);
       optimizer.feedWithImage(buffer_image);
     }
 
@@ -627,15 +631,15 @@ bool GifFormat::onSave(FileOp* fop)
     rgbmap.regenerate(&current_palette, transparent_index);
   }
 
-  for (FrameNumber frame_num(0); frame_num<sprite->totalFrames(); ++frame_num) {
+  for (frame_t frame_num(0); frame_num<sprite->totalFrames(); ++frame_num) {
     // If the sprite is RGB or Grayscale, we must to convert it to Indexed on the fly.
     if (sprite_format != IMAGE_INDEXED) {
       clear_image(buffer_image, background_color);
-      layer_render(sprite->folder(), buffer_image, 0, 0, frame_num);
+      render.renderSprite(buffer_image, sprite, frame_num);
 
       switch (gif_options->quantize()) {
         case GifOptions::NoQuantize:
-          sprite->getPalette(frame_num)->copyColorsTo(&current_palette);
+          sprite->palette(frame_num)->copyColorsTo(&current_palette);
           rgbmap.regenerate(&current_palette, transparent_index);
           break;
         case GifOptions::QuantizeEach:
@@ -644,7 +648,7 @@ bool GifFormat::onSave(FileOp* fop)
 
             std::vector<Image*> imgarray(1);
             imgarray[0] = buffer_image;
-            doc::quantization::create_palette_from_images(imgarray, &current_palette, has_background);
+            render::create_palette_from_images(imgarray, &current_palette, has_background);
             rgbmap.regenerate(&current_palette, transparent_index);
           }
           break;
@@ -653,7 +657,7 @@ bool GifFormat::onSave(FileOp* fop)
           break;
       }
 
-      quantization::convert_pixel_format(
+      render::convert_pixel_format(
         buffer_image,
         current_image,
         IMAGE_INDEXED,
@@ -665,7 +669,7 @@ bool GifFormat::onSave(FileOp* fop)
     // If the sprite is Indexed, we can render directly into "current_image".
     else {
       clear_image(current_image, background_color);
-      layer_render(sprite->folder(), current_image, 0, 0, frame_num);
+      render.renderSprite(current_image, sprite, frame_num);
     }
 
     if (frame_num == 0) {
@@ -713,7 +717,7 @@ bool GifFormat::onSave(FileOp* fop)
       unsigned char extension_bytes[5];
       int disposal_method = (sprite->backgroundLayer() ? DISPOSAL_METHOD_DO_NOT_DISPOSE:
                                                          DISPOSAL_METHOD_RESTORE_BGCOLOR);
-      int frame_delay = sprite->getFrameDuration(frame_num) / 10;
+      int frame_delay = sprite->frameDuration(frame_num) / 10;
 
       extension_bytes[0] = (((disposal_method & 7) << 2) |
                             (transparent_index >= 0 ? 1: 0));
@@ -773,7 +777,7 @@ bool GifFormat::onSave(FileOp* fop)
       }
     }
 
-    copy_image(previous_image, current_image, 0, 0);
+    copy_image(previous_image, current_image);
   }
 
   return true;
@@ -812,7 +816,7 @@ SharedPtr<FormatOptions> GifFormat::onGetFormatOptions(FileOp* fop)
     win.interlaced()->setSelected(gif_options->interlaced());
 
     win.dither()->setEnabled(true);
-    win.dither()->setSelected(gif_options->dithering() == doc::DITHERING_ORDERED);
+    win.dither()->setSelected(gif_options->dithering() == doc::DitheringMethod::ORDERED);
 
     win.openWindowInForeground();
 
@@ -826,12 +830,12 @@ SharedPtr<FormatOptions> GifFormat::onGetFormatOptions(FileOp* fop)
 
       gif_options->setInterlaced(win.interlaced()->isSelected());
       gif_options->setDithering(win.dither()->isSelected() ?
-        doc::DITHERING_ORDERED:
-        doc::DITHERING_NONE);
+        doc::DitheringMethod::ORDERED:
+        doc::DitheringMethod::NONE);
 
       set_config_int("GIF", "Quantize", gif_options->quantize());
       set_config_bool("GIF", "Interlaced", gif_options->interlaced());
-      set_config_int("GIF", "Dither", gif_options->dithering());
+      set_config_int("GIF", "Dither", int(gif_options->dithering()));
     }
     else {
       gif_options.reset(NULL);

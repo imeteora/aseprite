@@ -25,7 +25,6 @@
 #include "doc/cel.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 
 namespace app {
 
@@ -45,21 +44,21 @@ void DocumentLocation::layerIndex(LayerIndex layerIndex)
 
 Palette* DocumentLocation::palette()
 {
-  return (m_sprite ? m_sprite->getPalette(m_frame): NULL);
+  return (m_sprite ? m_sprite->palette(m_frame): NULL);
 }
 
 const Cel* DocumentLocation::cel() const
 {
-  if (m_layer && m_layer->isImage())
-    return static_cast<const LayerImage*>(m_layer)->getCel(m_frame);
+  if (m_layer)
+    return m_layer->cel(m_frame);
   else
     return NULL;
 }
 
 Cel* DocumentLocation::cel()
 {
-  if (m_layer && m_layer->isImage())
-    return static_cast<LayerImage*>(m_layer)->getCel(m_frame);
+  if (m_layer)
+    return m_layer->cel(m_frame);
   else
     return NULL;
 }
@@ -82,7 +81,7 @@ Image* DocumentLocation::image(int* x, int* y, int* opacity) const
 
 Palette* DocumentLocation::palette() const
 {
-  return (m_sprite ? m_sprite->getPalette(m_frame): NULL);
+  return (m_sprite ? m_sprite->palette(m_frame): NULL);
 }
 
 } // namespace app

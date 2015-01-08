@@ -106,25 +106,24 @@ public:
     layer3->setName("layer3");
     layer4->setName("layer4");
 
-    sprite->setTotalFrames(FrameNumber(4));
-    sprite->setFrameDuration(FrameNumber(0), 1); // These durations can be used to identify
-    sprite->setFrameDuration(FrameNumber(1), 2); // frames after a move operation
-    sprite->setFrameDuration(FrameNumber(2), 3);
-    sprite->setFrameDuration(FrameNumber(3), 4);
+    sprite->setTotalFrames(frame_t(4));
+    sprite->setFrameDuration(frame_t(0), 1); // These durations can be used to identify
+    sprite->setFrameDuration(frame_t(1), 2); // frames after a move operation
+    sprite->setFrameDuration(frame_t(2), 3);
+    sprite->setFrameDuration(frame_t(3), 4);
 
     DocumentApi api = doc->getApi();
     for (int i=0; i<4; i++) {
       LayerImage* layer = static_cast<LayerImage*>(sprite->indexToLayer(LayerIndex(i)));
 
       for (int j=0; j<4; j++) {
-        Cel* cel = layer->getCel(FrameNumber(j));
-        Image* image;
+        Cel* cel = layer->cel(frame_t(j));
+        ImageRef image;
         if (cel)
-          image = cel->image();
+          image = cel->imageRef();
         else {
-          image = Image::create(IMAGE_RGB, 4, 4);
-          int imageIdx = sprite->stock()->addImage(image);
-          cel = new Cel(FrameNumber(j), imageIdx);
+          image.reset(Image::create(IMAGE_RGB, 4, 4));
+          cel = new Cel(frame_t(j), image);
           layer->addCel(cel);
         }
 
@@ -143,7 +142,7 @@ protected:
     return expect_layer_frame(sprite->layerToIndex(expected_layer), -1, layer, -1);
   }
 
-  bool expect_frame(int expected_frame, int frame) {
+  bool expect_frame(int expected_frame, frame_t frame) {
     for (int i=0; i<(int)sprite->countLayers(); ++i) {
       if (!expect_layer_frame(i, expected_frame, i, frame))
         return false;
@@ -151,13 +150,13 @@ protected:
     return true;
   }
 
-  bool expect_layer_frame(int expected_layer, int expected_frame, int layer, int frame) {
+  bool expect_layer_frame(int expected_layer, int expected_frame, int layer, frame_t frame) {
     if (frame >= 0) {
       if (!expect_cel(expected_layer, expected_frame, layer, frame))
         return false;
 
-      EXPECT_EQ((expected_frame+1), sprite->getFrameDuration(FrameNumber(frame)));
-      return ((expected_frame+1) == sprite->getFrameDuration(FrameNumber(frame)));
+      EXPECT_EQ((expected_frame+1), sprite->frameDuration(frame));
+      return ((expected_frame+1) == sprite->frameDuration(frame));
     }
 
     if (layer >= 0) {
@@ -171,12 +170,12 @@ protected:
     return true;
   }
 
-  bool expect_cel(int expected_layer, int expected_frame, int layer, int frame) {
+  bool expect_cel(int expected_layer, int expected_frame, int layer, frame_t frame) {
     color_t expected_color = white;
 
     color_t color = get_pixel(
-      static_cast<LayerImage*>(sprite->indexToLayer(LayerIndex(layer)))
-      ->getCel(FrameNumber(frame))->image(),
+      sprite->indexToLayer(LayerIndex(layer))
+      ->cel(frame)->image(),
       expected_layer, expected_frame);
 
     EXPECT_EQ(expected_color, color);
@@ -184,9 +183,8 @@ protected:
     return (expected_color == color);
   }
 
-  bool expect_empty_cel(int layer, int frame) {
-    Cel* cel = static_cast<LayerImage*>(sprite->indexToLayer(LayerIndex(layer)))
-      ->getCel(FrameNumber(frame));
+  bool expect_empty_cel(int layer, frame_t frame) {
+    Cel* cel = sprite->indexToLayer(LayerIndex(layer))->cel(frame);
 
     EXPECT_EQ(NULL, cel);
     return (cel == NULL);
@@ -203,17 +201,17 @@ protected:
   color_t white;
 };
 
-inline DocumentRange range(Layer* fromLayer, int fromFrNum, Layer* toLayer, int toFrNum, DocumentRange::Type type) {
+inline DocumentRange range(Layer* fromLayer, frame_t fromFrNum, Layer* toLayer, frame_t toFrNum, DocumentRange::Type type) {
   DocumentRange r;
-  r.startRange(fromLayer->sprite()->layerToIndex(fromLayer), FrameNumber(fromFrNum), type);
-  r.endRange(toLayer->sprite()->layerToIndex(toLayer), FrameNumber(toFrNum));
+  r.startRange(fromLayer->sprite()->layerToIndex(fromLayer), fromFrNum, type);
+  r.endRange(toLayer->sprite()->layerToIndex(toLayer), toFrNum);
   return r;
 }
 
-inline DocumentRange range(int fromLayer, int fromFrNum, int toLayer, int toFrNum, DocumentRange::Type type) {
+inline DocumentRange range(int fromLayer, frame_t fromFrNum, int toLayer, frame_t toFrNum, DocumentRange::Type type) {
   DocumentRange r;
-  r.startRange(LayerIndex(fromLayer), FrameNumber(fromFrNum), type);
-  r.endRange(LayerIndex(toLayer), FrameNumber(toFrNum));
+  r.startRange(LayerIndex(fromLayer), fromFrNum, type);
+  r.endRange(LayerIndex(toLayer), toFrNum);
   return r;
 }
 
@@ -233,15 +231,15 @@ inline DocumentRange layers_range(int layer) {
   return range(layer, -1, layer, -1, DocumentRange::kLayers);
 }
 
-inline DocumentRange frames_range(int fromFrame, int toFrame) {
+inline DocumentRange frames_range(frame_t fromFrame, frame_t toFrame) {
   return range(0, fromFrame, 0, toFrame, DocumentRange::kFrames);
 }
 
-inline DocumentRange frames_range(int frame) {
+inline DocumentRange frames_range(frame_t frame) {
   return range(0, frame, 0, frame, DocumentRange::kFrames);
 }
 
-inline DocumentRange cels_range(int fromLayer, int fromFrNum, int toLayer, int toFrNum) {
+inline DocumentRange cels_range(int fromLayer, frame_t fromFrNum, int toLayer, frame_t toFrNum) {
   return range(fromLayer, fromFrNum, toLayer, toFrNum, DocumentRange::kCels);
 }
 

@@ -45,7 +45,6 @@
 #include "doc/palette.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
-#include "doc/stock.h"
 #include "ui/ui.h"
 
 #include "generated_export_sprite_sheet.h"
@@ -303,7 +302,7 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
     m_height = fit.height;
   }
 
-  FrameNumber nframes = sprite->totalFrames();
+  frame_t nframes = sprite->totalFrames();
   int columns;
   int sheet_w = 0;
   int sheet_h = 0;
@@ -327,18 +326,16 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
   if (sheet_h == 0) sheet_h = sprite->height()*((nframes/columns)+((nframes%columns)>0?1:0));
   columns = sheet_w / sprite->width();
 
-  base::UniquePtr<Image> resultImage(Image::create(sprite->pixelFormat(), sheet_w, sheet_h));
-  base::UniquePtr<Image> tempImage(Image::create(sprite->pixelFormat(), sprite->width(), sprite->height()));
+  ImageRef resultImage(Image::create(sprite->pixelFormat(), sheet_w, sheet_h));
   doc::clear_image(resultImage, 0);
 
+  render::Render render;
+
   int column = 0, row = 0;
-  for (FrameNumber frame(0); frame<nframes; ++frame) {
-    // TODO "tempImage" could not be necessary if we could specify
-    // destination clipping bounds in Sprite::render() function.
-    tempImage->clear(0);
-    sprite->render(tempImage, 0, 0, frame);
-    resultImage->copy(tempImage, column*sprite->width(), row*sprite->height(),
-      0, 0, tempImage->width(), tempImage->height());
+  for (frame_t frame = 0; frame<nframes; ++frame) {
+    render.renderSprite(resultImage, sprite, frame,
+      gfx::Clip(column*sprite->width(), row*sprite->height(),
+        sprite->bounds()));
 
     if (++column >= columns) {
       column = 0;
@@ -348,8 +345,9 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
 
   // Store the frame in the current editor so we can restore it
   // after change and restore the setTotalFrames() number.
-  FrameNumber oldSelectedFrame = (current_editor ? current_editor->frame():
-    FrameNumber(0));
+  frame_t oldSelectedFrame = (current_editor ?
+    current_editor->frame():
+    frame_t(0));
 
   {
     // The following steps modify the sprite, so we wrap all
@@ -361,12 +359,8 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
     // Add the layer in the sprite.
     LayerImage* resultLayer = api.newLayer(sprite);
 
-    // Add the image into the sprite's stock
-    int indexInStock = api.addImageInStock(sprite, resultImage);
-    resultImage.release();
-
     // Create the cel.
-    base::UniquePtr<Cel> resultCel(new Cel(FrameNumber(0), indexInStock));
+    base::UniquePtr<Cel> resultCel(new Cel(frame_t(0), resultImage));
 
     // Add the cel in the layer.
     api.addCel(resultLayer, resultCel);
@@ -385,7 +379,7 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
     // we are using the observable API, all DocumentView will change
     // its current frame to frame 1. We'll try to restore the
     // selected frame for the current_editor later.
-    api.setTotalFrames(sprite, FrameNumber(1));
+    api.setTotalFrames(sprite, frame_t(1));
 
     // Set the size of the sprite to the tile size.
     api.setSpriteSize(sprite, sheet_w, sheet_h);

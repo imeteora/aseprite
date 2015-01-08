@@ -32,14 +32,6 @@ Mask::Mask(const Mask& mask)
   copyFrom(&mask);
 }
 
-Mask::Mask(int x, int y, Image* bitmap)
-  : Object(ObjectType::Mask)
-  , m_freeze_count(0)
-  , m_bounds(x, y, bitmap->width(), bitmap->height())
-  , m_bitmap(bitmap)
-{
-}
-
 Mask::~Mask()
 {
   ASSERT(m_freeze_count == 0);
@@ -105,7 +97,7 @@ void Mask::copyFrom(const Mask* sourceMask)
     add(sourceMask->bounds());
 
     // And copy the "mask" bitmap
-    copy_image(m_bitmap, sourceMask->m_bitmap, 0, 0);
+    copy_image(m_bitmap, sourceMask->m_bitmap);
   }
 }
 
@@ -136,69 +128,35 @@ void Mask::invert()
   }
 }
 
-void Mask::replace(int x, int y, int w, int h)
-{
-  m_bounds = gfx::Rect(x, y, w, h);
-
-  delete m_bitmap;
-  m_bitmap = Image::create(IMAGE_BITMAP, w, h);
-
-  clear_image(m_bitmap, 1);
-}
-
 void Mask::replace(const gfx::Rect& bounds)
 {
-  replace(bounds.x, bounds.y, bounds.w, bounds.h);
-}
+  m_bounds = bounds;
 
-void Mask::add(int x, int y, int w, int h)
-{
-  if (m_freeze_count == 0)
-    reserve(x, y, w, h);
-
-  fill_rect(m_bitmap,
-            x-m_bounds.x, y-m_bounds.y,
-            x-m_bounds.x+w-1, y-m_bounds.y+h-1, 1);
+  delete m_bitmap;
+  m_bitmap = Image::create(IMAGE_BITMAP, bounds.w, bounds.h, m_buffer);
+  clear_image(m_bitmap, 1);
 }
 
 void Mask::add(const gfx::Rect& bounds)
 {
-  add(bounds.x, bounds.y, bounds.w, bounds.h);
-}
+  if (m_freeze_count == 0)
+    reserve(bounds);
 
-void Mask::subtract(int x, int y, int w, int h)
-{
-  if (m_bitmap) {
-    fill_rect(m_bitmap,
-              x-m_bounds.x,
-              y-m_bounds.y,
-              x-m_bounds.x+w-1,
-              y-m_bounds.y+h-1, 0);
-    shrink();
-  }
+  fill_rect(m_bitmap,
+    bounds.x-m_bounds.x,
+    bounds.y-m_bounds.y,
+    bounds.x-m_bounds.x+bounds.w-1,
+    bounds.y-m_bounds.y+bounds.h-1, 1);
 }
 
 void Mask::subtract(const gfx::Rect& bounds)
 {
-  subtract(bounds.x, bounds.y, bounds.w, bounds.h);
-}
-
-void Mask::intersect(int x, int y, int w, int h)
-{
   if (m_bitmap) {
-    int x1 = m_bounds.x;
-    int y1 = m_bounds.y;
-    int x2 = MIN(m_bounds.x+m_bounds.w-1, x+w-1);
-    int y2 = MIN(m_bounds.y+m_bounds.h-1, y+h-1);
-
-    m_bounds.x = MAX(x, x1);
-    m_bounds.y = MAX(y, y1);
-    m_bounds.w = x2 - m_bounds.x + 1;
-    m_bounds.h = y2 - m_bounds.y + 1;
-
-    Image* image = crop_image(m_bitmap, m_bounds.x-x1, m_bounds.y-y1, m_bounds.w, m_bounds.h, 0);
-    delete m_bitmap;
-    m_bitmap = image;
+    fill_rect(m_bitmap,
+      bounds.x-m_bounds.x,
+      bounds.y-m_bounds.y,
+      bounds.x-m_bounds.x+bounds.w-1,
+      bounds.y-m_bounds.y+bounds.h-1, 0);
 
     shrink();
   }
@@ -206,12 +164,30 @@ void Mask::intersect(int x, int y, int w, int h)
 
 void Mask::intersect(const gfx::Rect& bounds)
 {
-  intersect(bounds.x, bounds.y, bounds.w, bounds.h);
+  if (m_bitmap) {
+    gfx::Rect newBounds = m_bounds.createIntersect(bounds);
+
+    Image* image = NULL;
+
+    if (!newBounds.isEmpty()) {
+      image = crop_image(m_bitmap,
+        newBounds.x-m_bounds.x,
+        newBounds.y-m_bounds.y,
+        newBounds.w,
+        newBounds.h, 0);
+    }
+
+    delete m_bitmap;
+    m_bitmap = image;
+    m_bounds = newBounds;
+
+    shrink();
+  }
 }
 
 void Mask::byColor(const Image *src, int color, int fuzziness)
 {
-  replace(0, 0, src->width(), src->height());
+  replace(src->bounds());
 
   Image* dst = m_bitmap;
 
@@ -371,47 +347,34 @@ void Mask::crop(const Image *image)
           get_pixel(image, c, y2));
 
   if (done_count < 4)
-    intersect(x1, y1, x2-x1+1, y2-y1+1);
+    intersect(gfx::Rect(x1, y1, x2-x1+1, y2-y1+1));
   else
     clear();
 
 #undef ADVANCE
 }
 
-void Mask::reserve(int x, int y, int w, int h)
+void Mask::reserve(const gfx::Rect& bounds)
 {
-  ASSERT(w > 0 && h > 0);
+  ASSERT(!bounds.isEmpty());
 
   if (!m_bitmap) {
-    m_bounds.x = x;
-    m_bounds.y = y;
-    m_bounds.w = w;
-    m_bounds.h = h;
-    m_bitmap = Image::create(IMAGE_BITMAP, w, h);
+    m_bounds = bounds;
+    m_bitmap = Image::create(IMAGE_BITMAP, bounds.w, bounds.h, m_buffer);
     clear_image(m_bitmap, 0);
   }
   else {
-    int x1 = m_bounds.x;
-    int y1 = m_bounds.y;
-    int x2 = MAX(m_bounds.x+m_bounds.w-1, x+w-1);
-    int y2 = MAX(m_bounds.y+m_bounds.h-1, y+h-1);
-    int new_mask_x = MIN(x, x1);
-    int new_mask_y = MIN(y, y1);
-    int new_mask_w = x2 - new_mask_x + 1;
-    int new_mask_h = y2 - new_mask_y + 1;
+    gfx::Rect newBounds = m_bounds.createUnion(bounds);
 
-    if (m_bounds.x != new_mask_x ||
-        m_bounds.y != new_mask_y ||
-        m_bounds.w != new_mask_w ||
-        m_bounds.h != new_mask_h) {
-      m_bounds.x = new_mask_x;
-      m_bounds.y = new_mask_y;
-      m_bounds.w = new_mask_w;
-      m_bounds.h = new_mask_h;
-
-      Image* image = crop_image(m_bitmap, m_bounds.x-x1, m_bounds.y-y1, m_bounds.w, m_bounds.h, 0);
+    if (m_bounds != newBounds) {
+      Image* image = crop_image(m_bitmap,
+        newBounds.x-m_bounds.x,
+        newBounds.y-m_bounds.y,
+        newBounds.w,
+        newBounds.h, 0);
       delete m_bitmap;      // image
       m_bitmap = image;
+      m_bounds = newBounds;
     }
   }
 }

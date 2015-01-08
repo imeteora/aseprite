@@ -8,7 +8,7 @@
 #define DOC_COLOR_SCALES_H_INCLUDED
 #pragma once
 
-#include "doc/frame_number.h"
+#include "doc/frame.h"
 #include "doc/object.h"
 
 #include <vector>

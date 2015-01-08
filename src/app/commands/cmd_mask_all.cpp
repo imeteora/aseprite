@@ -58,14 +58,14 @@ void MaskAllCommand::onExecute(Context* context)
   ContextWriter writer(context);
   Document* document(writer.document());
   Sprite* sprite(writer.sprite());
-  UndoTransaction undo(writer.context(), "Mask All", undo::DoesntModifyDocument);
+  UndoTransaction undo(writer.context(), "Select All", undo::DoesntModifyDocument);
 
   // Undo
   if (undo.isEnabled())
     undo.pushUndoer(new undoers::SetMask(undo.getObjects(), document));
 
   // Change the selection
-  document->mask()->replace(0, 0, sprite->width(), sprite->height());
+  document->mask()->replace(sprite->bounds());
   document->setMaskVisible(true);
   document->resetTransformation();
 
