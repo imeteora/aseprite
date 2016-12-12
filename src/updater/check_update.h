@@ -1,27 +1,16 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef UPDATER_CHECK_UPDATE_H_INCLUDED
 #define UPDATER_CHECK_UPDATE_H_INCLUDED
 #pragma once
 
 #include "base/disable_copying.h"
-#include "base/version.h"
+
+#include <string>
 
 namespace updater {
 
@@ -45,7 +34,7 @@ namespace updater {
     Type getUpdateType() const { return m_type; }
 
     // Returns the latest version available to be downloaded.
-    base::Version getLatestVersion() const { return m_version; }
+    std::string getLatestVersion() const { return m_version; }
 
     // Returns the URL to download the new version.
     std::string getUrl() const { return m_url; }
@@ -57,14 +46,14 @@ namespace updater {
 
     // Returns the number of days that this client should wait for the
     // next "check for updates".
-    int getWaitDays() const { return m_waitDays; }
+    double getWaitDays() const { return m_waitDays; }
 
   private:
     Type m_type;
-    base::Version m_version;
+    std::string m_version;
     std::string m_url;
     Uuid m_uuid;
-    int m_waitDays;
+    double m_waitDays;
   };
 
   // Delegate called by CheckUpdate when the request to the server is
@@ -72,10 +61,6 @@ namespace updater {
   class CheckUpdateDelegate {
   public:
     virtual ~CheckUpdateDelegate() { }
-
-    // Returns true when the user is quitting the application so he does
-    // not want to continue checking for updates.
-    // virtual bool abortRequest() = 0;
 
     // Called by CheckUpdate::checkNewVersion() when the response from
     // the "updates server" is received.
@@ -94,7 +79,7 @@ namespace updater {
 
     // Sends a request to the "updates server" and calls the delegate
     // when the response is received.
-    void checkNewVersion(const Uuid& uuid, const std::string& extraParams, CheckUpdateDelegate* delegate);
+    bool checkNewVersion(const Uuid& uuid, const std::string& extraParams, CheckUpdateDelegate* delegate);
 
   private:
     class CheckUpdateImpl;

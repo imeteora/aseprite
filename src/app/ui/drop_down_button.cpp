@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -38,25 +26,26 @@ DropDownButton::DropDownButton(const char* text)
   , m_button(new Button(text))
   , m_dropDown(new Button(""))
 {
+  SkinTheme* theme = SkinTheme::instance();
+
   setup_look(m_button, LeftButtonLook);
   setup_look(m_dropDown, RightButtonLook);
 
   m_button->setExpansive(true);
-  m_button->setAlign(JI_LEFT | JI_MIDDLE);
+  m_button->setAlign(LEFT | MIDDLE);
   m_button->Click.connect(&DropDownButton::onButtonClick, this);
   m_dropDown->Click.connect(&DropDownButton::onDropDownButtonClick, this);
 
   addChild(m_button);
   addChild(m_dropDown);
 
-  child_spacing = 0;
+  setChildSpacing(0);
 
   m_dropDown->setIconInterface
-    (new ButtonIconImpl(static_cast<SkinTheme*>(m_dropDown->getTheme()),
-                        PART_COMBOBOX_ARROW_DOWN,
-                        PART_COMBOBOX_ARROW_DOWN_SELECTED,
-                        PART_COMBOBOX_ARROW_DOWN_DISABLED,
-                        JI_CENTER | JI_MIDDLE));
+    (new ButtonIconImpl(theme->parts.comboboxArrowDown(),
+                        theme->parts.comboboxArrowDownSelected(),
+                        theme->parts.comboboxArrowDownDisabled(),
+                        CENTER | MIDDLE));
 }
 
 void DropDownButton::onButtonClick(Event& ev)

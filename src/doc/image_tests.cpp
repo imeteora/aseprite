@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,8 +11,7 @@
 #include <gtest/gtest.h>
 
 #include "base/unique_ptr.h"
-#include "doc/image.h"
-#include "doc/image_bits.h"
+#include "doc/image_impl.h"
 #include "doc/primitives.h"
 
 using namespace base;
@@ -45,8 +44,8 @@ TYPED_TEST(ImageAllTypes, PutGetAndIterators)
   lengths.push_back(33);
 
   std::vector<gfx::Size> sizes;
-  for (size_t i=0; i<lengths.size(); ++i)
-    for (size_t j=0; j<lengths.size(); ++j)
+  for (std::size_t i=0; i<lengths.size(); ++i)
+    for (std::size_t j=0; j<lengths.size(); ++j)
       sizes.push_back(gfx::Size(lengths[j], lengths[i]));
 
   for (std::vector<gfx::Size>::iterator sizes_it=sizes.begin(); sizes_it!=sizes.end(); ++sizes_it) {
@@ -160,8 +159,8 @@ TYPED_TEST(ImageAllTypes, DrawHLine)
   lengths.push_back(33);
 
   std::vector<gfx::Size> sizes;
-  for (size_t i=0; i<lengths.size(); ++i)
-    for (size_t j=0; j<lengths.size(); ++j)
+  for (std::size_t i=0; i<lengths.size(); ++i)
+    for (std::size_t j=0; j<lengths.size(); ++j)
       sizes.push_back(gfx::Size(lengths[j], lengths[i]));
 
   for (std::vector<gfx::Size>::iterator sizes_it=sizes.begin(); sizes_it!=sizes.end(); ++sizes_it) {
@@ -169,12 +168,49 @@ TYPED_TEST(ImageAllTypes, DrawHLine)
     int h = sizes_it->h;
     UniquePtr<Image> image(Image::create(ImageTraits::pixel_format, w, h));
     image->clear(0);
-    
+
     for (int c=0; c<100; ++c) {
       int x = rand() % w;
       int y = rand() % h;
       int x2 = x + (rand() % (w-x));
       image->drawHLine(x, y, x2, rand() % ImageTraits::max_value);
+    }
+  }
+}
+
+TYPED_TEST(ImageAllTypes, FillRect)
+{
+  typedef TypeParam ImageTraits;
+
+  for (int i=0; i<100; ++i) {
+    int w = 1+i;
+    int h = 1+i;
+
+    UniquePtr<Image> image(Image::create(ImageTraits::pixel_format, w, h));
+    color_t color = (rand() % ImageTraits::max_value);
+    if (!color)
+      color = 1;
+
+    for (int j=0; j<1000; ++j) {
+      int x1 = rand() % w;
+      int y1 = rand() % h;
+      int x2 = x1 + (rand() % (w-x1));
+      int y2 = y1 + (rand() % (h-y1));
+
+      image->clear(0);
+      fill_rect(image, x1, y1, x2, y2, color);
+
+      // Check
+      for (int v=0; v<h; ++v) {
+        for (int u=0; u<w; ++u) {
+          color_t pixel = get_pixel_fast<ImageTraits>(image, u, v);
+          if (u >= x1 && v >= y1 &&
+              u <= x2 && v <= y2)
+            EXPECT_EQ(color, pixel);
+          else
+            EXPECT_EQ(0, pixel);
+        }
+      }
     }
   }
 }

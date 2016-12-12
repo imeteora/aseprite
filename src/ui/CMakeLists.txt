@@ -1,18 +1,22 @@
 # ASEPRITE
-# Copyright (C) 2001-2014  David Capello
+# Copyright (C) 2001-2016  David Capello
+
+if(WIN32)
+  add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+endif()
 
 add_library(ui-lib
   accelerator.cpp
   alert.cpp
   box.cpp
   button.cpp
-  clipboard.cpp
   combobox.cpp
   component.cpp
   cursor.cpp
   custom_label.cpp
   entry.cpp
   event.cpp
+  fit_bounds.cpp
   graphics.cpp
   grid.cpp
   image_view.cpp
@@ -32,12 +36,13 @@ add_library(ui-lib
   paint_event.cpp
   panel.cpp
   popup_window.cpp
-  preferred_size_event.cpp
   property.cpp
   register_message.cpp
   resize_event.cpp
   scroll_bar.cpp
+  scroll_helper.cpp
   separator.cpp
+  size_hint_event.cpp
   slider.cpp
   splitter.cpp
   system.cpp
@@ -45,8 +50,15 @@ add_library(ui-lib
   theme.cpp
   timer.cpp
   tooltips.cpp
-  ui.cpp
   view.cpp
   viewport.cpp
   widget.cpp
   window.cpp)
+
+target_link_libraries(ui-lib
+  she
+  clip
+  gfx-lib
+  laf-base
+  obs
+  ${PIXMAN_LIBRARY})

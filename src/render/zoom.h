@@ -1,5 +1,5 @@
 // Aseprite Render Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -14,19 +14,29 @@ namespace render {
 
   class Zoom {
   public:
-    Zoom(int num, int den)
-      : m_num(num), m_den(den) {
-      ASSERT(m_num > 0);
-      ASSERT(m_den > 0);
+    Zoom(int num, int den);
+
+    double scale() const {
+      return static_cast<double>(m_num) / static_cast<double>(m_den);
     }
 
-    double scale() const { return static_cast<double>(m_num) / static_cast<double>(m_den); }
+    // This value isn't used in operator==() or operator!=()
+    double internalScale() const {
+      return m_internalScale;
+    }
 
-    int apply(int x) const { return x * m_num / m_den; }
-    int remove(int x) const { return x * m_den / m_num; }
+    template<typename T>
+    T apply(T x) const {
+      return x * m_num / m_den;
+    }
 
-    double apply(double x) const { return x * m_num / m_den; }
-    double remove(double x) const { return x * m_den / m_num; }
+    template<typename T>
+    T remove(T x) const {
+      if (x < 0)
+        return (x * m_den / m_num) - 1;
+      else
+        return (x * m_den / m_num);
+    }
 
     gfx::Rect apply(const gfx::Rect& r) const {
       return gfx::Rect(
@@ -41,8 +51,12 @@ namespace render {
         remove(r.y+r.h) - remove(r.y));
     }
 
-    void in();
-    void out();
+    bool in();
+    bool out();
+
+    // Returns an linear zoom scale. This position can be incremented
+    // or decremented to get a new zoom value.
+    int linearScale() const;
 
     bool operator==(const Zoom& other) const {
       return m_num == other.m_num && m_den == other.m_den;
@@ -53,10 +67,17 @@ namespace render {
     }
 
     static Zoom fromScale(double scale);
+    static Zoom fromLinearScale(int i);
+    static int linearValues();
 
   private:
+    static int findClosestLinearScale(double scale);
+
     int m_num;
     int m_den;
+
+    // Internal scale value used for precise zooming purposes.
+    double m_internalScale;
   };
 
 } // namespace render

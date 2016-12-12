@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -49,39 +37,39 @@ public:
     , m_fileitem(fileitem)
     , m_thumbnail(NULL)
     , m_palette(NULL)
-    , m_thread(Bind<void>(&Worker::loadBgThread, this)) {
+    , m_thread(base::Bind<void>(&Worker::loadBgThread, this)) {
   }
 
   ~Worker() {
-    fop_stop(m_fop);
+    m_fop->stop();
     m_thread.join();
-
-    fop_free(m_fop);
   }
 
   IFileItem* getFileItem() { return m_fileitem; }
-  bool isDone() const { return fop_is_done(m_fop); }
-  double getProgress() const { return fop_get_progress(m_fop); }
+  bool isDone() const { return m_fop->isDone(); }
+  double getProgress() const { return m_fop->progress(); }
 
 private:
   void loadBgThread() {
     try {
-      fop_operate(m_fop, NULL);
+      m_fop->operate(nullptr);
 
       // Post load
-      fop_post_load(m_fop);
+      m_fop->postLoad();
 
       // Convert the loaded document into the she::Surface.
-      const Sprite* sprite = (m_fop->document && m_fop->document->sprite()) ?
-        m_fop->document->sprite(): NULL;
+      const Sprite* sprite =
+        (m_fop->document() &&
+         m_fop->document()->sprite() ?
+         m_fop->document()->sprite(): nullptr);
 
-      if (!fop_is_stop(m_fop) && sprite) {
+      if (!m_fop->isStop() && sprite) {
         // The palette to convert the Image
         m_palette.reset(new Palette(*sprite->palette(frame_t(0))));
 
         // Render first frame of the sprite in 'image'
         base::UniquePtr<Image> image(Image::create(
-            sprite->pixelFormat(), sprite->width(), sprite->height()));
+            IMAGE_RGB, sprite->width(), sprite->height()));
 
         AppRender render;
         render.setupBackground(NULL, image->pixelFormat());
@@ -101,11 +89,13 @@ private:
         // Stretch the 'image'
         m_thumbnail.reset(Image::create(image->pixelFormat(), thumb_w, thumb_h));
         clear_image(m_thumbnail, 0);
-        algorithm::scale_image(m_thumbnail, image, 0, 0, thumb_w, thumb_h);
+        algorithm::scale_image(m_thumbnail, image,
+                               0, 0, thumb_w, thumb_h,
+                               0, 0, image->width(), image->height());
       }
 
       // Close file
-      delete m_fop->document;
+      delete m_fop->releaseDocument();
 
       // Set the thumbnail of the file-item.
       if (m_thumbnail) {
@@ -120,12 +110,12 @@ private:
       }
     }
     catch (const std::exception& e) {
-      fop_error(m_fop, "Error loading file:\n%s", e.what());
+      m_fop->setError("Error loading file:\n%s", e.what());
     }
-    fop_done(m_fop);
+    m_fop->done();
   }
 
-  FileOp* m_fop;
+  base::UniquePtr<FileOp> m_fop;
   IFileItem* m_fileitem;
   base::UniquePtr<Image> m_thumbnail;
   base::UniquePtr<Palette> m_palette;
@@ -142,7 +132,7 @@ ThumbnailGenerator* ThumbnailGenerator::instance()
   static ThumbnailGenerator* singleton = NULL;
   if (singleton == NULL) {
     singleton = new ThumbnailGenerator();
-    App::instance()->Exit.connect(Bind<void>(&delete_singleton, singleton));
+    App::instance()->Exit.connect(base::Bind<void>(&delete_singleton, singleton));
   }
   return singleton;
 }
@@ -194,33 +184,32 @@ void ThumbnailGenerator::addWorkerToGenerateThumbnail(IFileItem* fileitem)
       getWorkerStatus(fileitem, progress) != WithoutWorker)
     return;
 
-  FileOp* fop = fop_to_load_document(NULL,
-    fileitem->getFileName().c_str(),
-    FILE_LOAD_SEQUENCE_NONE |
-    FILE_LOAD_ONE_FRAME);
-
+  base::UniquePtr<FileOp> fop(
+    FileOp::createLoadDocumentOperation(
+      nullptr,
+      fileitem->fileName().c_str(),
+      FILE_LOAD_SEQUENCE_NONE |
+      FILE_LOAD_ONE_FRAME));
   if (!fop)
     return;
 
-  if (fop->has_error()) {
-    fop_free(fop);
+  if (fop->hasError())
+    return;
+
+  Worker* worker = new Worker(fop.release(), fileitem);
+  try {
+    base::scoped_lock hold(m_workersAccess);
+    m_workers.push_back(worker);
   }
-  else {
-    Worker* worker = new Worker(fop, fileitem);
-    try {
-      base::scoped_lock hold(m_workersAccess);
-      m_workers.push_back(worker);
-    }
-    catch (...) {
-      delete worker;
-      throw;
-    }
+  catch (...) {
+    delete worker;
+    throw;
   }
 }
 
 void ThumbnailGenerator::stopAllWorkers()
 {
-  base::thread* ptr = new base::thread(Bind<void>(&ThumbnailGenerator::stopAllWorkersBackground, this));
+  base::thread* ptr = new base::thread(base::Bind<void>(&ThumbnailGenerator::stopAllWorkersBackground, this));
   m_stopThread.reset(ptr);
 }
 
@@ -233,10 +222,8 @@ void ThumbnailGenerator::stopAllWorkersBackground()
     m_workers.clear();
   }
 
-  for (WorkerList::iterator
-         it=workersCopy.begin(), end=workersCopy.end(); it!=end; ++it) {
+  for (auto it=workersCopy.begin(), end=workersCopy.end(); it!=end; ++it)
     delete *it;
-  }
 }
 
 } // namespace app

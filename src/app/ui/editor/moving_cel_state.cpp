@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -27,11 +15,12 @@
 #include "app/document_api.h"
 #include "app/document_range.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/editor/editor_customization_delegate.h"
 #include "app/ui/main_window.h"
 #include "app/ui/status_bar.h"
 #include "app/ui/timeline.h"
 #include "app/ui_context.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "app/util/range_utils.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
@@ -44,22 +33,34 @@ namespace app {
 using namespace ui;
 
 MovingCelState::MovingCelState(Editor* editor, MouseMessage* msg)
-  : m_canceled(false)
+  : m_reader(UIContext::instance(), 500)
+  , m_canceled(false)
 {
+  ContextWriter writer(m_reader, 500);
   Document* document = editor->document();
+  auto range = App::instance()->timeline()->range();
   LayerImage* layer = static_cast<LayerImage*>(editor->layer());
   ASSERT(layer->isImage());
 
-  m_cel = layer->cel(editor->frame());
-  if (m_cel) {
-    m_celStart = m_cel->position();
-  }
-  else {
-    m_celStart = gfx::Point(0, 0);
-  }
-  m_celNew = m_celStart;
+  Cel* currentCel = layer->cel(editor->frame());
+  ASSERT(currentCel); // The cel cannot be null
 
-  m_mouseStart = editor->screenToEditor(msg->position());
+  if (!range.enabled())
+    range = DocumentRange(currentCel);
+
+  // Record start positions of all cels in selected range
+  for (Cel* cel : get_unique_cels(writer.sprite(), range)) {
+    Layer* layer = cel->layer();
+    ASSERT(layer);
+
+    if (layer && layer->isMovable() && !layer->isBackground()) {
+      m_celList.push_back(cel);
+      m_celStarts.push_back(cel->position());
+    }
+  }
+
+  m_cursorStart = editor->screenToEditor(msg->position());
+  m_celOffset = gfx::Point(0, 0);
   editor->captureMouse();
 
   // Hide the mask (temporarily, until mouse-up event)
@@ -70,46 +71,47 @@ MovingCelState::MovingCelState(Editor* editor, MouseMessage* msg)
   }
 }
 
-MovingCelState::~MovingCelState()
-{
-}
-
 bool MovingCelState::onMouseUp(Editor* editor, MouseMessage* msg)
 {
   Document* document = editor->document();
 
   // Here we put back the cel into its original coordinate (so we can
   // add an undoer before).
-  if (m_celStart != m_celNew) {
-    // Put the cel in the original position.
-    if (m_cel)
-      m_cel->setPosition(m_celStart);
+  if (m_celOffset != gfx::Point(0, 0)) {
+    // Put the cels in the original position.
+    for (size_t i=0; i<m_celList.size(); ++i) {
+      Cel* cel = m_celList[i];
+      const gfx::Point& celStart = m_celStarts[i];
+
+      cel->setPosition(celStart);
+    }
 
     // If the user didn't cancel the operation...
     if (!m_canceled) {
-      ContextWriter writer(UIContext::instance());
-      UndoTransaction undoTransaction(writer.context(), "Cel Movement", undo::ModifyDocument);
-      DocumentApi api = document->getApi();
+      ContextWriter writer(m_reader, 1000);
+      Transaction transaction(writer.context(), "Cel Movement", ModifyDocument);
+      DocumentApi api = document->getApi(transaction);
 
       // And now we move the cel (or all selected range) to the new position.
-      gfx::Point delta = m_celNew - m_celStart;
-
-      DocumentRange range = App::instance()->getMainWindow()->getTimeline()->range();
-      if (range.enabled()) {
-        for (Cel* cel : get_cels_in_range(writer.sprite(), range))
-          api.setCelPosition(writer.sprite(), cel, cel->x()+delta.x, cel->y()+delta.y);
-      }
-      else if (m_cel) {
-        api.setCelPosition(writer.sprite(), m_cel, m_celNew.x, m_celNew.y);
+      for (Cel* cel : m_celList) {
+        api.setCelPosition(writer.sprite(), cel,
+                           cel->x() + m_celOffset.x,
+                           cel->y() + m_celOffset.y);
       }
 
       // Move selection if it was visible
       if (m_maskVisible)
-        api.setMaskPosition(document->mask()->bounds().x + delta.x,
-                            document->mask()->bounds().y + delta.y);
+        api.setMaskPosition(document->mask()->bounds().x + m_celOffset.x,
+                            document->mask()->bounds().y + m_celOffset.y);
 
-      undoTransaction.commit();
+      transaction.commit();
     }
+
+    // Redraw all editors. We've to notify all views about this
+    // general update because MovingCelState::onMouseMove() redraws
+    // only the cels in the current editor. And at this point we'd
+    // like to update all the editors.
+    document->notifyGeneralUpdate();
   }
 
   // Restore the mask visibility.
@@ -127,9 +129,24 @@ bool MovingCelState::onMouseMove(Editor* editor, MouseMessage* msg)
 {
   gfx::Point newCursorPos = editor->screenToEditor(msg->position());
 
-  m_celNew = m_celStart - m_mouseStart + newCursorPos;
-  if (m_cel)
-    m_cel->setPosition(m_celNew);
+  m_celOffset = newCursorPos - m_cursorStart;
+
+  if (int(editor->getCustomizationDelegate()
+          ->getPressedKeyAction(KeyContext::TranslatingSelection) & KeyAction::LockAxis)) {
+    if (ABS(m_celOffset.x) < ABS(m_celOffset.y)) {
+      m_celOffset.x = 0;
+    }
+    else {
+      m_celOffset.y = 0;
+    }
+  }
+
+  for (size_t i=0; i<m_celList.size(); ++i) {
+    Cel* cel = m_celList[i];
+    const gfx::Point& celStart = m_celStarts[i];
+
+    cel->setPosition(celStart + m_celOffset);
+  }
 
   // Redraw the new cel position.
   editor->invalidate();
@@ -142,11 +159,11 @@ bool MovingCelState::onUpdateStatusBar(Editor* editor)
 {
   StatusBar::instance()->setStatusText
     (0,
-     "Pos %3d %3d Offset %3d %3d",
-     (int)m_celNew.x,
-     (int)m_celNew.y,
-     (int)(m_celNew.x - m_celStart.x),
-     (int)(m_celNew.y - m_celStart.y));
+     ":pos: %3d %3d :offset: %3d %3d",
+     (int)m_cursorStart.x,
+     (int)m_cursorStart.y,
+     (int)m_celOffset.x,
+     (int)m_celOffset.y);
 
   return true;
 }

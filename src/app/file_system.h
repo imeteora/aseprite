@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_FILE_SYSTEM_H_INCLUDED
 #define APP_FILE_SYSTEM_H_INCLUDED
@@ -45,7 +33,7 @@ namespace app {
     static FileSystemModule* instance();
 
     // Marks all FileItems as deprecated to be refresh the next time
-    // they are queried through @ref FileItem::getChildren().
+    // they are queried through @ref FileItem::children().
     void refresh();
 
     IFileItem* getRootFileItem();
@@ -79,13 +67,14 @@ namespace app {
 
     virtual bool isFolder() const = 0;
     virtual bool isBrowsable() const = 0;
+    virtual bool isHidden() const = 0;
 
-    virtual std::string getKeyName() const = 0;
-    virtual std::string getFileName() const = 0;
-    virtual std::string getDisplayName() const = 0;
+    virtual std::string keyName() const = 0;
+    virtual std::string fileName() const = 0;
+    virtual std::string displayName() const = 0;
 
-    virtual IFileItem* getParent() const = 0;
-    virtual const FileItemList& getChildren() = 0;
+    virtual IFileItem* parent() const = 0;
+    virtual const FileItemList& children() = 0;
     virtual void createDirectory(const std::string& dirname) = 0;
 
     virtual bool hasExtension(const std::string& csv_extensions) = 0;

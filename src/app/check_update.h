@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_CHECK_UPDATE_H_INCLUDED
 #define APP_CHECK_UPDATE_H_INCLUDED
@@ -22,7 +10,6 @@
 
 #ifdef ENABLE_UPDATER
 
-#include "app/notification_delegate.h"
 #include "base/thread.h"
 #include "base/unique_ptr.h"
 #include "ui/timer.h"
@@ -30,11 +17,13 @@
 
 namespace app {
 
+  class CheckUpdateDelegate;
   class CheckUpdateBackgroundJob;
+  class Preferences;
 
-  class CheckUpdateThreadLauncher : public INotificationDelegate {
+  class CheckUpdateThreadLauncher {
   public:
-    CheckUpdateThreadLauncher();
+    CheckUpdateThreadLauncher(CheckUpdateDelegate* delegate);
     ~CheckUpdateThreadLauncher();
 
     void launch();
@@ -46,13 +35,13 @@ namespace app {
       return m_response;
     }
 
-    virtual std::string notificationText() override;
-    virtual void notificationClick() override;
-
   private:
     void onMonitoringTick();
     void checkForUpdates();
+    void showUI();
 
+    CheckUpdateDelegate* m_delegate;
+    Preferences& m_preferences;
     updater::Uuid m_uuid;
     base::UniquePtr<base::thread> m_thread;
     base::UniquePtr<CheckUpdateBackgroundJob> m_bgJob;

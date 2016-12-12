@@ -1,27 +1,16 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_INI_FILE_H_INCLUDED
 #define APP_INI_FILE_H_INCLUDED
 #pragma once
 
-#include "gfx/rect.h"
 #include "app/color.h"
+#include "gfx/point.h"
+#include "gfx/rect.h"
 
 namespace app {
 
@@ -47,8 +36,14 @@ namespace app {
   float get_config_float(const char* section, const char* name, float value);
   void set_config_float(const char* section, const char* name, float value);
 
+  double get_config_double(const char* section, const char* name, double value);
+  void set_config_double(const char* section, const char* name, double value);
+
   bool get_config_bool(const char* section, const char* name, bool value);
   void set_config_bool(const char* section, const char* name, bool value);
+
+  gfx::Point get_config_point(const char* section, const char* name, const gfx::Point& point);
+  void set_config_point(const char* section, const char* name, const gfx::Point& point);
 
   gfx::Rect get_config_rect(const char* section, const char* name, const gfx::Rect& rect);
   void set_config_rect(const char* section, const char* name, const gfx::Rect& rect);
@@ -82,7 +77,11 @@ namespace app {
   }
 
   inline double get_config_value(const char* section, const char* name, double value) {
-    return get_config_float(section, name, value);
+    return get_config_double(section, name, value);
+  }
+
+  inline gfx::Point get_config_value(const char* section, const char* name, const gfx::Point& value) {
+    return get_config_point(section, name, value);
   }
 
   inline gfx::Rect get_config_value(const char* section, const char* name, const gfx::Rect& value) {
@@ -115,7 +114,11 @@ namespace app {
   }
 
   inline void set_config_value(const char* section, const char* name, double value) {
-    set_config_float(section, name, value);
+    set_config_double(section, name, value);
+  }
+
+  inline void set_config_value(const char* section, const char* name, const gfx::Point& value) {
+    set_config_point(section, name, value);
   }
 
   inline void set_config_value(const char* section, const char* name, const gfx::Rect& value) {

@@ -1,34 +1,27 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
-#include <algorithm>
-
 #include "app/file/file_formats_manager.h"
+
 #include "app/file/file_format.h"
 #include "app/file/format_options.h"
+#include "base/string.h"
+#include "docio/detect_format.h"
+
+#include <algorithm>
+#include <cstring>
 
 namespace app {
 
 extern FileFormat* CreateAseFormat();
+extern FileFormat* CreatePixlyFormat();
 extern FileFormat* CreateBmpFormat();
 extern FileFormat* CreateFliFormat();
 extern FileFormat* CreateGifFormat();
@@ -37,6 +30,10 @@ extern FileFormat* CreateJpegFormat();
 extern FileFormat* CreatePcxFormat();
 extern FileFormat* CreatePngFormat();
 extern FileFormat* CreateTgaFormat();
+
+#ifdef ASEPRITE_WITH_WEBP_SUPPORT
+extern FileFormat* CreateWebPFormat();
+#endif
 
 static FileFormatsManager* singleton = NULL;
 
@@ -65,7 +62,9 @@ FileFormatsManager::~FileFormatsManager()
 
 void FileFormatsManager::registerAllFormats()
 {
+  // The first format is the default image format in FileSelector
   registerFormat(CreateAseFormat());
+  registerFormat(CreatePixlyFormat());
   registerFormat(CreateBmpFormat());
   registerFormat(CreateFliFormat());
   registerFormat(CreateGifFormat());
@@ -74,6 +73,10 @@ void FileFormatsManager::registerAllFormats()
   registerFormat(CreatePcxFormat());
   registerFormat(CreatePngFormat());
   registerFormat(CreateTgaFormat());
+
+#ifdef ASEPRITE_WITH_WEBP_SUPPORT
+  registerFormat(CreateWebPFormat());
+#endif
 }
 
 void FileFormatsManager::registerFormat(FileFormat* fileFormat)
@@ -91,25 +94,12 @@ FileFormatsList::iterator FileFormatsManager::end()
   return m_formats.end();
 }
 
-#ifdef _MSC_VER
-#pragma warning (disable: 4996) // Disable warning about 'stricmp'
-#endif
-
-FileFormat* FileFormatsManager::getFileFormatByExtension(const char* extension) const
+FileFormat* FileFormatsManager::getFileFormat(const docio::FileFormat docioFormat) const
 {
-  char buf[512], *tok;
-
-  for (FileFormat* ff : m_formats) {
-    strcpy(buf, ff->extensions());
-
-    for (tok=strtok(buf, ","); tok;
-         tok=strtok(NULL, ",")) {
-      if (stricmp(extension, tok) == 0)
-        return ff;
-    }
-  }
-
-  return NULL;
+  for (FileFormat* ff : m_formats)
+    if (ff->docioFormat() == docioFormat)
+      return ff;
+  return nullptr;
 }
 
 } // namespace app

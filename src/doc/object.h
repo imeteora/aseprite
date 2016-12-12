@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -13,15 +13,24 @@
 
 namespace doc {
 
+  typedef uint32_t ObjectVersion;
+
   class Object {
   public:
     Object(ObjectType type);
+    Object(const Object& other);
     virtual ~Object();
 
     const ObjectType type() const { return m_type; }
-    const ObjectId id() const { return m_id; }
+    const ObjectId id() const;
+    const ObjectVersion version() const { return m_version; }
 
-    void setId(ObjectId id) { m_id = id; }
+    void setId(ObjectId id);
+    void setVersion(ObjectVersion version);
+
+    void incrementVersion() {
+      ++m_version;
+    }
 
     // Returns the approximate amount of memory (in bytes) which this
     // object use.
@@ -32,8 +41,20 @@ namespace doc {
 
     // Unique identifier for this object (it is assigned by
     // Objects class).
-    ObjectId m_id;
+    mutable ObjectId m_id;
+
+    ObjectVersion m_version;
+
+    // Disable copy assignment
+    Object& operator=(const Object&);
   };
+
+  Object* get_object(ObjectId id);
+
+  template<typename T>
+  inline T* get(ObjectId id) {
+    return static_cast<T*>(get_object(id));
+  }
 
 } // namespace doc
 

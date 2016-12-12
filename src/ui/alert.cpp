@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -35,11 +35,13 @@
 #include "ui/alert.h"
 
 #include "base/bind.h"
+#include "base/string.h"
 #include "ui/box.h"
 #include "ui/button.h"
 #include "ui/grid.h"
 #include "ui/label.h"
 #include "ui/separator.h"
+#include "ui/slider.h"
 #include "ui/theme.h"
 
 #include <cstdarg>
@@ -49,56 +51,66 @@ namespace ui {
 
 Alert::Alert()
   : Window(WithTitleBar)
+  , m_progress(nullptr)
+  , m_progressPlaceholder(nullptr)
 {
   // Do nothing
 }
 
+void Alert::addProgress()
+{
+  ASSERT(!m_progress);
+  m_progress = new Slider(0, 100, 0);
+  m_progress->setReadOnly(true);
+  m_progressPlaceholder->addChild(m_progress);
+  m_progressPlaceholder->setVisible(true);
+}
+
+void Alert::setProgress(double progress)
+{
+  ASSERT(m_progress);
+  m_progress->setValue(int(MID(0.0, progress * 100.0, 100.0)));
+}
+
 AlertPtr Alert::create(const char* format, ...)
 {
-  char buf[4096];               // TODO warning buffer overflow
-  va_list ap;
-
   // Process arguments
+  std::va_list ap;
   va_start(ap, format);
-  vsprintf(buf, format, ap);
+  std::string msg = base::string_vprintf(format, ap);
   va_end(ap);
 
   // Create the alert window
-  std::vector<Widget*> labels;
-  std::vector<Widget*> buttons;
-
   AlertPtr window(new Alert());
-  window->processString(buf, labels, buttons);
-
+  window->processString(msg);
   return window;
 }
 
 // static
 int Alert::show(const char* format, ...)
 {
-  char buf[4096];               // TODO warning buffer overflow
-  va_list ap;
-
   // Process arguments
+  std::va_list ap;
   va_start(ap, format);
-  vsprintf(buf, format, ap);
+  std::string msg = base::string_vprintf(format, ap);
   va_end(ap);
 
   // Create the alert window
-  std::vector<Widget*> labels;
-  std::vector<Widget*> buttons;
-
   AlertPtr window(new Alert());
-  window->processString(buf, labels, buttons);
+  window->processString(msg);
+  return window->show();
+}
 
+int Alert::show()
+{
   // Open it
-  window->openWindowInForeground();
+  openWindowInForeground();
 
-  // Check the killer
+  // Check the closer
   int ret = 0;
-  if (Widget* killer = window->getKiller()) {
-    for (int i=0; i<(int)buttons.size(); ++i) {
-      if (killer == buttons[i]) {
+  if (Widget* closer = this->closer()) {
+    for (int i=0; i<(int)m_buttons.size(); ++i) {
+      if (closer == m_buttons[i]) {
         ret = i+1;
         break;
       }
@@ -109,21 +121,18 @@ int Alert::show(const char* format, ...)
   return ret;
 }
 
-void Alert::processString(char* buf, std::vector<Widget*>& labels, std::vector<Widget*>& buttons)
+void Alert::processString(std::string& buf)
 {
-  Box* box1, *box2, *box3, *box4, *box5;
-  Grid* grid;
   bool title = true;
   bool label = false;
   bool separator = false;
   bool button = false;
   int align = 0;
-  char *beg;
-  int c, chr;
+  int c, beg;
 
   // Process buffer
   c = 0;
-  beg = buf;
+  beg = 0;
   for (; ; c++) {
     if ((!buf[c]) ||
         ((buf[c] == buf[c+1]) &&
@@ -133,47 +142,44 @@ void Alert::processString(char* buf, std::vector<Widget*>& labels, std::vector<W
           (buf[c] == '-') ||
           (buf[c] == '|')))) {
       if (title || label || separator || button) {
-        chr = buf[c];
-        buf[c] = 0;
+        std::string item = buf.substr(beg, c-beg);
 
         if (title) {
-          setText(beg);
+          setText(item);
         }
         else if (label) {
-          Label* label = new Label(beg);
+          Label* label = new Label(item);
           label->setAlign(align);
-          labels.push_back(label);
+          m_labels.push_back(label);
         }
         else if (separator) {
-          labels.push_back(new Separator("", JI_HORIZONTAL));
+          m_labels.push_back(new Separator("", HORIZONTAL));
         }
         else if (button) {
           char buttonId[256];
-          Button* button_widget = new Button(beg);
+          Button* button_widget = new Button(item);
           button_widget->setMinSize(gfx::Size(60*guiscale(), 0));
-          buttons.push_back(button_widget);
+          m_buttons.push_back(button_widget);
 
-          sprintf(buttonId, "button-%lu", buttons.size());
+          sprintf(buttonId, "button-%lu", m_buttons.size());
           button_widget->setId(buttonId);
-          button_widget->Click.connect(Bind<void>(&Window::closeWindow, this, button_widget));
+          button_widget->Click.connect(base::Bind<void>(&Window::closeWindow, this, button_widget));
         }
-
-        buf[c] = chr;
       }
 
-      /* done */
+      // Done
       if (!buf[c])
         break;
-      /* next widget */
+      // Next widget
       else {
         title = label = separator = button = false;
-        beg = buf+c+2;
+        beg = c+2;
         align = 0;
 
         switch (buf[c]) {
-          case '<': label=true; align=JI_LEFT; break;
-          case '=': label=true; align=JI_CENTER; break;
-          case '>': label=true; align=JI_RIGHT; break;
+          case '<': label=true; align=LEFT; break;
+          case '=': label=true; align=CENTER; break;
+          case '>': label=true; align=RIGHT; break;
           case '-': separator=true; break;
           case '|': button=true; break;
         }
@@ -182,23 +188,25 @@ void Alert::processString(char* buf, std::vector<Widget*>& labels, std::vector<W
     }
   }
 
-  box1 = new Box(JI_VERTICAL);
-  box2 = new Box(JI_VERTICAL);
-  grid = new Grid(1, false);
-  box3 = new Box(JI_HORIZONTAL | JI_HOMOGENEOUS);
+  auto box1 = new Box(VERTICAL);
+  auto box2 = new Box(VERTICAL);
+  auto grid = new Grid(1, false);
+  auto box3 = new Box(HORIZONTAL | HOMOGENEOUS);
 
   // To identify by the user
   box2->setId("labels");
   box3->setId("buttons");
 
   // Pseudo separators (only to fill blank space)
-  box4 = new Box(0);
-  box5 = new Box(0);
+  auto box4 = new Box(0);
+  auto box5 = new Box(0);
+  m_progressPlaceholder = new Box(0);
 
   box4->setExpansive(true);
   box5->setExpansive(true);
   box4->noBorderNoChildSpacing();
   box5->noBorderNoChildSpacing();
+  m_progressPlaceholder->noBorderNoChildSpacing();
 
   // Setup parent <-> children relationship
 
@@ -206,20 +214,21 @@ void Alert::processString(char* buf, std::vector<Widget*>& labels, std::vector<W
 
   box1->addChild(box4); // Filler
   box1->addChild(box2); // Labels
+  box1->addChild(m_progressPlaceholder);
   box1->addChild(box5); // Filler
   box1->addChild(grid); // Buttons
 
-  grid->addChildInCell(box3, 1, 1, JI_CENTER | JI_BOTTOM);
+  grid->addChildInCell(box3, 1, 1, CENTER | BOTTOM | HORIZONTAL);
 
-  for (std::vector<Widget*>::iterator it = labels.begin(); it != labels.end(); ++it)
+  for (auto it=m_labels.begin(); it!=m_labels.end(); ++it)
     box2->addChild(*it);
 
-  for (std::vector<Widget*>::iterator it = buttons.begin(); it != buttons.end(); ++it)
+  for (auto it=m_buttons.begin(); it!=m_buttons.end(); ++it)
     box3->addChild(*it);
 
   // Default button is the last one
-  if (!buttons.empty())
-    buttons[buttons.size()-1]->setFocusMagnet(true);
+  if (!m_buttons.empty())
+    m_buttons[m_buttons.size()-1]->setFocusMagnet(true);
 }
 
 } // namespace ui

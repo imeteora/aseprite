@@ -1,5 +1,5 @@
 // Aseprite Rener Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -26,25 +26,31 @@ namespace doc {
 namespace render {
   using namespace doc;
 
- class PaletteOptimizer {
- public:
-   void feedWithImage(Image* image);
-   void calculate(Palette* palette, bool has_background_layer);
-
-  private:
-    ColorHistogram<5, 6, 5> m_histogram;
+  class PaletteOptimizerDelegate {
+  public:
+    virtual ~PaletteOptimizerDelegate() { }
+    virtual void onPaletteOptimizerProgress(double progress) = 0;
+    virtual bool onPaletteOptimizerContinue() = 0;
   };
 
-  void create_palette_from_images(
-    const std::vector<Image*>& images,
-    Palette* palette,
-    bool has_background_layer);
+  class PaletteOptimizer {
+  public:
+    void feedWithImage(Image* image, bool withAlpha);
+    void feedWithRgbaColor(color_t color);
+    void calculate(Palette* palette, int maskIndex, PaletteOptimizerDelegate* delegate);
+
+  private:
+    ColorHistogram<5, 6, 5, 5> m_histogram;
+  };
 
   // Creates a new palette suitable to quantize the given RGB sprite to Indexed color.
-  Palette* create_palette_from_rgb(
+  Palette* create_palette_from_sprite(
     const Sprite* sprite,
-    frame_t frameNumber,
-    Palette* newPalette);     // Can be NULL to create a new palette
+    frame_t fromFrame,
+    frame_t toFrame,
+    bool withAlpha,
+    Palette* newPalette, // Can be NULL to create a new palette
+    PaletteOptimizerDelegate* delegate);
 
   // Changes the image pixel format. The dithering method is used only
   // when you want to convert from RGB to Indexed.
@@ -55,7 +61,8 @@ namespace render {
     DitheringMethod ditheringMethod,
     const RgbMap* rgbmap,
     const Palette* palette,
-    bool is_background);
+    bool is_background,
+    color_t new_mask_color);
 
 } // namespace render
 

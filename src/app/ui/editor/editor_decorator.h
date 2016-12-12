@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_EDITOR_EDITOR_DECORATOR_H_INCLUDED
 #define APP_UI_EDITOR_EDITOR_DECORATOR_H_INCLUDED
@@ -22,6 +10,10 @@
 
 #include "gfx/color.h"
 #include "gfx/rect.h"
+
+namespace gfx {
+  class Region;
+}
 
 namespace doc {
   class Image;
@@ -49,6 +41,7 @@ namespace app {
     virtual ~EditorPostRender() { }
     virtual Editor* getEditor() = 0;
     virtual void drawLine(int x1, int y1, int x2, int y2, gfx::Color screenColor) = 0;
+    virtual void drawRectXor(const gfx::Rect& rc) = 0;
   };
 
   // Used by editor's states to pre- and post-render customized
@@ -59,8 +52,9 @@ namespace app {
     virtual ~EditorDecorator() { }
     virtual void preRenderDecorator(EditorPreRender* render) = 0;
     virtual void postRenderDecorator(EditorPostRender* render) = 0;
+    virtual void getInvalidDecoratoredRegion(Editor* editor, gfx::Region& region) = 0;
   };
-    
+
 } // namespace app
 
 #endif  // APP_UI_EDITOR_EDITOR_DECORATOR_H_INCLUDED

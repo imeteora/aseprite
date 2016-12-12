@@ -1,26 +1,13 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
-#include "app/app.h"
 #include "app/color.h"
 #include "app/commands/command.h"
 #include "app/commands/filters/color_curve_editor.h"
@@ -31,23 +18,18 @@
 #include "app/modules/gui.h"
 #include "app/ui/color_button.h"
 #include "base/bind.h"
-#include "filters/color_curve.h"
-#include "filters/color_curve_filter.h"
+#include "base/unique_ptr.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
+#include "filters/color_curve.h"
+#include "filters/color_curve_filter.h"
 #include "ui/ui.h"
 
 namespace app {
 
 using namespace filters;
 
-static ColorCurve* the_curve = NULL;
-
-// Slot for App::Exit signal
-static void on_exit_delete_curve()
-{
-  delete the_curve;
-}
+static base::UniquePtr<ColorCurve> the_curve;
 
 class ColorCurveWindow : public FilterWindow {
 public:
@@ -92,8 +74,8 @@ public:
   Command* clone() const override { return new ColorCurveCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 ColorCurveCommand::ColorCurveCommand()
@@ -115,15 +97,13 @@ void ColorCurveCommand::onExecute(Context* context)
   if (!the_curve) {
     // TODO load the curve?
 
-    the_curve = new ColorCurve(ColorCurve::Linear);
+    the_curve.reset(new ColorCurve(ColorCurve::Linear));
     the_curve->addPoint(gfx::Point(0, 0));
     the_curve->addPoint(gfx::Point(255, 255));
-
-    App::instance()->Exit.connect(&on_exit_delete_curve);
   }
 
   ColorCurveFilter filter;
-  filter.setCurve(the_curve);
+  filter.setCurve(the_curve.get());
 
   FilterManagerImpl filterMgr(context, &filter);
   filterMgr.setTarget(TARGET_RED_CHANNEL |

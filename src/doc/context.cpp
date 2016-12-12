@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,49 +10,56 @@
 
 #include "doc/context.h"
 
-#include <algorithm>
+#include "base/debug.h"
+#include "doc/site.h"
 
 namespace doc {
 
 Context::Context()
-  : m_settings(NULL)
-  , m_docs(this)
+  : m_docs(this)
   , m_activeDoc(NULL)
 {
-  m_docs.addObserver(this);
+  m_docs.add_observer(this);
 }
 
 Context::~Context()
 {
-  setActiveDocument(NULL);
-  m_docs.removeObserver(this);
+  m_docs.remove_observer(this);
 }
 
-void Context::setSettings(Settings* settings)
+Site Context::activeSite() const
 {
-  m_settings = settings;
+  Site site;
+  onGetActiveSite(&site);
+  return site;
 }
 
 Document* Context::activeDocument() const
 {
-  return m_activeDoc;
+  Site site;
+  onGetActiveSite(&site);
+  return site.document();
 }
 
-void Context::setActiveDocument(Document* doc)
+void Context::notifyActiveSiteChanged()
 {
-  m_activeDoc = doc;
-  notifyObservers(&ContextObserver::onSetActiveDocument, doc);
+  Site site = activeSite();
+  notify_observers<const Site&>(&ContextObserver::onActiveSiteChange, site);
+}
+
+void Context::onGetActiveSite(Site* site) const
+{
+  ASSERT(false);
 }
 
 void Context::onAddDocument(Document* doc)
 {
-  m_activeDoc = doc;
+  // Do nothing
 }
 
 void Context::onRemoveDocument(Document* doc)
 {
-  if (m_activeDoc == doc)
-    setActiveDocument(!m_docs.empty() ? m_docs.back() : NULL);
+  // Do nothing
 }
 
 } // namespace doc

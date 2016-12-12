@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,9 +12,11 @@
 
 #include "app/context.h"
 #include "app/document.h"
-#include "app/document_location.h"
+#include "app/modules/editors.h"
+#include "app/ui/editor/editor.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
+#include "doc/site.h"
 #include "doc/sprite.h"
 
 namespace app {
@@ -38,58 +28,80 @@ ContextFlags::ContextFlags()
 
 void ContextFlags::update(Context* context)
 {
-  DocumentLocation location = context->activeLocation();
-  Document* document = location.document();
+  Site site = context->activeSite();
+  Document* document = static_cast<Document*>(site.document());
 
   m_flags = 0;
 
   if (document) {
     m_flags |= HasActiveDocument;
 
-    if (document->lock(Document::ReadLock)) {
+    if (document->lock(Document::ReadLock, 0)) {
       m_flags |= ActiveDocumentIsReadable;
 
       if (document->isMaskVisible())
         m_flags |= HasVisibleMask;
 
-      Sprite* sprite = location.sprite();
-      if (sprite) {
-        m_flags |= HasActiveSprite;
+      updateFlagsFromSite(site);
 
-        if (sprite->backgroundLayer())
-          m_flags |= HasBackgroundLayer;
-
-        Layer* layer = location.layer();
-        if (layer) {
-          m_flags |= HasActiveLayer;
-
-          if (layer->isBackground())
-            m_flags |= ActiveLayerIsBackground;
-
-          if (layer->isVisible())
-            m_flags |= ActiveLayerIsVisible;
-
-          if (layer->isEditable())
-            m_flags |= ActiveLayerIsEditable;
-
-          if (layer->isImage()) {
-            m_flags |= ActiveLayerIsImage;
-
-            Cel* cel = layer->cel(location.frame());
-            if (cel) {
-              m_flags |= HasActiveCel;
-
-              if (cel->image())
-                m_flags |= HasActiveImage;
-            }
-          }
-        }
-      }
-
-      if (document->lockToWrite())
+      if (document->upgradeToWrite(0))
         m_flags |= ActiveDocumentIsWritable;
 
       document->unlock();
+    }
+
+    // TODO this is a hack, try to find a better design to handle this
+    // "moving pixels" state.
+    if (current_editor &&
+        current_editor->document() == document &&
+        current_editor->isMovingPixels()) {
+      // Flags enabled when we are in MovingPixelsState
+      m_flags |=
+        HasVisibleMask |
+        ActiveDocumentIsReadable |
+        ActiveDocumentIsWritable;
+
+      updateFlagsFromSite(current_editor->getSite());
+    }
+  }
+}
+
+void ContextFlags::updateFlagsFromSite(const Site& site)
+{
+  const Sprite* sprite = site.sprite();
+  if (!sprite)
+    return;
+
+  m_flags |= HasActiveSprite;
+
+  if (sprite->backgroundLayer())
+    m_flags |= HasBackgroundLayer;
+
+  const Layer* layer = site.layer();
+  frame_t frame = site.frame();
+  if (!layer)
+    return;
+
+  m_flags |= HasActiveLayer;
+
+  if (layer->isBackground())
+    m_flags |= ActiveLayerIsBackground;
+
+  if (layer->isVisible())
+    m_flags |= ActiveLayerIsVisible;
+
+  if (layer->isEditable())
+    m_flags |= ActiveLayerIsEditable;
+
+  if (layer->isImage()) {
+    m_flags |= ActiveLayerIsImage;
+
+    Cel* cel = layer->cel(frame);
+    if (cel) {
+      m_flags |= HasActiveCel;
+
+      if (cel->image())
+        m_flags |= HasActiveImage;
     }
   }
 }

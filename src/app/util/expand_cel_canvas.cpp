@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -23,24 +11,28 @@
 #include "app/util/expand_cel_canvas.h"
 
 #include "app/app.h"
+#include "app/cmd/add_cel.h"
+#include "app/cmd/clear_cel.h"
+#include "app/cmd/copy_region.h"
+#include "app/cmd/patch_cel.h"
 #include "app/context.h"
 #include "app/document.h"
-#include "app/document_location.h"
-#include "app/undo_transaction.h"
-#include "app/undoers/add_cel.h"
-#include "app/undoers/dirty_area.h"
-#include "app/undoers/modified_region.h"
-#include "app/undoers/replace_image.h"
-#include "app/undoers/set_cel_position.h"
+#include "app/transaction.h"
+#include "app/util/range_utils.h"
 #include "base/unique_ptr.h"
+#include "doc/algorithm/shrink_bounds.h"
 #include "doc/cel.h"
-#include "doc/dirty.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/primitives.h"
+#include "doc/site.h"
 #include "doc/sprite.h"
 
 namespace {
+
+// We cannot have two ExpandCelCanvas instances at the same time
+// (because we share ImageBuffers between them).
+static app::ExpandCelCanvas* singleton = nullptr;
 
 static doc::ImageBufferPtr src_buffer;
 static doc::ImageBufferPtr dst_buffer;
@@ -65,8 +57,14 @@ static void create_buffers()
 
 namespace app {
 
-ExpandCelCanvas::ExpandCelCanvas(Context* context, TiledMode tiledMode, UndoTransaction& undo, Flags flags)
-  : m_cel(NULL)
+ExpandCelCanvas::ExpandCelCanvas(
+  Site site, Layer* layer,
+  TiledMode tiledMode, Transaction& transaction, Flags flags)
+  : m_document(static_cast<app::Document*>(site.document()))
+  , m_sprite(site.sprite())
+  , m_layer(layer)
+  , m_frame(site.frame())
+  , m_cel(NULL)
   , m_celImage(NULL)
   , m_celCreated(false)
   , m_flags(flags)
@@ -74,27 +72,24 @@ ExpandCelCanvas::ExpandCelCanvas(Context* context, TiledMode tiledMode, UndoTran
   , m_dstImage(NULL)
   , m_closed(false)
   , m_committed(false)
-  , m_undo(undo)
+  , m_transaction(transaction)
+  , m_canCompareSrcVsDst((m_flags & NeedsSource) == NeedsSource)
 {
+  ASSERT(!singleton);
+  singleton = this;
+
   create_buffers();
 
-  DocumentLocation location = context->activeLocation();
-  m_document = location.document();
-  m_sprite = location.sprite();
-  m_layer = location.layer();
-
-  if (m_layer->isImage()) {
-    m_cel = m_layer->cel(location.frame());
+  if (m_layer && m_layer->isImage()) {
+    m_cel = m_layer->cel(site.frame());
     if (m_cel)
       m_celImage = m_cel->imageRef();
   }
 
-  // If there is no Cel
-  if (m_cel == NULL) {
-    // Create the cel
+  // Create a new cel
+  if (!m_cel) {
     m_celCreated = true;
-    m_cel = new Cel(location.frame(), ImageRef(NULL));
-    static_cast<LayerImage*>(m_layer)->addCel(m_cel);
+    m_cel = new Cel(site.frame(), ImageRef(NULL));
   }
 
   m_origCelPos = m_cel->position();
@@ -110,7 +105,7 @@ ExpandCelCanvas::ExpandCelCanvas(Context* context, TiledMode tiledMode, UndoTran
     m_sprite->width(),
     m_sprite->height());
 
-  if (tiledMode == TILED_NONE) { // Non-tiled
+  if (tiledMode == TiledMode::NONE) { // Non-tiled
     m_bounds = celBounds.createUnion(spriteBounds);
   }
   else {                         // Tiled
@@ -121,10 +116,21 @@ ExpandCelCanvas::ExpandCelCanvas(Context* context, TiledMode tiledMode, UndoTran
   // position (the new m_dstImage will be used in RenderEngine to
   // draw this cel).
   m_cel->setPosition(m_bounds.x, m_bounds.y);
+
+  if (m_celCreated) {
+    getDestCanvas();
+    m_cel->data()->setImage(m_dstImage);
+
+    if (m_layer && m_layer->isImage())
+      static_cast<LayerImage*>(m_layer)->addCel(m_cel);
+  }
 }
 
 ExpandCelCanvas::~ExpandCelCanvas()
 {
+  ASSERT(singleton == this);
+  singleton = nullptr;
+
   try {
     if (!m_committed && !m_closed)
       rollback();
@@ -132,14 +138,17 @@ ExpandCelCanvas::~ExpandCelCanvas()
   catch (...) {
     // Do nothing
   }
-  delete m_srcImage;
-  delete m_dstImage;
 }
 
 void ExpandCelCanvas::commit()
 {
   ASSERT(!m_closed);
   ASSERT(!m_committed);
+
+  if (!m_layer) {
+    m_committed = true;
+    return;
+  }
 
   // Was the cel created in the start of the tool-loop?
   if (m_celCreated) {
@@ -151,69 +160,59 @@ void ExpandCelCanvas::commit()
     validateDestCanvas(gfx::Region(m_bounds));
 
     // We can temporary remove the cel.
+    ASSERT(m_layer->isImage());
     static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
 
     // Add a copy of m_dstImage in the sprite's image stock
-    ImageRef newImage(Image::createCopy(m_dstImage));
-    m_cel->setImage(newImage);
+    gfx::Rect trimBounds = getTrimDstImageBounds();
+    if (!trimBounds.isEmpty()) {
+      ImageRef newImage(trimDstImage(trimBounds));
+      ASSERT(newImage);
 
-    // Is the undo enabled?.
-    if (m_undo.isEnabled()) {
-      m_undo.pushUndoer(new undoers::AddCel(m_undo.getObjects(),
-          m_layer, m_cel));
+      m_cel->data()->setImage(newImage);
+      m_cel->setPosition(m_cel->position() + trimBounds.origin());
+
+      // And finally we add the cel again in the layer.
+      m_transaction.execute(new cmd::AddCel(m_layer, m_cel));
     }
-
-    // And finally we add the cel again in the layer.
-    static_cast<LayerImage*>(m_layer)->addCel(m_cel);
   }
   else if (m_celImage) {
-    // If the size of each image is the same, we can create an undo
-    // with only the differences between both images.
-    if (m_cel->position() == m_origCelPos &&
-        m_bounds.getOrigin() == m_origCelPos &&
-        m_celImage->width() == m_dstImage->width() &&
-        m_celImage->height() == m_dstImage->height()) {
-      // Add to the undo history the differences between m_celImage and m_dstImage
-      if (m_undo.isEnabled()) {
-        if ((m_flags & UseModifiedRegionAsUndoInfo) == UseModifiedRegionAsUndoInfo) {
-          m_undo.pushUndoer(new undoers::ModifiedRegion(
-              m_undo.getObjects(), m_celImage, m_validDstRegion));
-        }
-        else {
-          Dirty dirty(m_celImage, m_dstImage, m_validDstRegion);
-          dirty.saveImagePixels(m_celImage);
-          m_undo.pushUndoer(new undoers::DirtyArea(
-              m_undo.getObjects(), m_celImage, &dirty));
+    // Restore cel position to its original position
+    m_cel->setPosition(m_origCelPos);
+
+    ASSERT(m_cel->image() == m_celImage.get());
+
+    gfx::Region* regionToPatch = &m_validDstRegion;
+    gfx::Region reduced;
+
+    if (m_canCompareSrcVsDst) {
+      ASSERT(gfx::Region().createSubtraction(m_validDstRegion, m_validSrcRegion).isEmpty());
+
+      for (gfx::Rect rc : m_validDstRegion) {
+        if (algorithm::shrink_bounds2(getSourceCanvas(),
+                                      getDestCanvas(), rc, rc)) {
+          reduced |= gfx::Region(rc);
         }
       }
 
-      // Copy the destination to the cel image.
-      copyValidDestToOriginalCel();
+      regionToPatch = &reduced;
     }
-    // If the size of both images are different, we have to
-    // replace the entire image.
+
+    if (m_layer->isBackground()) {
+      m_transaction.execute(
+        new cmd::CopyRegion(
+          m_cel->image(),
+          m_dstImage.get(),
+          *regionToPatch,
+          m_bounds.origin()));
+    }
     else {
-      if (m_undo.isEnabled()) {
-        if (m_cel->position() != m_origCelPos) {
-          gfx::Point newPos = m_cel->position();
-          m_cel->setPosition(m_origCelPos);
-          m_undo.pushUndoer(new undoers::SetCelPosition(m_undo.getObjects(), m_cel));
-          m_cel->setPosition(newPos);
-        }
-      }
-
-      // Validate the whole m_dstImage copying invalid areas from m_celImage
-      validateDestCanvas(gfx::Region(m_bounds));
-
-      // Replace the image in the stock. We need to create a copy of
-      // image because m_dstImage's ImageBuffer cannot be shared.
-      ImageRef newImage(Image::createCopy(m_dstImage));
-
-      if (m_undo.isEnabled())
-        m_undo.pushUndoer(new undoers::ReplaceImage(m_undo.getObjects(),
-            m_sprite, m_celImage, newImage));
-
-      m_sprite->replaceImage(m_celImage->id(), newImage);
+      m_transaction.execute(
+        new cmd::PatchCel(
+          m_cel,
+          m_dstImage.get(),
+          *regionToPatch,
+          m_bounds.origin()));
     }
   }
   else {
@@ -232,7 +231,9 @@ void ExpandCelCanvas::rollback()
   m_cel->setPosition(m_origCelPos);
 
   if (m_celCreated) {
-    static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
+    if (m_layer && m_layer->isImage())
+      static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
+
     delete m_cel;
     m_celImage.reset(NULL);
   }
@@ -245,23 +246,23 @@ Image* ExpandCelCanvas::getSourceCanvas()
   ASSERT((m_flags & NeedsSource) == NeedsSource);
 
   if (!m_srcImage) {
-    m_srcImage = Image::create(m_sprite->pixelFormat(),
-      m_bounds.w, m_bounds.h, src_buffer);
+    m_srcImage.reset(Image::create(m_sprite->pixelFormat(),
+        m_bounds.w, m_bounds.h, src_buffer));
 
     m_srcImage->setMaskColor(m_sprite->transparentColor());
   }
-  return m_srcImage;
+  return m_srcImage.get();
 }
 
 Image* ExpandCelCanvas::getDestCanvas()
 {
   if (!m_dstImage) {
-    m_dstImage = Image::create(m_sprite->pixelFormat(),
-      m_bounds.w, m_bounds.h, dst_buffer);
+    m_dstImage.reset(Image::create(m_sprite->pixelFormat(),
+        m_bounds.w, m_bounds.h, dst_buffer));
 
     m_dstImage->setMaskColor(m_sprite->transparentColor());
   }
-  return m_dstImage;
+  return m_dstImage.get();
 }
 
 void ExpandCelCanvas::validateSourceCanvas(const gfx::Region& rgn)
@@ -269,7 +270,7 @@ void ExpandCelCanvas::validateSourceCanvas(const gfx::Region& rgn)
   getSourceCanvas();
 
   gfx::Region rgnToValidate(rgn);
-  rgnToValidate.offset(-m_bounds.getOrigin());
+  rgnToValidate.offset(-m_bounds.origin());
   rgnToValidate.createSubtraction(rgnToValidate, m_validSrcRegion);
   rgnToValidate.createIntersection(rgnToValidate, gfx::Region(m_srcImage->bounds()));
 
@@ -278,19 +279,19 @@ void ExpandCelCanvas::validateSourceCanvas(const gfx::Region& rgn)
     rgnToClear.createSubtraction(rgnToValidate,
       gfx::Region(m_celImage->bounds()
         .offset(m_origCelPos)
-        .offset(-m_bounds.getOrigin())));
+        .offset(-m_bounds.origin())));
     for (const auto& rc : rgnToClear)
-      fill_rect(m_srcImage, rc, m_srcImage->maskColor());
+      fill_rect(m_srcImage.get(), rc, m_srcImage->maskColor());
 
     for (const auto& rc : rgnToValidate)
-      m_srcImage->copy(m_celImage,
+      m_srcImage->copy(m_celImage.get(),
         gfx::Clip(rc.x, rc.y,
           rc.x+m_bounds.x-m_origCelPos.x,
           rc.y+m_bounds.y-m_origCelPos.y, rc.w, rc.h));
   }
   else {
     for (const auto& rc : rgnToValidate)
-      fill_rect(m_srcImage, rc, m_srcImage->maskColor());
+      fill_rect(m_srcImage.get(), rc, m_srcImage->maskColor());
   }
 
   m_validSrcRegion.createUnion(m_validSrcRegion, rgnToValidate);
@@ -302,12 +303,12 @@ void ExpandCelCanvas::validateDestCanvas(const gfx::Region& rgn)
   int src_x, src_y;
   if ((m_flags & NeedsSource) == NeedsSource) {
     validateSourceCanvas(rgn);
-    src = m_srcImage;
+    src = m_srcImage.get();
     src_x = m_bounds.x;
     src_y = m_bounds.y;
   }
   else {
-    src = m_celImage;
+    src = m_celImage.get();
     src_x = m_origCelPos.x;
     src_y = m_origCelPos.y;
   }
@@ -315,7 +316,7 @@ void ExpandCelCanvas::validateDestCanvas(const gfx::Region& rgn)
   getDestCanvas();
 
   gfx::Region rgnToValidate(rgn);
-  rgnToValidate.offset(-m_bounds.getOrigin());
+  rgnToValidate.offset(-m_bounds.origin());
   rgnToValidate.createSubtraction(rgnToValidate, m_validDstRegion);
   rgnToValidate.createIntersection(rgnToValidate, gfx::Region(m_dstImage->bounds()));
 
@@ -324,9 +325,9 @@ void ExpandCelCanvas::validateDestCanvas(const gfx::Region& rgn)
     rgnToClear.createSubtraction(rgnToValidate,
       gfx::Region(src->bounds()
         .offset(src_x, src_y)
-        .offset(-m_bounds.getOrigin())));
+        .offset(-m_bounds.origin())));
     for (const auto& rc : rgnToClear)
-      fill_rect(m_dstImage, rc, m_dstImage->maskColor());
+      fill_rect(m_dstImage.get(), rc, m_dstImage->maskColor());
 
     for (const auto& rc : rgnToValidate)
       m_dstImage->copy(src,
@@ -336,7 +337,7 @@ void ExpandCelCanvas::validateDestCanvas(const gfx::Region& rgn)
   }
   else {
     for (const auto& rc : rgnToValidate)
-      fill_rect(m_dstImage, rc, m_dstImage->maskColor());
+      fill_rect(m_dstImage.get(), rc, m_dstImage->maskColor());
   }
 
   m_validDstRegion.createUnion(m_validDstRegion, rgnToValidate);
@@ -350,31 +351,45 @@ void ExpandCelCanvas::invalidateDestCanvas()
 void ExpandCelCanvas::invalidateDestCanvas(const gfx::Region& rgn)
 {
   gfx::Region rgnToInvalidate(rgn);
-  rgnToInvalidate.offset(-m_bounds.getOrigin());
+  rgnToInvalidate.offset(-m_bounds.origin());
   m_validDstRegion.createSubtraction(m_validDstRegion, rgnToInvalidate);
 }
 
 void ExpandCelCanvas::copyValidDestToSourceCanvas(const gfx::Region& rgn)
 {
   gfx::Region rgn2(rgn);
-  rgn2.offset(-m_bounds.getOrigin());
+  rgn2.offset(-m_bounds.origin());
   rgn2.createIntersection(rgn2, m_validSrcRegion);
   rgn2.createIntersection(rgn2, m_validDstRegion);
   for (const auto& rc : rgn2)
-    m_srcImage->copy(m_dstImage,
+    m_srcImage->copy(m_dstImage.get(),
       gfx::Clip(rc.x, rc.y, rc.x, rc.y, rc.w, rc.h));
+
+  // We cannot compare src vs dst in this case (e.g. on tools like
+  // spray and jumble that updated the source image form the modified
+  // destination).
+  m_canCompareSrcVsDst = false;
 }
 
-void ExpandCelCanvas::copyValidDestToOriginalCel()
+gfx::Rect ExpandCelCanvas::getTrimDstImageBounds() const
 {
-  // Copy valid destination region to the m_celImage
-  for (const auto& rc : m_validDstRegion) {
-    m_celImage->copy(m_dstImage,
-      gfx::Clip(
-        rc.x-m_bounds.x+m_origCelPos.x,
-        rc.y-m_bounds.y+m_origCelPos.y,
-        rc.x, rc.y, rc.w, rc.h));
+  if (m_layer->isBackground())
+    return m_dstImage->bounds();
+  else {
+    gfx::Rect bounds;
+    algorithm::shrink_bounds(m_dstImage.get(), bounds,
+                             m_dstImage->maskColor());
+    return bounds;
   }
+}
+
+ImageRef ExpandCelCanvas::trimDstImage(const gfx::Rect& bounds) const
+{
+  return ImageRef(
+    crop_image(m_dstImage.get(),
+               bounds.x, bounds.y,
+               bounds.w, bounds.h,
+               m_dstImage->maskColor()));
 }
 
 } // namespace app

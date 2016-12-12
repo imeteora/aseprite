@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -23,29 +11,40 @@
 #include "app/ui/workspace.h"
 
 #include "app/app.h"
-#include "app/ui/main_window.h"
-#include "app/ui/tabs.h"
-#include "app/ui/workspace_part.h"
-#include "app/ui/workspace_view.h"
+#include "app/ui/input_chain.h"
 #include "app/ui/skin/skin_theme.h"
-#include "ui/splitter.h"
-
-#include <algorithm>
-#include <queue>
+#include "app/ui/workspace_tabs.h"
+#include "app/ui/workspace_view.h"
+#include "base/remove_from_container.h"
+#include "ui/paint_event.h"
+#include "ui/resize_event.h"
 
 namespace app {
 
 using namespace app::skin;
 using namespace ui;
-  
-Workspace::Workspace()
-  : Box(JI_VERTICAL)
-  , m_activePart(new WorkspacePart)
-{
-  SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
-  setBgColor(theme->getColor(ThemeColor::Workspace));
 
-  addChild(m_activePart);
+// static
+WidgetType Workspace::Type()
+{
+  static WidgetType type = kGenericWidget;
+  if (type == kGenericWidget)
+    type = register_widget_type();
+  return type;
+}
+
+Workspace::Workspace()
+  : Widget(Workspace::Type())
+  , m_mainPanel(WorkspacePanel::MAIN_PANEL)
+  , m_tabs(nullptr)
+  , m_activePanel(&m_mainPanel)
+  , m_dropPreviewPanel(nullptr)
+  , m_dropPreviewTabs(nullptr)
+{
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  setBgColor(theme->colors.workspace());
+
+  addChild(&m_mainPanel);
 }
 
 Workspace::~Workspace()
@@ -54,202 +53,346 @@ Workspace::~Workspace()
   ASSERT(m_views.empty());
 }
 
-void Workspace::addView(WorkspaceView* view)
+void Workspace::setTabsBar(WorkspaceTabs* tabs)
 {
-  m_views.push_back(view);
+  m_tabs = tabs;
+  m_mainPanel.setTabsBar(tabs);
+}
 
-  m_activePart->addView(view);
-
-  App::instance()->getMainWindow()->getTabsBar()->addTab(dynamic_cast<TabView*>(view));
-
-  ActiveViewChanged();          // Fire ActiveViewChanged event
+void Workspace::addView(WorkspaceView* view, int pos)
+{
+  addViewToPanel(&m_mainPanel, view, false, pos);
 }
 
 void Workspace::removeView(WorkspaceView* view)
 {
-  WorkspaceViews::iterator it = std::find(m_views.begin(), m_views.end(), view);
-  ASSERT(it != m_views.end());
-  m_views.erase(it);
+  base::remove_from_container(m_views, view);
 
-  WorkspacePart* part = getPartByView(view);
-  ASSERT(part != NULL);
+  WorkspacePanel* panel = getViewPanel(view);
+  ASSERT(panel);
+  if (panel)
+    panel->removeView(view);
+}
 
-  part->removeView(view);
-  if (part->getViewCount() == 0 &&
-      part->getParent() != this) {
-    bool activePartRemoved = (m_activePart == part);
-    WorkspacePart* otherPart = destroyPart(part);
-
-    if (activePartRemoved)
-      m_activePart = otherPart;
-  }
-
-  App::instance()->getMainWindow()->getTabsBar()->removeTab(dynamic_cast<TabView*>(view));
-
-  ActiveViewChanged();          // Fire ActiveViewChanged event
+bool Workspace::closeView(WorkspaceView* view, bool quitting)
+{
+  return view->onCloseView(this, quitting);
 }
 
 WorkspaceView* Workspace::activeView()
 {
-  ASSERT(m_activePart != NULL);
-  return m_activePart->activeView();
+  return (m_activePanel ? m_activePanel->activeView(): nullptr);
 }
 
 void Workspace::setActiveView(WorkspaceView* view)
 {
-  ASSERT(view != NULL);
-
-  WorkspacePart* viewPart =
-    static_cast<WorkspacePart*>(view->getContentWidget()->getParent());
-
-  viewPart->setActiveView(view);
-
-  m_activePart = viewPart;
-  ActiveViewChanged();          // Fire ActiveViewChanged event
-}
-
-void Workspace::splitView(WorkspaceView* view, int orientation)
-{
-  // Try to clone the workspace view.
-  WorkspaceView* newView = view->cloneWorkspaceView();
-  if (newView == NULL)
+  m_activePanel = getViewPanel(view);
+  ASSERT(m_activePanel);
+  if (!m_activePanel)
     return;
 
-  // Get the part where the view-to-clone is located because we need
-  // to split this part.
-  WorkspacePart* viewPart =
-    static_cast<WorkspacePart*>(view->getContentWidget()->getParent());
-
-  // Create a new splitter to add new WorkspacePart on it: the given
-  // "viewPart" and a new part named "newPart".
-  Splitter* splitter = new Splitter(Splitter::ByPercentage, orientation);
-  splitter->setExpansive(true);
-
-  // Create the new part to contain the cloned view (see below, "newView").
-  WorkspacePart* newPart = new WorkspacePart();
-
-  // Replace the "viewPart" with the "splitter".
-  Widget* parent = viewPart->getParent();
-  parent->replaceChild(viewPart, splitter);
-  splitter->addChild(viewPart);
-  splitter->addChild(newPart);
-
-  // The new part is the active one.
-  m_activePart = newPart;
-
-  // Add the cloned view to the active part (newPart)
-  // using Workspace::addView().
-  addView(newView);
-  setActiveView(newView);
-
-  layout();
-
-  newView->onClonedFrom(view);
+  m_activePanel->setActiveView(view);
 
   ActiveViewChanged();          // Fire ActiveViewChanged event
 }
 
-WorkspacePart* Workspace::destroyPart(WorkspacePart* part)
+void Workspace::setMainPanelAsActive()
 {
-  ASSERT(part != NULL);
-  ASSERT(part->getViewCount() == 0);
+  m_activePanel = &m_mainPanel;
 
-  Widget* splitter = part->getParent();
-  ASSERT(splitter != this);
-  ASSERT(splitter->getChildren().size() == 2);
-  splitter->removeChild(part);
-  delete part;
-  ASSERT(splitter->getChildren().size() == 1);
+  removeDropViewPreview();
+  m_dropPreviewPanel = nullptr;
+  m_dropPreviewTabs = nullptr;
 
-  Widget* otherWidget = splitter->getFirstChild();
-  WorkspacePart* otherPart = dynamic_cast<WorkspacePart*>(otherWidget);
-  if (otherPart == NULL) {
-    Widget* widget = otherWidget;
-    for (;;) {
-      otherPart = widget->findFirstChildByType<WorkspacePart>();
-      if (otherPart != NULL)
-        break;
-
-      widget = widget->getFirstChild();
-    }
-  }
-  ASSERT(otherPart != NULL);
-
-  splitter->removeChild(otherWidget);
-  splitter->getParent()->replaceChild(splitter, otherWidget);
-  delete splitter;
-
-  layout();
-
-  return otherPart;
+  ActiveViewChanged();          // Fire ActiveViewChanged event
 }
 
-void Workspace::makeUnique(WorkspaceView* view)
+bool Workspace::canSelectOtherTab() const
 {
-  WorkspaceParts parts;
-  enumAllParts(parts);
-
-  for (WorkspaceParts::iterator it=parts.begin(), end=parts.end(); it != end; ++it) {
-    WorkspacePart* part = *it;
-    if (part->getParent() != this) {
-      while (part->activeView())
-        part->removeView(part->activeView());
-    }
-  }
-
-  for (WorkspaceParts::iterator it=parts.begin(), end=parts.end(); it != end; ++it) {
-    WorkspacePart* part = *it;
-    if (part->getParent() != this)
-      destroyPart(part);
-  }
-
-  WorkspacePart* uniquePart = dynamic_cast<WorkspacePart*>(getFirstChild());
-  ASSERT(uniquePart != NULL);
-  m_activePart = uniquePart;
-
-  for (WorkspaceViews::iterator it=m_views.begin(), end=m_views.end(); it != end; ++it) {
-    WorkspaceView* v = *it;
-    if (!v->getContentWidget()->getParent())
-      uniquePart->addView(v);
-  }
-
-  setActiveView(view);
+  return m_activePanel->tabs()->canSelectOtherTab();
 }
 
-WorkspacePart* Workspace::getPartByView(WorkspaceView* view)
+void Workspace::selectNextTab()
 {
-  WorkspaceParts parts;
-  enumAllParts(parts);
-
-  for (WorkspaceParts::iterator it=parts.begin(), end=parts.end(); it != end; ++it) {
-    WorkspacePart* part = *it;
-    if (part->hasView(view))
-      return part;
-  }
-
-  return NULL;
+  m_activePanel->tabs()->selectNextTab();
 }
 
-void Workspace::enumAllParts(WorkspaceParts& parts)
+void Workspace::selectPreviousTab()
 {
-  std::queue<Widget*> remaining;
-  remaining.push(getFirstChild());
-  while (!remaining.empty()) {
-    Widget* widget = remaining.front();
-    remaining.pop();
+  m_activePanel->tabs()->selectPreviousTab();
+}
 
-    ASSERT(widget != NULL);
+void Workspace::duplicateActiveView()
+{
+  WorkspaceView* view = activeView();
+  if (!view)
+    return;
 
-    WorkspacePart* part = dynamic_cast<WorkspacePart*>(widget);
-    if (part) {
-      parts.push_back(part);
+  WorkspaceView* clone = view->cloneWorkspaceView();
+  if (!clone)
+    return;
+
+  WorkspacePanel* panel = getViewPanel(view);
+  addViewToPanel(panel, clone, false, -1);
+  clone->onClonedFrom(view);
+  setActiveView(clone);
+}
+
+void Workspace::updateTabs()
+{
+  WidgetsList children = this->children();
+  while (!children.empty()) {
+    Widget* child = children.back();
+    children.erase(--children.end());
+
+    if (child->type() == WorkspacePanel::Type())
+      static_cast<WorkspacePanel*>(child)->tabs()->updateTabs();
+
+    for (auto subchild : child->children())
+      children.push_back(subchild);
+  }
+}
+
+void Workspace::onPaint(PaintEvent& ev)
+{
+  ev.graphics()->fillRect(bgColor(), clientBounds());
+}
+
+void Workspace::onResize(ui::ResizeEvent& ev)
+{
+  setBoundsQuietly(ev.bounds());
+
+  gfx::Rect rc = childrenBounds();
+  for (auto child : children())
+    child->setBounds(rc);
+}
+
+DropViewPreviewResult Workspace::setDropViewPreview(const gfx::Point& pos,
+  WorkspaceView* view, WorkspaceTabs* tabs)
+{
+  TabView* tabView = dynamic_cast<TabView*>(view);
+  WorkspaceTabs* newTabs = nullptr;
+  WorkspacePanel* panel = getPanelAt(pos);
+  if (!newTabs) {
+    newTabs = getTabsAt(pos);
+    // Drop preview is only to drop tabs from a different WorkspaceTabs.
+    if (newTabs == tabs)
+      newTabs = nullptr;
+  }
+
+  if (m_dropPreviewPanel && m_dropPreviewPanel != panel)
+    m_dropPreviewPanel->removeDropViewPreview();
+  if (m_dropPreviewTabs && m_dropPreviewTabs != newTabs)
+    m_dropPreviewTabs->removeDropViewPreview();
+
+  m_dropPreviewPanel = panel;
+  m_dropPreviewTabs = newTabs;
+
+  if (m_dropPreviewPanel)
+    m_dropPreviewPanel->setDropViewPreview(pos, view);
+  if (m_dropPreviewTabs)
+    m_dropPreviewTabs->setDropViewPreview(pos, tabView);
+
+  if (panel)
+    return DropViewPreviewResult::DROP_IN_PANEL;
+  else if (newTabs)
+    return DropViewPreviewResult::DROP_IN_TABS;
+  else
+    return DropViewPreviewResult::FLOATING;
+}
+
+void Workspace::removeDropViewPreview()
+{
+  if (m_dropPreviewPanel) {
+    m_dropPreviewPanel->removeDropViewPreview();
+    m_dropPreviewPanel = nullptr;
+  }
+
+  if (m_dropPreviewTabs) {
+    m_dropPreviewTabs->removeDropViewPreview();
+    m_dropPreviewTabs = nullptr;
+  }
+}
+
+DropViewAtResult Workspace::dropViewAt(const gfx::Point& pos, WorkspaceView* view, bool clone)
+{
+  WorkspaceTabs* tabs = getTabsAt(pos);
+  WorkspacePanel* panel = getPanelAt(pos);
+
+  if (panel) {
+    // Create new panel
+    return panel->dropViewAt(pos, getViewPanel(view), view, clone);
+  }
+  else if (tabs && tabs != getViewPanel(view)->tabs()) {
+    // Dock tab in other tabs
+    WorkspacePanel* dropPanel = tabs->panel();
+    ASSERT(dropPanel);
+
+    int pos = tabs->getDropTabIndex();
+    DropViewAtResult result;
+
+    WorkspaceView* originalView = view;
+    if (clone) {
+      view = view->cloneWorkspaceView();
+      result = DropViewAtResult::CLONED_VIEW;
     }
     else {
-      UI_FOREACH_WIDGET(widget->getChildren(), it) {
-        remaining.push(*it);
-      }
+      removeView(view);
+      result = DropViewAtResult::MOVED_TO_OTHER_PANEL;
     }
+
+    addViewToPanel(dropPanel, view, true, pos);
+
+    if (result == DropViewAtResult::CLONED_VIEW)
+      view->onClonedFrom(originalView);
+
+    return result;
   }
+  else
+    return DropViewAtResult::NOTHING;
+}
+
+void Workspace::addViewToPanel(WorkspacePanel* panel, WorkspaceView* view, bool from_drop, int pos)
+{
+  panel->addView(view, from_drop, pos);
+
+  m_activePanel = panel;
+  m_views.push_back(view);
+
+  setActiveView(view);
+  layout();
+}
+
+WorkspacePanel* Workspace::getViewPanel(WorkspaceView* view)
+{
+  Widget* widget = view->getContentWidget();
+  while (widget) {
+    if (widget->type() == WorkspacePanel::Type())
+      return static_cast<WorkspacePanel*>(widget);
+
+    widget = widget->parent();
+  }
+  return nullptr;
+}
+
+WorkspacePanel* Workspace::getPanelAt(const gfx::Point& pos)
+{
+  Widget* widget = manager()->pick(pos);
+  while (widget) {
+    if (widget->type() == WorkspacePanel::Type())
+      return static_cast<WorkspacePanel*>(widget);
+
+    widget = widget->parent();
+  }
+  return nullptr;
+}
+
+WorkspaceTabs* Workspace::getTabsAt(const gfx::Point& pos)
+{
+  Widget* widget = manager()->pick(pos);
+  while (widget) {
+    if (widget->type() == Tabs::Type())
+      return static_cast<WorkspaceTabs*>(widget);
+
+    widget = widget->parent();
+  }
+  return nullptr;
+}
+
+void Workspace::onNewInputPriority(InputChainElement* newElement)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    activeElement->onNewInputPriority(newElement);
+}
+
+bool Workspace::onCanCut(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onCanCut(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onCanCopy(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onCanCopy(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onCanPaste(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onCanPaste(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onCanClear(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onCanClear(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onCut(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onCut(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onCopy(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onCopy(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onPaste(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onPaste(ctx);
+  else
+    return false;
+}
+
+bool Workspace::onClear(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    return activeElement->onClear(ctx);
+  else
+    return false;
+}
+
+void Workspace::onCancel(Context* ctx)
+{
+  WorkspaceView* view = activeView();
+  InputChainElement* activeElement = (view ? view->onGetInputChainElement(): nullptr);
+  if (activeElement)
+    activeElement->onCancel(ctx);
 }
 
 } // namespace app

@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite Network Library
+// Copyright (c) 2001-2016 David Capello
+//
+// This file is released under the terms of the MIT license.
+// Read LICENSE.txt for more information.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,6 +10,7 @@
 
 #include "net/http_request.h"
 
+#include "base/debug.h"
 #include "net/http_headers.h"
 #include "net/http_response.h"
 
@@ -29,29 +18,26 @@
 
 namespace net {
 
-class HttpRequestImpl
-{
+class HttpRequestImpl {
 public:
   HttpRequestImpl(const std::string& url)
     : m_curl(curl_easy_init())
-    , m_headerlist(NULL)
-    , m_response(NULL)
-  {
+    , m_headerlist(nullptr)
+    , m_response(nullptr) {
     curl_easy_setopt(m_curl, CURLOPT_WRITEDATA, this);
     curl_easy_setopt(m_curl, CURLOPT_WRITEFUNCTION, &HttpRequestImpl::writeBodyCallback);
     curl_easy_setopt(m_curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(m_curl, CURLOPT_NOSIGNAL, 1);
   }
 
-  ~HttpRequestImpl()
-  {
+  ~HttpRequestImpl() {
     if (m_headerlist)
       curl_slist_free_all(m_headerlist);
 
     curl_easy_cleanup(m_curl);
   }
 
-  void setHeaders(const HttpHeaders& headers)
-  {
+  void setHeaders(const HttpHeaders& headers) {
     if (m_headerlist) {
       curl_slist_free_all(m_headerlist);
       m_headerlist = NULL;
@@ -69,27 +55,31 @@ public:
     curl_easy_setopt(m_curl, CURLOPT_HTTPHEADER, m_headerlist);
   }
 
-  void send(HttpResponse& response)
-  {
+  bool send(HttpResponse& response) {
     m_response = &response;
-    curl_easy_perform(m_curl);
+    int res = curl_easy_perform(m_curl);
+    if (res != CURLE_OK)
+      return false;
+
+    long code;
+    curl_easy_getinfo(m_curl, CURLINFO_RESPONSE_CODE, &code);
+    m_response->setStatus(code);
+    return true;
   }
 
-  void abort()
-  {
-    // TODO
+  void abort() {
+    curl_easy_setopt(m_curl, CURLOPT_TIMEOUT_MS, 1);
+    curl_easy_setopt(m_curl, CURLOPT_CONNECTTIMEOUT_MS, 1);
   }
 
 private:
-  size_t writeBody(char* ptr, size_t bytes)
-  {
+  std::size_t writeBody(char* ptr, std::size_t bytes) {
     ASSERT(m_response != NULL);
     m_response->write(ptr, bytes);
     return bytes;
   }
 
-  static size_t writeBodyCallback(char* ptr, size_t size, size_t nmemb, void* userdata)
-  {
+  static std::size_t writeBodyCallback(char* ptr, std::size_t size, std::size_t nmemb, void* userdata) {
     HttpRequestImpl* req = reinterpret_cast<HttpRequestImpl*>(userdata);
     return req->writeBody(ptr, size*nmemb);
   }
@@ -114,9 +104,9 @@ void HttpRequest::setHeaders(const HttpHeaders& headers)
   m_impl->setHeaders(headers);
 }
 
-void HttpRequest::send(HttpResponse& response)
+bool HttpRequest::send(HttpResponse& response)
 {
-  m_impl->send(response);
+  return m_impl->send(response);
 }
 
 void HttpRequest::abort()

@@ -1,5 +1,5 @@
 // Aseprite Render Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,21 +10,23 @@
 
 #include "render/quantization.h"
 
-#include "doc/blend.h"
-#include "doc/image.h"
-#include "doc/image_bits.h"
+#include "base/base.h"
+#include "doc/image_impl.h"
 #include "doc/images_collector.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/primitives.h"
+#include "doc/remap.h"
 #include "doc/rgbmap.h"
 #include "doc/sprite.h"
 #include "gfx/hsv.h"
 #include "gfx/rgb.h"
+#include "render/ordered_dither.h"
 #include "render/render.h"
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <vector>
 
 namespace render {
@@ -32,50 +34,46 @@ namespace render {
 using namespace doc;
 using namespace gfx;
 
-// Converts a RGB image to indexed with ordered dithering method.
-static Image* ordered_dithering(
-  const Image* src_image,
-  Image* dst_image,
-  int offsetx, int offsety,
-  const RgbMap* rgbmap,
-  const Palette* palette);
-
-Palette* create_palette_from_rgb(
+Palette* create_palette_from_sprite(
   const Sprite* sprite,
-  frame_t frameNumber,
-  Palette* palette)
+  frame_t fromFrame,
+  frame_t toFrame,
+  bool withAlpha,
+  Palette* palette,
+  PaletteOptimizerDelegate* delegate)
 {
+  PaletteOptimizer optimizer;
+
   if (!palette)
-    palette = new Palette(frame_t(0), 256);
-
-  bool has_background_layer = (sprite->backgroundLayer() != NULL);
-  Image* flat_image;
-
-  ImagesCollector images(
-    sprite->folder(),           // All layers
-    frameNumber,                // Ignored, we'll use all frames
-    true,                       // All frames,
-    false);                     // forWrite=false, read only
+    palette = new Palette(fromFrame, 256);
 
   // Add a flat image with the current sprite's frame rendered
-  flat_image = Image::create(sprite->pixelFormat(),
-    sprite->width(), sprite->height());
+  ImageRef flat_image(Image::create(IMAGE_RGB,
+      sprite->width(), sprite->height()));
 
-  render::Render().renderSprite(flat_image, sprite, frameNumber);
+  // Feed the optimizer with all rendered frames
+  render::Render render;
+  for (frame_t frame=fromFrame; frame<=toFrame; ++frame) {
+    render.renderSprite(flat_image.get(), sprite, frame);
+    optimizer.feedWithImage(flat_image.get(), withAlpha);
 
-  // Create an array of images
-  size_t nimage = images.size() + 1; // +1 for flat_image
-  std::vector<Image*> image_array(nimage);
+    if (delegate) {
+      if (!delegate->onPaletteOptimizerContinue())
+        return nullptr;
 
-  size_t c = 0;
-  for (ImagesCollector::ItemsIterator it=images.begin(); it!=images.end(); ++it)
-    image_array[c++] = it->image();
-  image_array[c++] = flat_image; // The 'flat_image'
+      delegate->onPaletteOptimizerProgress(
+        double(frame-fromFrame+1) / double(toFrame-fromFrame+1));
+    }
+  }
 
-  // Generate an optimized palette for all images
-  create_palette_from_images(image_array, palette, has_background_layer);
+  // Generate an optimized palette
+  optimizer.calculate(
+    palette,
+    // Transparent color is needed if we have transparent layers
+    (sprite->backgroundLayer() &&
+     sprite->countLayers() == 1 ? -1: sprite->transparentColor()),
+    delegate);
 
-  delete flat_image;
   return palette;
 }
 
@@ -86,20 +84,25 @@ Image* convert_pixel_format(
   DitheringMethod ditheringMethod,
   const RgbMap* rgbmap,
   const Palette* palette,
-  bool is_background)
+  bool is_background,
+  color_t new_mask_color)
 {
   if (!new_image)
     new_image = Image::create(pixelFormat, image->width(), image->height());
+  new_image->setMaskColor(new_mask_color);
 
   // RGB -> Indexed with ordered dithering
   if (image->pixelFormat() == IMAGE_RGB &&
       pixelFormat == IMAGE_INDEXED &&
       ditheringMethod == DitheringMethod::ORDERED) {
-    return ordered_dithering(image, new_image, 0, 0, rgbmap, palette);
+    BayerMatrix<8> matrix;
+    OrderedDither dither;
+    dither.ditherRgbImageToIndexed(matrix, image, new_image, 0, 0, rgbmap, palette);
+    return new_image;
   }
 
   color_t c;
-  int r, g, b;
+  int r, g, b, a;
 
   switch (image->pixelFormat()) {
 
@@ -151,11 +154,12 @@ Image* convert_pixel_format(
             r = rgba_getr(c);
             g = rgba_getg(c);
             b = rgba_getb(c);
+            a = rgba_geta(c);
 
-            if (rgba_geta(c) == 0)
-              *dst_it = 0;
+            if (a == 0)
+              *dst_it = new_mask_color;
             else
-              *dst_it = rgbmap->mapColor(r, g, b);
+              *dst_it = rgbmap->mapColor(r, g, b, a);
           }
           ASSERT(dst_it == dst_end);
           break;
@@ -206,11 +210,13 @@ Image* convert_pixel_format(
           for (; src_it != src_end; ++src_it, ++dst_it) {
             ASSERT(dst_it != dst_end);
             c = *src_it;
+            a = graya_geta(c);
+            c = graya_getv(c);
 
-            if (graya_geta(c) == 0)
-              *dst_it = 0;
+            if (a == 0)
+              *dst_it = new_mask_color;
             else
-              *dst_it = graya_getv(c);
+              *dst_it = rgbmap->mapColor(c, c, c, a);
           }
           ASSERT(dst_it == dst_end);
           break;
@@ -238,11 +244,9 @@ Image* convert_pixel_format(
             c = *src_it;
 
             if (!is_background && c == image->maskColor())
-              *dst_it = 0;
+              *dst_it = rgba(0, 0, 0, 0);
             else
-              *dst_it = rgba(rgba_getr(palette->getEntry(c)),
-                             rgba_getg(palette->getEntry(c)),
-                             rgba_getb(palette->getEntry(c)), 255);
+              *dst_it = palette->getEntry(c);
           }
           ASSERT(dst_it == dst_end);
           break;
@@ -261,14 +265,16 @@ Image* convert_pixel_format(
             c = *src_it;
 
             if (!is_background && c == image->maskColor())
-              *dst_it = 0;
+              *dst_it = graya(0, 0);
             else {
-              r = rgba_getr(palette->getEntry(c));
-              g = rgba_getg(palette->getEntry(c));
-              b = rgba_getb(palette->getEntry(c));
+              c = palette->getEntry(c);
+              r = rgba_getr(c);
+              g = rgba_getg(c);
+              b = rgba_getb(c);
+              a = rgba_geta(c);
 
               g = 255 * Hsv(Rgb(r, g, b)).valueInt() / 100;
-              *dst_it = graya(g, 255);
+              *dst_it = graya(g, a);
             }
           }
           ASSERT(dst_it == dst_end);
@@ -282,20 +288,20 @@ Image* convert_pixel_format(
 #ifdef _DEBUG
           LockImageBits<IndexedTraits>::iterator dst_end = dstBits.end();
 #endif
-          color_t dstMaskColor = new_image->maskColor();
 
           for (; src_it != src_end; ++src_it, ++dst_it) {
             ASSERT(dst_it != dst_end);
             c = *src_it;
 
             if (!is_background && c == image->maskColor())
-              *dst_it = dstMaskColor;
+              *dst_it = new_mask_color;
             else {
-              r = rgba_getr(palette->getEntry(c));
-              g = rgba_getg(palette->getEntry(c));
-              b = rgba_getb(palette->getEntry(c));
-
-              *dst_it = rgbmap->mapColor(r, g, b);
+              c = palette->getEntry(c);
+              r = rgba_getr(c);
+              g = rgba_getg(c);
+              b = rgba_getb(c);
+              a = rgba_geta(c);
+              *dst_it = rgbmap->mapColor(r, g, b, a);
             }
           }
           ASSERT(dst_it == dst_end);
@@ -310,119 +316,11 @@ Image* convert_pixel_format(
   return new_image;
 }
 
-/* Based on Gary Oberbrunner: */
-/*----------------------------------------------------------------------
- * Color image quantizer, from Paul Heckbert's paper in
- * Computer Graphics, vol.16 #3, July 1982 (Siggraph proceedings),
- * pp. 297-304.
- * By Gary Oberbrunner, copyright c. 1988.
- *----------------------------------------------------------------------
- */
-
-/* Bayer-method ordered dither.  The array line[] contains the
- * intensity values for the line being processed.  As you can see, the
- * ordered dither is much simpler than the error dispersion dither.
- * It is also many times faster, but it is not as accurate and
- * produces cross-hatch * patterns on the output.
- */
-
-static int pattern[8][8] = {
-  {  0, 32,  8, 40,  2, 34, 10, 42 }, /* 8x8 Bayer ordered dithering  */
-  { 48, 16, 56, 24, 50, 18, 58, 26 }, /* pattern.  Each input pixel   */
-  { 12, 44,  4, 36, 14, 46,  6, 38 }, /* is scaled to the 0..63 range */
-  { 60, 28, 52, 20, 62, 30, 54, 22 }, /* before looking in this table */
-  {  3, 35, 11, 43,  1, 33,  9, 41 }, /* to determine the action.     */
-  { 51, 19, 59, 27, 49, 17, 57, 25 },
-  { 15, 47,  7, 39, 13, 45,  5, 37 },
-  { 63, 31, 55, 23, 61, 29, 53, 21 }
-};
-
-#define DIST(r1,g1,b1,r2,g2,b2) (3 * ((r1)-(r2)) * ((r1)-(r2)) +        \
-                                 4 * ((g1)-(g2)) * ((g1)-(g2)) +        \
-                                 2 * ((b1)-(b2)) * ((b1)-(b2)))
-
-static Image* ordered_dithering(
-  const Image* src_image,
-  Image* dst_image,
-  int offsetx, int offsety,
-  const RgbMap* rgbmap,
-  const Palette* palette)
-{
-  int oppr, oppg, oppb, oppnrcm;
-  int dither_const;
-  int nr, ng, nb;
-  int r, g, b, a;
-  int nearestcm;
-  int x, y;
-  color_t c;
-
-  const LockImageBits<RgbTraits> src_bits(src_image);
-  LockImageBits<IndexedTraits> dst_bits(dst_image);
-  LockImageBits<RgbTraits>::const_iterator src_it = src_bits.begin();
-  LockImageBits<IndexedTraits>::iterator dst_it = dst_bits.begin();
-
-  for (y=0; y<src_image->height(); ++y) {
-    for (x=0; x<src_image->width(); ++x, ++src_it, ++dst_it) {
-      ASSERT(src_it != src_bits.end());
-      ASSERT(dst_it != dst_bits.end());
-
-      c = *src_it;
-
-      r = rgba_getr(c);
-      g = rgba_getg(c);
-      b = rgba_getb(c);
-      a = rgba_geta(c);
-
-      if (a != 0) {
-        nearestcm = rgbmap->mapColor(r, g, b);
-        /* rgb values for nearest color */
-        nr = rgba_getr(palette->getEntry(nearestcm));
-        ng = rgba_getg(palette->getEntry(nearestcm));
-        nb = rgba_getb(palette->getEntry(nearestcm));
-        /* Color as far from rgb as nrngnb but in the other direction */
-        oppr = MID(0, 2*r - nr, 255);
-        oppg = MID(0, 2*g - ng, 255);
-        oppb = MID(0, 2*b - nb, 255);
-        /* Nearest match for opposite color: */
-        oppnrcm = rgbmap->mapColor(oppr, oppg, oppb);
-        /* If they're not the same, dither between them. */
-        /* Dither constant is measured by where the true
-           color lies between the two nearest approximations.
-           Since the most nearly opposite color is not necessarily
-           on the line from the nearest through the true color,
-           some triangulation error can be introduced.  In the worst
-           case the r-nr distance can actually be less than the nr-oppr
-           distance. */
-        if (oppnrcm != nearestcm) {
-          oppr = rgba_getr(palette->getEntry(oppnrcm));
-          oppg = rgba_getg(palette->getEntry(oppnrcm));
-          oppb = rgba_getb(palette->getEntry(oppnrcm));
-
-          dither_const = DIST(nr, ng, nb, oppr, oppg, oppb);
-          if (dither_const != 0) {
-            dither_const = 64 * DIST(r, g, b, nr, ng, nb) / dither_const;
-            dither_const = MIN(63, dither_const);
-
-            if (pattern[(x+offsetx) & 7][(y+offsety) & 7] < dither_const)
-              nearestcm = oppnrcm;
-          }
-        }
-      }
-      else
-        nearestcm = 0;
-
-      *dst_it = nearestcm;
-    }
-  }
-
-  return dst_image;
-}
-
 //////////////////////////////////////////////////////////////////////
 // Creation of optimized palette for RGB images
 // by David Capello
 
-void PaletteOptimizer::feedWithImage(Image* image)
+void PaletteOptimizer::feedWithImage(Image* image, bool withAlpha)
 {
   uint32_t color;
 
@@ -436,9 +334,10 @@ void PaletteOptimizer::feedWithImage(Image* image)
 
         for (; it != end; ++it) {
           color = *it;
-
           if (rgba_geta(color) > 0) {
-            color |= rgba(0, 0, 0, 255);
+            if (!withAlpha)
+              color |= rgba(0, 0, 0, 255);
+
             m_histogram.addSamples(color, 1);
           }
         }
@@ -454,8 +353,13 @@ void PaletteOptimizer::feedWithImage(Image* image)
           color = *it;
 
           if (graya_geta(color) > 0) {
-            color = graya_getv(color);
-            m_histogram.addSamples(rgba(color, color, color, 255), 1);
+            if (!withAlpha)
+              color = graya(graya_getv(color), 255);
+
+            m_histogram.addSamples(rgba(graya_getv(color),
+                                        graya_getv(color),
+                                        graya_getv(color),
+                                        graya_geta(color)), 1);
           }
         }
       }
@@ -468,25 +372,44 @@ void PaletteOptimizer::feedWithImage(Image* image)
   }
 }
 
-void PaletteOptimizer::calculate(Palette* palette, bool has_background_layer)
+void PaletteOptimizer::feedWithRgbaColor(color_t color)
 {
+  m_histogram.addSamples(color, 1);
+}
+
+void PaletteOptimizer::calculate(Palette* palette, int maskIndex,
+                                 PaletteOptimizerDelegate* delegate)
+{
+  bool addMask;
+
+  if ((palette->size() > 1) &&
+      (maskIndex >= 0 && maskIndex < palette->size())) {
+    palette->resize(palette->size()-1);
+    addMask = true;
+  }
+  else
+    addMask = false;
+
   // If the sprite has a background layer, the first entry can be
   // used, in other case the 0 indexed will be the mask color, so it
   // will not be used later in the color conversion (from RGB to
   // Indexed).
-  int first_usable_entry = (has_background_layer ? 0: 1);
-  //int used_colors =
-  m_histogram.createOptimizedPalette(palette, first_usable_entry, 255);
-  //palette->resize(first_usable_entry+used_colors);   // TODO
-}
+  int usedColors = m_histogram.createOptimizedPalette(palette);
 
-void create_palette_from_images(const std::vector<Image*>& images, Palette* palette, bool has_background_layer)
-{
-  PaletteOptimizer optimizer;
-  for (int i=0; i<(int)images.size(); ++i)
-    optimizer.feedWithImage(images[i]);
+  if (addMask) {
+    palette->resize(usedColors+1);
 
-  optimizer.calculate(palette, has_background_layer);
+    Remap remap(palette->size());
+    for (int i=0; i<usedColors; ++i)
+      remap.map(i, i + (i >= maskIndex ? 1: 0));
+
+    palette->applyRemap(remap);
+
+    if (maskIndex < palette->size())
+      palette->setEntry(maskIndex, rgba(0, 0, 0, 255));
+  }
+  else
+    palette->resize(MAX(1, usedColors));
 }
 
 } // namespace render

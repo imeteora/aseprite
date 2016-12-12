@@ -1,27 +1,21 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_DEVCONSOLE_VIEW_H_INCLUDED
 #define APP_UI_DEVCONSOLE_VIEW_H_INCLUDED
 #pragma once
 
+#ifndef ENABLE_SCRIPTING
+  #error ENABLE_SCRIPTING must be defined
+#endif
+
+#include "app/script/app_scripting.h"
 #include "app/ui/tabs.h"
 #include "app/ui/workspace_view.h"
+#include "script/engine_delegate.h"
 #include "ui/box.h"
 #include "ui/label.h"
 #include "ui/textbox.h"
@@ -30,19 +24,26 @@
 namespace app {
   class DevConsoleView : public ui::Box
                        , public TabView
-                       , public WorkspaceView {
+                       , public WorkspaceView
+                       , public script::EngineDelegate {
   public:
     DevConsoleView();
     ~DevConsoleView();
 
     // TabView implementation
     std::string getTabText() override;
+    TabIcon getTabIcon() override;
 
     // WorkspaceView implementation
     ui::Widget* getContentWidget() override { return this; }
+    bool canCloneWorkspaceView() override { return true; }
     WorkspaceView* cloneWorkspaceView() override;
     void onWorkspaceViewSelected() override;
-    void onClonedFrom(WorkspaceView* from) override;
+    bool onCloseView(Workspace* workspace, bool quitting) override;
+    void onTabPopup(Workspace* workspace) override;
+
+    // EngineDelegate impl
+    virtual void onConsolePrint(const char* text) override;
 
   protected:
     bool onProcessMessage(ui::Message* msg) override;
@@ -56,6 +57,7 @@ namespace app {
     ui::HBox m_bottomBox;
     ui::Label m_label;
     CommmandEntry* m_entry;
+    AppScripting m_engine;
   };
 
 } // namespace app

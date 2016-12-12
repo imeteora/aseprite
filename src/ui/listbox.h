@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,8 +8,10 @@
 #define UI_LISTBOX_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
+#include "obs/signal.h"
 #include "ui/widget.h"
+
+#include <vector>
 
 namespace ui {
 
@@ -19,27 +21,49 @@ namespace ui {
   public:
     ListBox();
 
-    ListItem* getSelectedChild();
+    bool isMultiselect() const { return m_multiselect; }
+    void setMultiselect(const bool multiselect);
+
+    Widget* getSelectedChild();
     int getSelectedIndex();
 
-    void selectChild(ListItem* item);
-    void selectIndex(int index);
+    void selectChild(Widget* item, Message* msg = nullptr);
+    void selectIndex(int index, Message* msg = nullptr);
 
-    size_t getItemsCount() const;
+    int getItemsCount() const;
 
+    void makeChildVisible(Widget* item);
     void centerScroll();
     void sortItems();
 
-    Signal0<void> ChangeSelectedItem;
-    Signal0<void> DoubleClickItem;
+    obs::signal<void()> Change;
+    obs::signal<void()> DoubleClickItem;
 
   protected:
     virtual bool onProcessMessage(Message* msg) override;
     virtual void onPaint(PaintEvent& ev) override;
     virtual void onResize(ResizeEvent& ev) override;
-    virtual void onPreferredSize(PreferredSizeEvent& ev) override;
-    virtual void onChangeSelectedItem();
+    virtual void onSizeHint(SizeHintEvent& ev) override;
+    virtual void onChange();
     virtual void onDoubleClickItem();
+
+    int getChildIndex(Widget* item);
+    Widget* getChildByIndex(int index);
+
+    // True if this listbox accepts selecting multiple items at the
+    // same time.
+    bool m_multiselect;
+
+    // Range of items selected when we click down/up. Used to specify
+    // the range of selected items in a multiselect operation.
+    int m_firstSelectedIndex;
+    int m_lastSelectedIndex;
+
+    // Initial state (isSelected()) of each list item when the
+    // selection operation started. It's used to switch the state of
+    // items in case that the user is Ctrl+clicking items several
+    // items at the same time.
+    std::vector<bool> m_states;
   };
 
 } // namespace ui

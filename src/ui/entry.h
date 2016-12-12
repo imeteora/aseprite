@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,7 +8,7 @@
 #define UI_ENTRY_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
+#include "obs/signal.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
 
@@ -16,10 +16,9 @@ namespace ui {
 
   class MouseMessage;
 
-  class Entry : public Widget
-  {
+  class Entry : public Widget {
   public:
-    Entry(size_t maxsize, const char *format, ...);
+    Entry(std::size_t maxsize, const char *format, ...);
     ~Entry();
 
     bool isPassword() const;
@@ -38,22 +37,26 @@ namespace ui {
     void setSuffix(const std::string& suffix);
     const std::string& getSuffix() { return m_suffix; }
 
+    void setTranslateDeadKeys(bool state);
+
     // for themes
     void getEntryThemeInfo(int* scroll, int* caret, int* state,
                            int* selbeg, int* selend);
+    gfx::Rect getEntryTextBounds() const;
 
     // Signals
-    Signal0<void> EntryChange;
+    obs::signal<void()> Change;
 
   protected:
     // Events
     bool onProcessMessage(Message* msg) override;
-    void onPreferredSize(PreferredSizeEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     void onPaint(PaintEvent& ev) override;
     void onSetText() override;
 
     // New Events
-    virtual void onEntryChange();
+    virtual void onChange();
+    virtual gfx::Rect onGetEntryTextBounds() const;
 
   private:
     enum class EntryCmd {
@@ -67,9 +70,12 @@ namespace ui {
       EndOfLine,
       DeleteForward,
       DeleteBackward,
+      DeleteBackwardWord,
+      DeleteForwardToEndOfLine,
       Cut,
       Copy,
       Paste,
+      SelectAll,
     };
 
     int getCaretFromMouse(MouseMessage* mousemsg);
@@ -81,7 +87,7 @@ namespace ui {
     void showEditPopupMenu(const gfx::Point& pt);
 
     Timer m_timer;
-    size_t m_maxsize;
+    std::size_t m_maxsize;
     int m_caret;
     int m_scroll;
     int m_select;
@@ -91,6 +97,7 @@ namespace ui {
     bool m_password;
     bool m_recent_focused;
     bool m_lock_selection;
+    bool m_translate_dead_keys;
     std::string m_suffix;
   };
 

@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_EDITOR_EDITOR_STATE_H_INCLUDED
 #define APP_UI_EDITOR_EDITOR_STATE_H_INCLUDED
@@ -22,14 +10,16 @@
 
 #include "base/disable_copying.h"
 #include "base/shared_ptr.h"
+#include "gfx/point.h"
 
 namespace gfx {
   class Region;
 }
 
 namespace ui {
-  class MouseMessage;
   class KeyMessage;
+  class MouseMessage;
+  class TouchMessage;
 }
 
 namespace app {
@@ -37,6 +27,7 @@ namespace app {
   class EditorDecorator;
 
   namespace tools {
+    class Ink;
     class Tool;
   }
 
@@ -47,7 +38,7 @@ namespace app {
   // drawing in the active sprite, etc.).
   class EditorState {
   public:
-    enum BeforeChangeAction {
+    enum LeaveAction {
       DiscardState,
       KeepState
     };
@@ -62,13 +53,13 @@ namespace app {
     // Called just before this state is replaced by a new state in the
     // Editor::setState() method.  Returns true if this state should be
     // kept in the EditorStatesHistory.
-    virtual BeforeChangeAction onBeforeChangeState(Editor* editor, EditorState* newState) {
+    virtual LeaveAction onLeaveState(Editor* editor, EditorState* newState) {
       return KeepState;
     }
 
     // Called when this instance is set as the new Editor's state when
     // Editor::setState() method is used.
-    virtual void onAfterChangeState(Editor* editor) { }
+    virtual void onEnterState(Editor* editor) { }
 
     // Called just before the state will be removed from the
     // EditorStatesHistory.  This event is useful to remove the
@@ -79,8 +70,7 @@ namespace app {
     // useful for states which depends on the selected current tool (as
     // MovingPixelsState which drops the pixels in case the user selects
     // other drawing tool).
-    virtual void onCurrentToolChange(Editor* editor) { }
-    virtual void onQuickToolChange(Editor* editor) { }
+    virtual void onActiveToolChange(Editor* editor, tools::Tool* tool) { }
 
     // Called when the user presses a mouse button over the editor.
     virtual bool onMouseDown(Editor* editor, ui::MouseMessage* msg) { return false; }
@@ -94,10 +84,16 @@ namespace app {
     // Called when the user moves the mouse wheel over the editor.
     virtual bool onMouseWheel(Editor* editor, ui::MouseMessage* msg) { return false; }
 
+    // Called when the user wants to zoom in/out using a pinch gesture in the trackpad.
+    virtual bool onTouchMagnify(Editor* editor, ui::TouchMessage* msg) { return false; }
+
+    // Called when the user moves the mouse wheel over the editor.
+    virtual bool onDoubleClick(Editor* editor, ui::MouseMessage* msg) { return false; }
+
     // Called each time the mouse changes its position so we can set an
     // appropiated cursor depending on the new coordinates of the mouse
     // pointer.
-    virtual bool onSetCursor(Editor* editor) { return false; }
+    virtual bool onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos) { return false; }
 
     // Called when a key is pressed over the current editor.
     virtual bool onKeyDown(Editor* editor, ui::KeyMessage* msg) { return false; }
@@ -105,7 +101,7 @@ namespace app {
     // Called when a key is released.
     virtual bool onKeyUp(Editor* editor, ui::KeyMessage* msg) { return false; }
 
-    // Called when a key is released.
+    // Called when status bar needs to be updated.
     virtual bool onUpdateStatusBar(Editor* editor) { return false; }
 
     // When a part of the sprite will be exposed.
@@ -118,15 +114,14 @@ namespace app {
     // Returns true if this state accept the given quicktool.
     virtual bool acceptQuickTool(tools::Tool* tool) { return true; }
 
-    // Returns true if this state supports changing the drawing cursor
-    // extra cel.
-    virtual bool regenerateDrawingCursor() { return true; }
+    // Custom ink in this state.
+    virtual tools::Ink* getStateInk() { return nullptr; }
 
   private:
     DISABLE_COPYING(EditorState);
   };
 
-  typedef SharedPtr<EditorState> EditorStatePtr;
+  typedef base::SharedPtr<EditorState> EditorStatePtr;
 
 } // namespace app
 

@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef TESTS_TEST_H_INCLUDED
 #define TESTS_TEST_H_INCLUDED
@@ -33,7 +21,7 @@
 
 #ifdef LINKED_WITH_SHE
   #undef main
-  #ifdef WIN32
+  #ifdef _WIN32
     int main(int argc, char* argv[]) {
       extern int app_main(int argc, char* argv[]);
       return app_main(argc, argv);
@@ -49,9 +37,10 @@ int main(int argc, char* argv[])
 
   #ifdef TEST_GUI
     {
-      she::ScopedHandle<she::System> system(she::create_system());
-      ui::GuiSystem guiSystem;
-      base::UniquePtr<ui::Manager> manager(new ui::Manager());
+      // Do not create a she::System, as we don't need it for testing purposes.
+      //she::ScopedHandle<she::System> system(she::create_system());
+      ui::UISystem uiSystem;
+      ui::Manager uiManager;
   #endif
 
       exitcode = RUN_ALL_TESTS();

@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -27,17 +15,17 @@
 #include "app/commands/commands.h"
 #include "app/modules/editors.h"
 #include "app/modules/gfx.h"
-#include "app/settings/settings.h"
+#include "app/tools/active_tool.h"
 #include "app/tools/tool_box.h"
 #include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/main_window.h"
-#include "app/ui/mini_editor.h"
+#include "app/ui/preview_editor.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
-#include "base/signal.h"
 #include "gfx/size.h"
+#include "obs/signal.h"
 #include "she/surface.h"
 #include "ui/ui.h"
 
@@ -59,11 +47,11 @@ public:
 
   ToolGroup* toolGroup() { return m_group; }
 
-  Signal1<void, Tool*> ToolSelected;
+  obs::signal<void(Tool*)> ToolSelected;
 
 protected:
   bool onProcessMessage(Message* msg) override;
-  void onPreferredSize(PreferredSizeEvent& ev) override;
+  void onSizeHint(SizeHintEvent& ev) override;
   void onPaint(PaintEvent& ev) override;
 
 private:
@@ -76,8 +64,8 @@ private:
 
 static Size getToolIconSize(Widget* widget)
 {
-  SkinTheme* theme = static_cast<SkinTheme*>(widget->getTheme());
-  she::Surface* icon = theme->get_toolicon("configuration");
+  SkinTheme* theme = static_cast<SkinTheme*>(widget->theme());
+  she::Surface* icon = theme->getToolIcon("configuration");
   if (icon)
     return Size(icon->width(), icon->height());
   else
@@ -96,10 +84,7 @@ ToolBar::ToolBar()
 {
   m_instance = this;
 
-  this->border_width.l = 1*guiscale();
-  this->border_width.t = 0;
-  this->border_width.r = 1*guiscale();
-  this->border_width.b = 0;
+  setBorder(gfx::Border(1*guiscale(), 0, 1*guiscale(), 0));
 
   m_hotTool = NULL;
   m_hotIndex = NoneIndex;
@@ -109,16 +94,20 @@ ToolBar::ToolBar()
   m_tipWindow = NULL;
   m_tipOpened = false;
 
-  ToolBox* toolbox = App::instance()->getToolBox();
+  ToolBox* toolbox = App::instance()->toolBox();
   for (ToolIterator it = toolbox->begin(); it != toolbox->end(); ++it) {
     Tool* tool = *it;
     if (m_selectedInGroup.find(tool->getGroup()) == m_selectedInGroup.end())
       m_selectedInGroup[tool->getGroup()] = tool;
   }
+
+  App::instance()->activeToolManager()->add_observer(this);
 }
 
 ToolBar::~ToolBar()
 {
+  App::instance()->activeToolManager()->remove_observer(this);
+
   delete m_popupWindow;
   delete m_tipWindow;
 }
@@ -134,7 +123,7 @@ bool ToolBar::onProcessMessage(Message* msg)
 
     case kMouseDownMessage: {
       MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-      ToolBox* toolbox = App::instance()->getToolBox();
+      ToolBox* toolbox = App::instance()->toolBox();
       int groups = toolbox->getGroupsCount();
       Rect toolrc;
 
@@ -157,30 +146,21 @@ bool ToolBar::onProcessMessage(Message* msg)
         }
       }
 
-      toolrc = getToolGroupBounds(ConfigureToolIndex);
+      toolrc = getToolGroupBounds(PreviewVisibilityIndex);
       if (mouseMsg->position().y >= toolrc.y &&
           mouseMsg->position().y < toolrc.y+toolrc.h) {
-        Command* conf_tools_cmd =
-          CommandsModule::instance()->getCommandByName(CommandId::ConfigureTools);
-
-        UIContext::instance()->executeCommand(conf_tools_cmd);
-      }
-
-      toolrc = getToolGroupBounds(MiniEditorVisibilityIndex);
-      if (mouseMsg->position().y >= toolrc.y &&
-          mouseMsg->position().y < toolrc.y+toolrc.h) {
-        // Switch the state of the mini editor
-        MiniEditorWindow* miniEditorWindow =
-          App::instance()->getMainWindow()->getMiniEditor();
-        bool state = miniEditorWindow->isMiniEditorEnabled();
-        miniEditorWindow->setMiniEditorEnabled(!state);
+        // Toggle preview visibility
+        PreviewEditorWindow* preview =
+          App::instance()->mainWindow()->getPreviewEditor();
+        bool state = preview->isPreviewEnabled();
+        preview->setPreviewEnabled(!state);
       }
       break;
     }
 
     case kMouseMoveMessage: {
       MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-      ToolBox* toolbox = App::instance()->getToolBox();
+      ToolBox* toolbox = App::instance()->toolBox();
       int groups = toolbox->getGroupsCount();
       Tool* new_hot_tool = NULL;
       int new_hot_index = NoneIndex;
@@ -205,16 +185,10 @@ bool ToolBar::onProcessMessage(Message* msg)
         }
       }
 
-      toolrc = getToolGroupBounds(ConfigureToolIndex);
+      toolrc = getToolGroupBounds(PreviewVisibilityIndex);
       if (mouseMsg->position().y >= toolrc.y &&
           mouseMsg->position().y < toolrc.y+toolrc.h) {
-        new_hot_index = ConfigureToolIndex;
-      }
-
-      toolrc = getToolGroupBounds(MiniEditorVisibilityIndex);
-      if (mouseMsg->position().y >= toolrc.y &&
-          mouseMsg->position().y < toolrc.y+toolrc.h) {
-        new_hot_index = MiniEditorVisibilityIndex;
+        new_hot_index = PreviewVisibilityIndex;
       }
 
       // hot button changed
@@ -244,16 +218,18 @@ bool ToolBar::onProcessMessage(Message* msg)
       // mouse over the ToolBar.
       if (hasCapture()) {
         MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-        Widget* pick = getManager()->pick(mouseMsg->position());
+        Widget* pick = manager()->pick(mouseMsg->position());
         if (ToolStrip* strip = dynamic_cast<ToolStrip*>(pick)) {
           releaseMouse();
 
           MouseMessage* mouseMsg2 = new MouseMessage(
             kMouseDownMessage,
+            mouseMsg->pointerType(),
             mouseMsg->buttons(),
+            mouseMsg->modifiers(),
             mouseMsg->position());
           mouseMsg2->addRecipient(strip);
-          getManager()->enqueueMessage(mouseMsg2);
+          manager()->enqueueMessage(mouseMsg2);
         }
       }
       break;
@@ -304,51 +280,51 @@ bool ToolBar::onProcessMessage(Message* msg)
   return Widget::onProcessMessage(msg);
 }
 
-void ToolBar::onPreferredSize(PreferredSizeEvent& ev)
+void ToolBar::onSizeHint(SizeHintEvent& ev)
 {
   Size iconsize = getToolIconSize(this);
-  iconsize.w += this->border_width.l + this->border_width.r;
-  iconsize.h += this->border_width.t + this->border_width.b;
-  ev.setPreferredSize(iconsize);
+  iconsize.w += border().width();
+  iconsize.h += border().height();
+  ev.setSizeHint(iconsize);
 }
 
 void ToolBar::onPaint(ui::PaintEvent& ev)
 {
-  gfx::Rect bounds = getClientBounds();
-  Graphics* g = ev.getGraphics();
-  SkinTheme* theme = static_cast<SkinTheme*>(this->getTheme());
-  gfx::Color normalFace = theme->getColor(ThemeColor::ButtonNormalFace);
-  gfx::Color hotFace = theme->getColor(ThemeColor::ButtonHotFace);
-  ToolBox* toolbox = App::instance()->getToolBox();
+  gfx::Rect bounds = clientBounds();
+  Graphics* g = ev.graphics();
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  gfx::Color normalFace = theme->colors.buttonNormalFace();
+  gfx::Color hotFace = theme->colors.buttonHotFace();
+  ToolBox* toolbox = App::instance()->toolBox();
+  Tool* activeTool = App::instance()->activeTool();
   ToolGroupList::iterator it = toolbox->begin_group();
   int groups = toolbox->getGroupsCount();
   Rect toolrc;
 
-  g->fillRect(theme->getColor(ThemeColor::TabSelectedFace), bounds);
+  g->fillRect(theme->colors.tabActiveFace(), bounds);
 
   for (int c=0; c<groups; ++c, ++it) {
     ToolGroup* tool_group = *it;
     Tool* tool = m_selectedInGroup[tool_group];
     gfx::Color face;
-    int nw;
+    SkinPartPtr nw;
 
-    if (UIContext::instance()->settings()->getCurrentTool() == tool ||
-      m_hotIndex == c) {
-      nw = PART_TOOLBUTTON_HOT_NW;
+    if (activeTool == tool || m_hotIndex == c) {
+      nw = theme->parts.toolbuttonHot();
       face = hotFace;
     }
     else {
-      nw = c >= 0 && c < groups-1 ? PART_TOOLBUTTON_NORMAL_NW:
-                                    PART_TOOLBUTTON_LAST_NW;
+      nw = c >= 0 && c < groups-1 ? theme->parts.toolbuttonNormal():
+                                    theme->parts.toolbuttonLast();
       face = normalFace;
     }
 
     toolrc = getToolGroupBounds(c);
-    toolrc.offset(-getBounds().x, -getBounds().y);
-    theme->draw_bounds_nw(g, toolrc, nw, face);
+    toolrc.offset(-origin());
+    theme->drawRect(g, toolrc, nw.get(), face);
 
     // Draw the tool icon
-    she::Surface* icon = theme->get_toolicon(tool->getId().c_str());
+    she::Surface* icon = theme->getToolIcon(tool->getId().c_str());
     if (icon) {
       g->drawRgbaSurface(icon,
         toolrc.x+toolrc.w/2-icon->width()/2,
@@ -356,35 +332,19 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
     }
   }
 
-  // Draw button to show tool configuration
-  toolrc = getToolGroupBounds(ConfigureToolIndex);
-  toolrc.offset(-getBounds().x, -getBounds().y);
-  bool isHot = (m_hotIndex == ConfigureToolIndex);
-  theme->draw_bounds_nw(g,
+  // Draw button to show/hide preview
+  toolrc = getToolGroupBounds(PreviewVisibilityIndex);
+  toolrc.offset(-origin());
+  bool isHot = (m_hotIndex == PreviewVisibilityIndex ||
+    App::instance()->mainWindow()->getPreviewEditor()->isPreviewEnabled());
+  theme->drawRect(
+    g,
     toolrc,
-    isHot ? PART_TOOLBUTTON_HOT_NW:
-    PART_TOOLBUTTON_LAST_NW,
-    isHot ? hotFace: normalFace);
+    (isHot ? theme->parts.toolbuttonHot().get():
+             theme->parts.toolbuttonLast().get()),
+    (isHot ? hotFace: normalFace));
 
-  she::Surface* icon = theme->get_toolicon("configuration");
-  if (icon) {
-    g->drawRgbaSurface(icon,
-      toolrc.x+toolrc.w/2-icon->width()/2,
-      toolrc.y+toolrc.h/2-icon->height()/2);
-  }
-
-  // Draw button to show/hide mini editor
-  toolrc = getToolGroupBounds(MiniEditorVisibilityIndex);
-  toolrc.offset(-getBounds().x, -getBounds().y);
-  isHot = (m_hotIndex == MiniEditorVisibilityIndex ||
-    App::instance()->getMainWindow()->getMiniEditor()->isMiniEditorEnabled());
-  theme->draw_bounds_nw(g,
-    toolrc,
-    isHot ? PART_TOOLBUTTON_HOT_NW:
-    PART_TOOLBUTTON_LAST_NW,
-    isHot ? hotFace: normalFace);
-
-  icon = theme->get_toolicon("minieditor");
+  she::Surface* icon = theme->getToolIcon("minieditor");
   if (icon) {
     g->drawRgbaSurface(icon,
       toolrc.x+toolrc.w/2-icon->width()/2,
@@ -392,9 +352,20 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
   }
 }
 
+void ToolBar::onVisible(bool visible)
+{
+  Widget::onVisible(visible);
+  if (!visible) {
+    if (m_popupWindow) {
+      closePopupWindow();
+      closeTipWindow();
+    }
+  }
+}
+
 int ToolBar::getToolGroupIndex(ToolGroup* group)
 {
-  ToolBox* toolbox = App::instance()->getToolBox();
+  ToolBox* toolbox = App::instance()->toolBox();
   ToolGroupList::iterator it = toolbox->begin_group();
   int groups = toolbox->getGroupsCount();
 
@@ -417,18 +388,14 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
       m_closeConn.disconnect();
 
     onClosePopup();
-      
-    // Close the current popup window
-    m_popupWindow->closeWindow(NULL);
-    delete m_popupWindow;
-    m_popupWindow = NULL;
+    closePopupWindow();
   }
 
   // Close tip window
   closeTipWindow();
 
   // If this group contains only one tool, do not show the popup
-  ToolBox* toolbox = App::instance()->getToolBox();
+  ToolBox* toolbox = App::instance()->toolBox();
   int count = 0;
   for (ToolIterator it = toolbox->begin(); it != toolbox->end(); ++it) {
     Tool* tool = *it;
@@ -440,8 +407,8 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
     return;
 
   // In case this tool contains more than just one tool, show the popup window
-  m_popupWindow = new PopupWindow("", PopupWindow::kCloseOnClickOutsideHotRegion);
-  m_closeConn = m_popupWindow->Close.connect(Bind<void, ToolBar, ToolBar>(&ToolBar::onClosePopup, this));
+  m_popupWindow = new PopupWindow("", PopupWindow::ClickBehavior::CloseOnClickOutsideHotRegion);
+  m_closeConn = m_popupWindow->Close.connect(base::Bind<void, ToolBar, ToolBar>(&ToolBar::onClosePopup, this));
   m_openedRecently = true;
 
   ToolStrip* toolstrip = new ToolStrip(tool_group, this);
@@ -454,7 +421,7 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
   for (ToolIterator it = toolbox->begin(); it != toolbox->end(); ++it) {
     Tool* tool = *it;
     if (tool->getGroup() == tool_group)
-      w += getBounds().w-this->border_width.l-this->border_width.r-1;
+      w += bounds().w-border().width()-1;
   }
 
   rc.x -= w;
@@ -462,7 +429,7 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
 
   // Set hotregion of popup window
   Region rgn(gfx::Rect(rc).enlarge(16*guiscale()));
-  rgn.createUnion(rgn, Region(getBounds()));
+  rgn.createUnion(rgn, Region(bounds()));
   m_popupWindow->setHotRegion(rgn);
 
   m_popupWindow->setTransparent(true);
@@ -475,22 +442,26 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
   toolstrip->setBounds(rc);
 }
 
+void ToolBar::closePopupWindow()
+{
+  if (m_popupWindow) {
+    m_popupWindow->closeWindow(nullptr);
+    delete m_popupWindow;
+    m_popupWindow = nullptr;
+  }
+}
+
 Rect ToolBar::getToolGroupBounds(int group_index)
 {
-  ToolBox* toolbox = App::instance()->getToolBox();
+  ToolBox* toolbox = App::instance()->toolBox();
   int groups = toolbox->getGroupsCount();
   Size iconsize = getToolIconSize(this);
-  Rect rc(getBounds());
-  rc.shrink(getBorder());
+  Rect rc(bounds());
+  rc.shrink(border());
 
   switch (group_index) {
 
-    case ConfigureToolIndex:
-      rc.y += groups*(iconsize.h-1*guiscale())+ 8*guiscale();
-      rc.h = iconsize.h+2*guiscale();
-      break;
-
-    case MiniEditorVisibilityIndex:
+    case PreviewVisibilityIndex:
       rc.y += rc.h - iconsize.h - 2*guiscale();
       rc.h = iconsize.h+2*guiscale();
       break;
@@ -507,7 +478,7 @@ Rect ToolBar::getToolGroupBounds(int group_index)
 
 Point ToolBar::getToolPositionInGroup(int group_index, Tool* tool)
 {
-  ToolBox* toolbox = App::instance()->getToolBox();
+  ToolBox* toolbox = App::instance()->toolBox();
   Size iconsize = getToolIconSize(this);
   int nth = 0;
 
@@ -548,31 +519,24 @@ void ToolBar::openTipWindow(int group_index, Tool* tool)
       tooltip += key->accels().front().toString();
     }
   }
-  else if (group_index == ConfigureToolIndex) {
-    tooltip = "Configure Tool";
-  }
-  else if (group_index == MiniEditorVisibilityIndex) {
-    if (App::instance()->getMainWindow()->getMiniEditor()->isMiniEditorEnabled())
-      tooltip = "Disable Mini-Editor";
+  else if (group_index == PreviewVisibilityIndex) {
+    if (App::instance()->mainWindow()->getPreviewEditor()->isPreviewEnabled())
+      tooltip = "Hide Preview";
     else
-      tooltip = "Enable Mini-Editor";
+      tooltip = "Show Preview";
   }
   else
     return;
 
-  m_tipWindow = new TipWindow(tooltip.c_str());
-  m_tipWindow->setArrowAlign(JI_TOP | JI_RIGHT);
+  m_tipWindow = new TipWindow(tooltip);
   m_tipWindow->remapWindow();
 
   Rect toolrc = getToolGroupBounds(group_index);
-  Point arrow = tool ? getToolPositionInGroup(group_index, tool): Point(0, 0);
-  int w = m_tipWindow->getBounds().w;
-  int h = m_tipWindow->getBounds().h;
-  int x = toolrc.x - w + (tool && m_popupWindow && m_popupWindow->isVisible() ? arrow.x-m_popupWindow->getBounds().w: 0);
-  int y = toolrc.y + toolrc.h;
+  Point arrow = (tool ? getToolPositionInGroup(group_index, tool): Point(0, 0));
+  if (tool && m_popupWindow && m_popupWindow->isVisible())
+    toolrc.x += arrow.x - m_popupWindow->bounds().w;
 
-  m_tipWindow->positionWindow(MID(0, x, ui::display_w()-w),
-    MID(0, y, ui::display_h()-h));
+  m_tipWindow->pointAt(TOP | RIGHT, toolrc);
 
   if (m_tipOpened)
     m_tipWindow->openWindow();
@@ -593,11 +557,12 @@ void ToolBar::closeTipWindow()
 
 void ToolBar::selectTool(Tool* tool)
 {
-  ASSERT(tool != NULL);
+  ASSERT(tool);
 
   m_selectedInGroup[tool->getGroup()] = tool;
 
-  UIContext::instance()->settings()->setCurrentTool(tool);
+  // Inform to the active tool manager about this tool change.
+  App::instance()->activeToolManager()->setSelectedTool(tool);
 
   if (m_currentStrip)
     m_currentStrip->invalidate();
@@ -650,7 +615,7 @@ bool ToolBar::ToolStrip::onProcessMessage(Message* msg)
     case kMouseMoveMessage: {
       MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
       gfx::Point mousePos = mouseMsg->position();
-      ToolBox* toolbox = App::instance()->getToolBox();
+      ToolBox* toolbox = App::instance()->toolBox();
       Tool* hot_tool = NULL;
       Rect toolrc;
       int index = 0;
@@ -685,16 +650,18 @@ bool ToolBar::ToolStrip::onProcessMessage(Message* msg)
         if (m_hotTool)
           m_toolbar->selectTool(m_hotTool);
 
-        Widget* pick = getManager()->pick(mouseMsg->position());
+        Widget* pick = manager()->pick(mouseMsg->position());
         if (ToolBar* bar = dynamic_cast<ToolBar*>(pick)) {
           releaseMouse();
 
           MouseMessage* mouseMsg2 = new MouseMessage(
             kMouseDownMessage,
+            mouseMsg->pointerType(),
             mouseMsg->buttons(),
+            mouseMsg->modifiers(),
             mouseMsg->position());
           mouseMsg2->addRecipient(bar);
-          getManager()->enqueueMessage(mouseMsg2);
+          manager()->enqueueMessage(mouseMsg2);
         }
       }
       break;
@@ -711,9 +678,9 @@ bool ToolBar::ToolStrip::onProcessMessage(Message* msg)
   return Widget::onProcessMessage(msg);
 }
 
-void ToolBar::ToolStrip::onPreferredSize(PreferredSizeEvent& ev)
+void ToolBar::ToolStrip::onSizeHint(SizeHintEvent& ev)
 {
-  ToolBox* toolbox = App::instance()->getToolBox();
+  ToolBox* toolbox = App::instance()->toolBox();
   int c = 0;
 
   for (ToolIterator it = toolbox->begin(); it != toolbox->end(); ++it) {
@@ -724,14 +691,15 @@ void ToolBar::ToolStrip::onPreferredSize(PreferredSizeEvent& ev)
   }
 
   Size iconsize = getToolIconSize(this);
-  ev.setPreferredSize(Size(iconsize.w * c, iconsize.h));
+  ev.setSizeHint(Size(iconsize.w * c, iconsize.h));
 }
 
 void ToolBar::ToolStrip::onPaint(PaintEvent& ev)
 {
-  Graphics* g = ev.getGraphics();
-  SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
-  ToolBox* toolbox = App::instance()->getToolBox();
+  Graphics* g = ev.graphics();
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  ToolBox* toolbox = App::instance()->toolBox();
+  Tool* activeTool = App::instance()->activeTool();
   Rect toolrc;
   int index = 0;
 
@@ -739,26 +707,26 @@ void ToolBar::ToolStrip::onPaint(PaintEvent& ev)
     Tool* tool = *it;
     if (tool->getGroup() == m_group) {
       gfx::Color face;
-      int nw;
+      SkinPartPtr nw;
 
-      if (UIContext::instance()->settings()->getCurrentTool() == tool ||
-        m_hotTool == tool) {
-        nw = PART_TOOLBUTTON_HOT_NW;
-        face = theme->getColor(ThemeColor::ButtonHotFace);
+      if (activeTool == tool || m_hotTool == tool) {
+        nw = theme->parts.toolbuttonHot();
+        face = theme->colors.buttonHotFace();
       }
       else {
-        nw = PART_TOOLBUTTON_LAST_NW;
-        face = theme->getColor(ThemeColor::ButtonNormalFace);
+        nw = theme->parts.toolbuttonLast();
+        face = theme->colors.buttonNormalFace();
       }
 
       toolrc = getToolBounds(index++);
-      toolrc.offset(-getBounds().x, -getBounds().y);
-      theme->draw_bounds_nw(g, toolrc, nw, face);
+      toolrc.offset(-bounds().x, -bounds().y);
+      theme->drawRect(g, toolrc, nw.get(), face);
 
       // Draw the tool icon
-      she::Surface* icon = theme->get_toolicon(tool->getId().c_str());
+      she::Surface* icon = theme->getToolIcon(tool->getId().c_str());
       if (icon) {
-        g->drawRgbaSurface(icon,
+        g->drawRgbaSurface(
+          icon,
           toolrc.x+toolrc.w/2-icon->width()/2,
           toolrc.y+toolrc.h/2-icon->height()/2);
       }
@@ -768,11 +736,24 @@ void ToolBar::ToolStrip::onPaint(PaintEvent& ev)
 
 Rect ToolBar::ToolStrip::getToolBounds(int index)
 {
-  const Rect& bounds(getBounds());
+  const Rect& bounds(this->bounds());
   Size iconsize = getToolIconSize(this);
 
   return Rect(bounds.x+index*(iconsize.w-1), bounds.y,
               iconsize.w, bounds.h);
+}
+
+void ToolBar::onActiveToolChange(tools::Tool* tool)
+{
+  invalidate();
+}
+
+void ToolBar::onSelectedToolChange(tools::Tool* tool)
+{
+  if (tool && m_selectedInGroup[tool->getGroup()] != tool)
+    m_selectedInGroup[tool->getGroup()] = tool;
+
+  invalidate();
 }
 
 } // namespace app

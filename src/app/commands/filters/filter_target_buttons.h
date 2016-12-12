@@ -1,28 +1,18 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_COMMANDS_FILTERS_FILTER_TARGET_BUTTONS_H_INCLUDED
 #define APP_COMMANDS_FILTERS_FILTER_TARGET_BUTTONS_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
+#include "app/ui/button_set.h"
+#include "app/ui/skin/skin_part.h"
 #include "filters/target.h"
-#include "ui/box.h"
+#include "obs/signal.h"
+#include "ui/tooltips.h"
 
 namespace ui {
   class ButtonBase;
@@ -31,7 +21,7 @@ namespace ui {
 namespace app {
   using namespace filters;
 
-  class FilterTargetButtons : public ui::Box {
+  class FilterTargetButtons : public ButtonSet {
   public:
     // Creates a new button to handle "targets" to apply some filter in
     // the a sprite.
@@ -40,18 +30,28 @@ namespace app {
     Target getTarget() const { return m_target; }
     void setTarget(Target target);
 
-    Signal0<void> TargetChange;
+    obs::signal<void()> TargetChange;
 
   protected:
+    void onItemChange(Item* item) override;
     void onChannelChange(ui::ButtonBase* button);
     void onImagesChange(ui::ButtonBase* button);
 
   private:
-    void selectTargetButton(const char* name, Target specificTarget);
-    int getTargetNormalIcon() const;
-    int getTargetSelectedIcon() const;
+    void selectTargetButton(Item* item, Target specificTarget);
+    void updateFromTarget();
+    void updateComponentTooltip(Item* item, const char* channelName, int align);
+    skin::SkinPartPtr getCelsIcon() const;
 
     Target m_target;
+    Item* m_red;
+    Item* m_green;
+    Item* m_blue;
+    Item* m_alpha;
+    Item* m_gray;
+    Item* m_index;
+    Item* m_cels;
+    ui::TooltipManager m_tooltips;
   };
 
 } // namespace app

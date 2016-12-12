@@ -1,37 +1,27 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_COMMANDS_FILTERS_FILTER_MANAGER_IMPL_H_INCLUDED
 #define APP_COMMANDS_FILTERS_FILTER_MANAGER_IMPL_H_INCLUDED
 #pragma once
 
-#include "app/document_location.h"
 #include "base/exception.h"
 #include "base/unique_ptr.h"
+#include "doc/image_impl.h"
+#include "doc/image_ref.h"
+#include "doc/pixel_format.h"
+#include "doc/site.h"
 #include "filters/filter_indexed_data.h"
 #include "filters/filter_manager.h"
-#include "doc/image_bits.h"
-#include "doc/image_traits.h"
-#include "doc/pixel_format.h"
+#include "gfx/rect.h"
 
 #include <cstring>
 
 namespace doc {
+  class Cel;
   class Image;
   class Layer;
   class Mask;
@@ -45,6 +35,7 @@ namespace filters {
 namespace app {
   class Context;
   class Document;
+  class Transaction;
 
   using namespace filters;
 
@@ -78,11 +69,10 @@ namespace app {
     };
 
     FilterManagerImpl(Context* context, Filter* filter);
-    ~FilterManagerImpl();
 
     void setProgressDelegate(IProgressDelegate* progressDelegate);
 
-    PixelFormat pixelFormat() const;
+    doc::PixelFormat pixelFormat() const;
 
     void setTarget(Target target);
 
@@ -92,46 +82,47 @@ namespace app {
     bool applyStep();
     void applyToTarget();
 
-    Document* document() { return m_location.document(); }
-    Sprite* sprite() { return m_location.sprite(); }
-    Layer* layer() { return m_location.layer(); }
-    frame_t frame() { return m_location.frame(); }
-    Image* destinationImage() const { return m_dst; }
+    app::Document* document();
+    doc::Sprite* sprite() { return m_site.sprite(); }
+    doc::Layer* layer() { return m_site.layer(); }
+    doc::frame_t frame() { return m_site.frame(); }
+    doc::Image* destinationImage() const { return m_dst.get(); }
+    gfx::Point position() const { return gfx::Point(0, 0); }
 
     // Updates the current editor to show the progress of the preview.
     void flush();
 
     // FilterManager implementation
-    const void* getSourceAddress();
-    void* getDestinationAddress();
-    int getWidth() { return m_w; }
-    Target getTarget() { return m_target; }
-    FilterIndexedData* getIndexedData() { return this; }
-    bool skipPixel();
-    const Image* getSourceImage() { return m_src; }
-    int x() { return m_x; }
-    int y() { return m_y+m_row; }
+    const void* getSourceAddress() override;
+    void* getDestinationAddress() override;
+    int getWidth() override { return m_bounds.w; }
+    Target getTarget() override { return m_target; }
+    FilterIndexedData* getIndexedData() override { return this; }
+    bool skipPixel() override;
+    const doc::Image* getSourceImage() override { return m_src.get(); }
+    int x() override { return m_bounds.x; }
+    int y() override { return m_bounds.y+m_row; }
 
     // FilterIndexedData implementation
-    Palette* getPalette();
-    RgbMap* getRgbMap();
+    doc::Palette* getPalette() override;
+    doc::RgbMap* getRgbMap() override;
 
   private:
-    void init(const Layer* layer, Image* image, int offset_x, int offset_y);
-    void apply();
-    void applyToImage(Layer* layer, Image* image, int x, int y);
-    bool updateMask(Mask* mask, const Image* image);
+    void init(doc::Cel* cel);
+    void apply(Transaction& transaction);
+    void applyToCel(Transaction& transaction, doc::Cel* cel);
+    bool updateBounds(doc::Mask* mask);
 
     Context* m_context;
-    DocumentLocation m_location;
+    doc::Site m_site;
     Filter* m_filter;
-    Image* m_src;
-    base::UniquePtr<Image> m_dst;
+    doc::Cel* m_cel;
+    doc::ImageRef m_src;
+    doc::ImageRef m_dst;
     int m_row;
-    int m_x, m_y, m_w, m_h;
-    int m_offset_x, m_offset_y;
-    Mask* m_mask;
-    base::UniquePtr<Mask> m_preview_mask;
+    gfx::Rect m_bounds;
+    doc::Mask* m_mask;
+    base::UniquePtr<doc::Mask> m_previewMask;
     doc::ImageBits<doc::BitmapTraits> m_maskBits;
     doc::ImageBits<doc::BitmapTraits>::iterator m_maskIterator;
     Target m_targetOrig;          // Original targets

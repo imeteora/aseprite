@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2013, 2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,8 +8,10 @@
 #define UI_TOOLTIPS_H_INCLUDED
 #pragma once
 
+#include "base/unique_ptr.h"
 #include "ui/base.h"
 #include "ui/popup_window.h"
+#include "ui/timer.h"
 #include "ui/window.h"
 
 #include <map>
@@ -18,13 +20,13 @@ namespace ui {
 
   class TipWindow;
 
-  class TooltipManager : public Widget
-  {
+  class TooltipManager : public Widget {
   public:
     TooltipManager();
     ~TooltipManager();
 
     void addTooltipFor(Widget* widget, const std::string& text, int arrowAlign = 0);
+    void removeTooltipFor(Widget* widget);
 
   protected:
     bool onProcessMessage(Message* msg) override;
@@ -54,20 +56,27 @@ namespace ui {
 
   class TipWindow : public PopupWindow {
   public:
-    TipWindow(const char *text);
-    ~TipWindow();
+    TipWindow(const std::string& text = "");
 
-    int getArrowAlign() const;
-    void setArrowAlign(int arrowAlign);
+    int arrowAlign() const { return m_arrowAlign; }
+    const gfx::Rect& target() const { return m_target; }
+
+    void setCloseOnKeyDown(bool state);
+
+    // Returns false there is no enough screen space to show the
+    // window.
+    bool pointAt(int arrowAlign, const gfx::Rect& target);
 
   protected:
     bool onProcessMessage(Message* msg) override;
-    void onPreferredSize(PreferredSizeEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     void onInitTheme(InitThemeEvent& ev) override;
     void onPaint(PaintEvent& ev) override;
 
   private:
     int m_arrowAlign;
+    gfx::Rect m_target;
+    bool m_closeOnKeyDown;
   };
 
 } // namespace ui

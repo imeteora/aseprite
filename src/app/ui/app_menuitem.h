@@ -1,31 +1,19 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_APP_MENUITEM_H_INCLUDED
 #define APP_UI_APP_MENUITEM_H_INCLUDED
 #pragma once
 
+#include "app/commands/params.h"
 #include "ui/menu.h"
 
 namespace app {
   class Key;
   class Command;
-  class Params;
 
   // A widget that represent a menu item of the application.
   //
@@ -34,24 +22,27 @@ namespace app {
   // used to check the availability of the command).
   class AppMenuItem : public ui::MenuItem {
   public:
-    AppMenuItem(const char* text, Command* command, const Params* params);
-    ~AppMenuItem();
+    AppMenuItem(const char* text, Command* command = nullptr, const Params& params = Params());
 
-    Key* getKey() { return m_key; }
+    Key* key() { return m_key; }
     void setKey(Key* key) { m_key = key; }
 
     Command* getCommand() { return m_command; }
-    Params* getParams() { return m_params; }
+    const Params& getParams() const { return m_params; }
+
+    static void setContextParams(const Params& params);
 
   protected:
     bool onProcessMessage(ui::Message* msg) override;
-    void onPreferredSize(ui::PreferredSizeEvent& ev) override;
+    void onSizeHint(ui::SizeHintEvent& ev) override;
     void onClick() override;
 
   private:
     Key* m_key;
     Command* m_command;
-    Params* m_params;
+    Params m_params;
+
+    static Params s_contextParams;
   };
 
 } // namespace app

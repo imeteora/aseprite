@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -22,6 +22,8 @@ namespace doc {
     // anything in the document could be changed.
     virtual void onGeneralUpdate(DocumentEvent& ev) { }
 
+    virtual void onPixelFormatChanged(DocumentEvent& ev) { }
+
     virtual void onAddLayer(DocumentEvent& ev) { }
     virtual void onAddFrame(DocumentEvent& ev) { }
     virtual void onAddCel(DocumentEvent& ev) { }
@@ -38,6 +40,9 @@ namespace doc {
     virtual void onSpriteSizeChanged(DocumentEvent& ev) { }
     virtual void onSpriteTransparentColorChanged(DocumentEvent& ev) { }
 
+    virtual void onLayerNameChange(DocumentEvent& ev) { }
+    virtual void onLayerOpacityChange(DocumentEvent& ev) { }
+    virtual void onLayerBlendModeChange(DocumentEvent& ev) { }
     virtual void onLayerRestacked(DocumentEvent& ev) { }
     virtual void onLayerMergedDown(DocumentEvent& ev) { }
 
@@ -45,7 +50,7 @@ namespace doc {
     virtual void onCelCopied(DocumentEvent& ev) { }
     virtual void onCelFrameChanged(DocumentEvent& ev) { }
     virtual void onCelPositionChanged(DocumentEvent& ev) { }
-    virtual void onCelOpacityChanged(DocumentEvent& ev) { }
+    virtual void onCelOpacityChange(DocumentEvent& ev) { }
 
     virtual void onFrameDurationChanged(DocumentEvent& ev) { }
 

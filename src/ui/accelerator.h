@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -15,6 +15,9 @@
 
 namespace ui {
 
+  extern const char* kWinKeyName;
+
+  // TODO rename this class to Shortcut
   class Accelerator {
   public:
     Accelerator();
@@ -25,8 +28,15 @@ namespace ui {
     bool isEmpty() const;
     std::string toString() const;
 
-    bool check(KeyModifiers modifiers, KeyScancode scancode, int unicodeChar) const;
-    bool checkFromAllegroKeyArray() const;
+    bool isPressed(KeyModifiers modifiers, KeyScancode scancode, int unicodeChar) const;
+
+    // Returns true if the key is pressed and ONLY its modifiers are
+    // pressed.
+    bool isPressed() const;
+
+    // Returns true if the key + its modifiers are pressed (other
+    // modifiers are allowed too).
+    bool isLooselyPressed() const;
 
     bool operator==(const Accelerator& other) const;
     bool operator!=(const Accelerator& other) const {
@@ -43,6 +53,7 @@ namespace ui {
     int m_unicodeChar;
   };
 
+  // TODO rename this class to Shortcuts
   class Accelerators {
   public:
     typedef std::vector<Accelerator> List;
@@ -55,7 +66,7 @@ namespace ui {
     const_iterator end() const { return m_list.end(); }
 
     bool empty() const { return m_list.empty(); }
-    size_t size() const { return m_list.size(); }
+    std::size_t size() const { return m_list.size(); }
 
     const ui::Accelerator& front() const { return m_list.front(); }
 

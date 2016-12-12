@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -26,11 +14,11 @@
 
 namespace app {
 
-Command::Command(const char* short_name, const char* friendly_name, CommandFlags flags)
+Command::Command(const char* id, const char* friendlyName, CommandFlags flags)
+  : m_id(id)
+  , m_friendlyName(friendlyName)
+  , m_flags(flags)
 {
-  m_short_name = short_name;
-  m_friendly_name = friendly_name;
-  m_flags = flags;
 }
 
 Command::~Command()
@@ -42,7 +30,7 @@ std::string Command::friendlyName() const
   return onGetFriendlyName();
 }
 
-void Command::loadParams(Params* params)
+void Command::loadParams(const Params& params)
 {
   onLoadParams(params);
 }
@@ -77,7 +65,7 @@ void Command::execute(Context* context)
 /**
  * Converts specified parameters to class members.
  */
-void Command::onLoadParams(Params* params)
+void Command::onLoadParams(const Params& params)
 {
   // do nothing
 }
@@ -108,7 +96,7 @@ void Command::onExecute(Context* context)
 
 std::string Command::onGetFriendlyName() const
 {
-  return m_friendly_name;
+  return m_friendlyName;
 }
 
 } // namespace app

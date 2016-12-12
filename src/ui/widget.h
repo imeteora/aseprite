@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2014  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -31,40 +31,26 @@ namespace she {
 namespace ui {
 
   class InitThemeEvent;
+  class KeyMessage;
   class LoadLayoutEvent;
   class Manager;
   class Message;
   class MouseMessage;
   class PaintEvent;
-  class PreferredSizeEvent;
   class ResizeEvent;
   class SaveLayoutEvent;
+  class SizeHintEvent;
   class Theme;
   class Window;
 
   class Widget : public Component {
-  public:
-    WidgetType type;              // widget's type
-
-    struct {
-      int l, t, r, b;
-    } border_width;               /* border separation with the parent */
-    int child_spacing;            /* separation between children */
-
-    /* flags */
-    int flags;
-
-    /* widget size limits */
-    int min_w, min_h;
-    int max_w, max_h;
-
   public:
 
     // ===============================================================
     // CTOR & DTOR
     // ===============================================================
 
-    Widget(WidgetType type);
+    Widget(WidgetType type = kGenericWidget);
     virtual ~Widget();
 
     // Safe way to delete a widget when it is not in the manager message
@@ -73,31 +59,40 @@ namespace ui {
 
     // Main properties.
 
-    WidgetType getType() const { return this->type; }
+    WidgetType type() const { return m_type; }
+    void setType(WidgetType type) { m_type = type; } // TODO remove this function
 
-    const std::string& getId() const { return m_id; }
+    const std::string& id() const { return m_id; }
     void setId(const char* id) { m_id = id; }
 
-    int getAlign() const { return m_align; }
-    void setAlign(int align) { m_align = align; }
+    int flags() const { return m_flags; }
+    bool hasFlags(int flags) const { return ((m_flags & flags) == flags); }
+    void enableFlags(int flags) { m_flags |= flags; }
+    void disableFlags(int flags) { m_flags &= ~flags; }
+
+    int align() const { return (m_flags & ALIGN_MASK); }
+    void setAlign(int align) {
+      m_flags = ((m_flags & PROPERTIES_MASK) |
+                 (align & ALIGN_MASK));
+    }
 
     // Text property.
 
-    bool hasText() const { return (flags & JI_HASTEXT) == JI_HASTEXT; }
+    bool hasText() const { return hasFlags(HAS_TEXT); }
 
-    const std::string& getText() const { return m_text; }
-    int getTextInt() const;
-    double getTextDouble() const;
-    size_t getTextLength() const { return m_text.size(); }
+    const std::string& text() const { return m_text; }
+    int textInt() const;
+    double textDouble() const;
+    int textLength() const;
     void setText(const std::string& text);
     void setTextf(const char* text, ...);
     void setTextQuiet(const std::string& text);
 
-    int getTextWidth() const;
-    int getTextHeight() const;
+    int textWidth() const;
+    int textHeight() const;
 
-    gfx::Size getTextSize() const {
-      return gfx::Size(getTextWidth(), getTextHeight());
+    gfx::Size textSize() const {
+      return gfx::Size(textWidth(), textHeight());
     }
 
     // ===============================================================
@@ -141,13 +136,13 @@ namespace ui {
     // LOOK & FEEL
     // ===============================================================
 
-    she::Font* getFont() const;
-    void setFont(she::Font* font);
+    she::Font* font() const;
+    void resetFont();
 
     // Gets the background color of the widget.
-    gfx::Color getBgColor() const {
+    gfx::Color bgColor() const {
       if (gfx::geta(m_bgColor) == 0 && m_parent)
-        return m_parent->getBgColor();
+        return m_parent->bgColor();
       else
         return m_bgColor;
     }
@@ -155,18 +150,17 @@ namespace ui {
     // Sets the background color of the widget
     void setBgColor(gfx::Color color);
 
-    Theme* getTheme() const { return m_theme; }
+    Theme* theme() const { return m_theme; }
     void setTheme(Theme* theme);
-
     void initTheme();
 
     // ===============================================================
     // PARENTS & CHILDREN
     // ===============================================================
 
-    Window* getRoot();
-    Widget* getParent() { return m_parent; }
-    Manager* getManager();
+    Window* window();
+    Widget* parent() { return m_parent; }
+    Manager* manager();
 
     // Returns a list of parents, if "ascendant" is true the list is
     // build from child to parents, else the list is from parent to
@@ -174,23 +168,23 @@ namespace ui {
     void getParents(bool ascendant, WidgetsList& parents);
 
     // Returns a list of children.
-    const WidgetsList& getChildren() const { return m_children; }
+    const WidgetsList& children() const { return m_children; }
 
     Widget* at(int index) { return m_children[index]; }
 
     // Returns the first/last child or NULL if it doesn't exist.
-    Widget* getFirstChild() {
+    Widget* firstChild() {
       return (!m_children.empty() ? m_children.front(): NULL);
     }
-    Widget* getLastChild() {
+    Widget* lastChild() {
       return (!m_children.empty() ? m_children.back(): NULL);
     }
 
     // Returns the next or previous siblings.
-    Widget* getNextSibling();
-    Widget* getPreviousSibling();
+    Widget* nextSibling();
+    Widget* previousSibling();
 
-    Widget* pick(const gfx::Point& pt);
+    Widget* pick(const gfx::Point& pt, bool checkParentsVisibility = true);
     bool hasChild(Widget* child);
     bool hasAncestor(Widget* ancestor);
     Widget* findChild(const char* id);
@@ -207,8 +201,7 @@ namespace ui {
 
     template<class T>
     T* findFirstChildByType() {
-      UI_FOREACH_WIDGET(m_children, it) {
-        Widget* child = *it;
+      for (auto child : m_children) {
         if (T* specificChild = dynamic_cast<T*>(child))
           return specificChild;
       }
@@ -217,6 +210,7 @@ namespace ui {
 
     void addChild(Widget* child);
     void removeChild(Widget* child);
+    void removeAllChildren();
     void replaceChild(Widget* oldChild, Widget* newChild);
     void insertChild(int index, Widget* child);
 
@@ -234,16 +228,16 @@ namespace ui {
     // POSITION & GEOMETRY
     // ===============================================================
 
-    gfx::Rect getBounds() const { return m_bounds; }
-    gfx::Point getOrigin() const { return m_bounds.getOrigin(); }
-    gfx::Size getSize() const { return m_bounds.getSize(); }
+    gfx::Rect bounds() const { return m_bounds; }
+    gfx::Point origin() const { return m_bounds.origin(); }
+    gfx::Size size() const { return m_bounds.size(); }
 
-    gfx::Rect getClientBounds() const {
+    gfx::Rect clientBounds() const {
       return gfx::Rect(0, 0, m_bounds.w, m_bounds.h);
     }
 
-    gfx::Rect getChildrenBounds() const;
-    gfx::Rect getClientChildrenBounds() const;
+    gfx::Rect childrenBounds() const;
+    gfx::Rect clientChildrenBounds() const;
 
     // Sets the bounds of the widget generating a onResize() event.
     void setBounds(const gfx::Rect& rc);
@@ -253,12 +247,18 @@ namespace ui {
     // onResize() and want to change the size of the widget without
     // generating recursive onResize() events.
     void setBoundsQuietly(const gfx::Rect& rc);
+    void offsetWidgets(int dx, int dy);
 
+    const gfx::Size& minSize() const { return m_minSize; }
+    const gfx::Size& maxSize() const { return m_maxSize; }
     void setMinSize(const gfx::Size& sz);
     void setMaxSize(const gfx::Size& sz);
 
-    gfx::Border getBorder() const;
+    const gfx::Border& border() const { return m_border; }
     void setBorder(const gfx::Border& border);
+
+    int childSpacing() const { return m_childSpacing; }
+    void setChildSpacing(int childSpacing);
 
     void noBorderNoChildSpacing();
 
@@ -272,7 +272,7 @@ namespace ui {
     void getDrawableRegion(gfx::Region& region, DrawableRegionFlags flags);
 
     gfx::Point toClient(const gfx::Point& pt) const {
-      return pt - m_bounds.getOrigin();
+      return pt - m_bounds.origin();
     }
     gfx::Rect toClient(const gfx::Rect& rc) const {
       return gfx::Rect(rc).offset(-m_bounds.x, -m_bounds.y);
@@ -298,9 +298,14 @@ namespace ui {
     void invalidateRect(const gfx::Rect& rect);
     void invalidateRegion(const gfx::Region& region);
 
-    void flushRedraw();
+    // Returns the region to generate PaintMessages. It's cleared
+    // after flushRedraw() is called.
+    const gfx::Region& getUpdateRegion() const {
+      return m_updateRegion;
+    }
 
-    void scrollRegion(const gfx::Region& region, const gfx::Point& delta);
+    // Generates paint messages for the current update region.
+    void flushRedraw();
 
     GraphicsPtr getGraphics(const gfx::Rect& clip);
 
@@ -317,10 +322,10 @@ namespace ui {
     // SIZE & POSITION
     // ===============================================================
 
-    gfx::Size getPreferredSize();
-    gfx::Size getPreferredSize(const gfx::Size& fitIn);
-    void setPreferredSize(const gfx::Size& fixedSize);
-    void setPreferredSize(int fixedWidth, int fixedHeight);
+    gfx::Size sizeHint();
+    gfx::Size sizeHint(const gfx::Size& fitIn);
+    void setSizeHint(const gfx::Size& fixedSize);
+    void setSizeHint(int fixedWidth, int fixedHeight);
 
     // ===============================================================
     // MOUSE, FOCUS & KEYBOARD
@@ -336,16 +341,18 @@ namespace ui {
     bool hasMouseOver();
     bool hasCapture();
 
-    // Offer the capture to widgets of the given type
-    void offerCapture(ui::MouseMessage* mouseMsg, int widget_type);
+    // Offer the capture to widgets of the given type. Returns true if
+    // the capture was passed to other widget.
+    bool offerCapture(ui::MouseMessage* mouseMsg, int widget_type);
 
     // Returns lower-case letter that represet the mnemonic of the widget
     // (the underscored character, i.e. the letter after & symbol).
-    int getMnemonicChar() const;
+    int mnemonicChar() const;
+
+    // Returns true if the mnemonic character is pressed.
+    bool mnemonicCharPressed(const ui::KeyMessage* keyMsg) const;
 
   protected:
-    void offsetWidgets(int dx, int dy);
-
     // ===============================================================
     // MESSAGE PROCESSING
     // ===============================================================
@@ -357,7 +364,7 @@ namespace ui {
     // ===============================================================
 
     virtual void onInvalidateRegion(const gfx::Region& region);
-    virtual void onPreferredSize(PreferredSizeEvent& ev);
+    virtual void onSizeHint(SizeHintEvent& ev);
     virtual void onLoadLayout(LoadLayoutEvent& ev);
     virtual void onSaveLayout(SaveLayoutEvent& ev);
     virtual void onResize(ResizeEvent& ev);
@@ -365,30 +372,35 @@ namespace ui {
     virtual void onBroadcastMouseMessage(WidgetsList& targets);
     virtual void onInitTheme(InitThemeEvent& ev);
     virtual void onSetDecorativeWidgetBounds();
-    virtual void onEnable();
-    virtual void onDisable();
-    virtual void onSelect();
-    virtual void onDeselect();
+    virtual void onVisible(bool visible);
+    virtual void onEnable(bool enabled);
+    virtual void onSelect(bool selected);
     virtual void onSetText();
     virtual void onSetBgColor();
 
   private:
+    void removeChild(WidgetsList::iterator& it);
     void paint(Graphics* graphics, const gfx::Region& drawRegion);
     bool paintEvent(Graphics* graphics);
 
+    WidgetType m_type;           // Widget's type
     std::string m_id;            // Widget's id
+    int m_flags;                 // Special boolean properties (see flags in ui/base.h)
     Theme* m_theme;              // Widget's theme
-    int m_align;                 // Widget alignment
     std::string m_text;          // Widget text
-    she::Font* m_font;           // Text font type
+    mutable she::Font* m_font;   // Cached font returned by the theme
     gfx::Color m_bgColor;        // Background color
     gfx::Rect m_bounds;
     gfx::Region m_updateRegion;   // Region to be redrawed.
     WidgetsList m_children;       // Sub-widgets
     Widget* m_parent;             // Who is the parent?
-    gfx::Size* m_preferredSize;
-    bool m_doubleBuffered;
-    bool m_transparent;
+    gfx::Size* m_sizeHint;
+
+    // Widget size limits
+    gfx::Size m_minSize, m_maxSize;
+
+    gfx::Border m_border;       // Border separation with the parent
+    int m_childSpacing;         // Separation between children
   };
 
   WidgetType register_widget_type();

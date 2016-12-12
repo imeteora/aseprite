@@ -1,26 +1,15 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_FILE_FILE_FORMAT_H_INCLUDED
 #define APP_FILE_FILE_FORMAT_H_INCLUDED
 #pragma once
 
 #include "base/shared_ptr.h"
+#include "docio/file_format.h"
 
 #include <vector>
 
@@ -36,12 +25,15 @@
 #define FILE_SUPPORT_PALETTES           0x00000200
 #define FILE_SUPPORT_SEQUENCES          0x00000400
 #define FILE_SUPPORT_GET_FORMAT_OPTIONS 0x00000800
+#define FILE_SUPPORT_FRAME_TAGS         0x00001000
+#define FILE_SUPPORT_BIG_PALETTES       0x00002000 // Palettes w/more than 256 colors
+#define FILE_SUPPORT_PALETTE_WITH_ALPHA 0x00004000
 
 namespace app {
 
   class FormatOptions;
   class FileFormat;
-  struct FileOp;
+  class FileOp;
 
   // A file format supported by ASE. It is the base class to extend if
   // you want to add support to load and/or save a new kind of
@@ -53,6 +45,8 @@ namespace app {
 
     const char* name() const;       // File format name
     const char* extensions() const; // Extensions (e.g. "jpeg,jpg")
+    docio::FileFormat docioFormat() const;
+
     bool load(FileOp* fop);
 #ifdef ENABLE_SAVE
     bool save(FileOp* fop);
@@ -67,7 +61,7 @@ namespace app {
 
     // Returns extra options for this format. It can return != NULL
     // only if flags() returns FILE_SUPPORT_GET_FORMAT_OPTIONS.
-    SharedPtr<FormatOptions> getFormatOptions(FileOp* fop) {
+    base::SharedPtr<FormatOptions> getFormatOptions(FileOp* fop) {
       return onGetFormatOptions(fop);
     }
 
@@ -79,6 +73,7 @@ namespace app {
   protected:
     virtual const char* onGetName() const = 0;
     virtual const char* onGetExtensions() const = 0;
+    virtual docio::FileFormat onGetDocioFormat() const = 0;
     virtual int onGetFlags() const = 0;
 
     virtual bool onLoad(FileOp* fop) = 0;
@@ -88,8 +83,8 @@ namespace app {
 #endif
     virtual void onDestroyData(FileOp* fop) { }
 
-    virtual SharedPtr<FormatOptions> onGetFormatOptions(FileOp* fop) {
-      return SharedPtr<FormatOptions>(0);
+    virtual base::SharedPtr<FormatOptions> onGetFormatOptions(FileOp* fop) {
+      return base::SharedPtr<FormatOptions>(0);
     }
 
   };

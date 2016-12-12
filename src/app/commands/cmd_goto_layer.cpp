@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -39,11 +27,11 @@ public:
   }
 
 protected:
-  void updateStatusBar(DocumentLocation& location) {
-    if (location.layer() != NULL)
+  void updateStatusBar(Site& site) {
+    if (site.layer() != NULL)
       StatusBar::instance()
         ->setStatusText(1000, "Layer `%s' selected",
-          location.layer()->name().c_str());
+          site.layer()->name().c_str());
   }
 };
 
@@ -53,8 +41,8 @@ public:
   Command* clone() const override { return new GotoPreviousLayerCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 GotoPreviousLayerCommand::GotoPreviousLayerCommand()
@@ -66,27 +54,24 @@ GotoPreviousLayerCommand::GotoPreviousLayerCommand()
 
 bool GotoPreviousLayerCommand::onEnabled(Context* context)
 {
-  return context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
-                             ContextFlags::HasActiveSprite);
+  return (current_editor != nullptr &&
+          current_editor->document());
 }
 
 void GotoPreviousLayerCommand::onExecute(Context* context)
 {
-  const ContextReader reader(context);
-  const Sprite* sprite = reader.sprite();
-  DocumentLocation location = *reader.location();
+  Site site = current_editor->getSite();
 
-  if (location.layerIndex() > 0)
-    location.layerIndex(location.layerIndex().previous());
+  if (site.layerIndex() > 0)
+    site.layerIndex(site.layerIndex().previous());
   else
-    location.layerIndex(LayerIndex(sprite->countLayers()-1));
+    site.layerIndex(LayerIndex(site.sprite()->countLayers()-1));
 
   // Flash the current layer
-  ASSERT(current_editor != NULL && "Current editor cannot be null when we have a current sprite");
-  current_editor->setLayer(location.layer());
+  current_editor->setLayer(site.layer());
   current_editor->flashCurrentLayer();
 
-  updateStatusBar(location);
+  updateStatusBar(site);
 }
 
 class GotoNextLayerCommand : public GotoCommand {
@@ -95,8 +80,8 @@ public:
   Command* clone() const override { return new GotoNextLayerCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 GotoNextLayerCommand::GotoNextLayerCommand()
@@ -108,27 +93,24 @@ GotoNextLayerCommand::GotoNextLayerCommand()
 
 bool GotoNextLayerCommand::onEnabled(Context* context)
 {
-  return context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
-                             ContextFlags::HasActiveSprite);
+  return (current_editor != nullptr &&
+          current_editor->document());
 }
 
 void GotoNextLayerCommand::onExecute(Context* context)
 {
-  const ContextReader reader(context);
-  const Sprite* sprite = reader.sprite();
-  DocumentLocation location = *reader.location();
+  Site site = current_editor->getSite();
 
-  if (location.layerIndex() < sprite->countLayers()-1)
-    location.layerIndex(location.layerIndex().next());
+  if (site.layerIndex() < site.sprite()->countLayers()-1)
+    site.layerIndex(site.layerIndex().next());
   else
-    location.layerIndex(LayerIndex(0));
+    site.layerIndex(LayerIndex(0));
 
   // Flash the current layer
-  ASSERT(current_editor != NULL && "Current editor cannot be null when we have a current sprite");
-  current_editor->setLayer(location.layer());
+  current_editor->setLayer(site.layer());
   current_editor->flashCurrentLayer();
 
-  updateStatusBar(location);
+  updateStatusBar(site);
 }
 
 Command* CommandFactory::createGotoPreviousLayerCommand()

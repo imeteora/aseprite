@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,10 +12,12 @@
 
 #include "app/check_update.h"
 
-#include "app/app.h"
-#include "app/ini_file.h"
+#include "app/check_update_delegate.h"
+#include "app/pref/preferences.h"
 #include "base/bind.h"
+#include "base/convert_to.h"
 #include "base/launcher.h"
+#include "base/version.h"
 
 #include <ctime>
 #include <sstream>
@@ -36,76 +26,61 @@ static const int kMonitoringPeriod = 100;
 
 namespace app {
 
-class CheckUpdateBackgroundJob : public updater::CheckUpdateDelegate
-{
+class CheckUpdateBackgroundJob : public updater::CheckUpdateDelegate {
 public:
   CheckUpdateBackgroundJob()
-    : m_canceled(false)
-    , m_received(false) { }
+    : m_received(false) { }
 
-  virtual ~CheckUpdateBackgroundJob() { }
-
-  void cancel()
-  {
-    m_canceled = true;
+  void abort() {
+    m_checker.abort();
   }
 
-  bool isCanceled() const
-  {
-    return m_canceled;
-  }
-
-  bool isReceived() const
-  {
+  bool isReceived() const {
     return m_received;
   }
 
-  void sendRequest(const updater::Uuid& uuid, const std::string& extraParams)
-  {
+  void sendRequest(const updater::Uuid& uuid, const std::string& extraParams) {
     m_checker.checkNewVersion(uuid, extraParams, this);
   }
 
-  const updater::CheckUpdateResponse& getResponse() const
-  {
+  const updater::CheckUpdateResponse& getResponse() const {
     return m_response;
   }
 
 private:
-
-  // CheckUpdateDelegate implementation
-  virtual void onResponse(updater::CheckUpdateResponse& data)
-  {
+  void onResponse(updater::CheckUpdateResponse& data) override {
     m_response = data;
     m_received = true;
   }
 
-  bool m_canceled;
   bool m_received;
   updater::CheckUpdate m_checker;
   updater::CheckUpdateResponse m_response;
 };
 
-CheckUpdateThreadLauncher::CheckUpdateThreadLauncher()
-  : m_doCheck(true)
+CheckUpdateThreadLauncher::CheckUpdateThreadLauncher(CheckUpdateDelegate* delegate)
+  : m_delegate(delegate)
+  , m_preferences(Preferences::instance())
+  , m_doCheck(true)
   , m_received(false)
-  , m_inits(get_config_int("Updater", "Inits", 0))
-  , m_exits(get_config_int("Updater", "Exits", 0))
+  , m_inits(m_preferences.updater.inits())
+  , m_exits(m_preferences.updater.exits())
 #ifdef _DEBUG
   , m_isDeveloper(true)
 #else
-  , m_isDeveloper(get_config_bool("Updater", "IsDeveloper", false))
+  , m_isDeveloper(m_preferences.updater.isDeveloper())
 #endif
   , m_timer(kMonitoringPeriod, NULL)
 {
   // Get how many days we have to wait for the next "check for update"
-  int waitDays = get_config_int("Updater", "WaitDays", 0);
-  if (waitDays > 0) {
+  double waitDays = m_preferences.updater.waitDays();
+  if (waitDays > 0.0) {
     // Get the date of the last "check for updates"
-    time_t lastCheck = (time_t)get_config_int("Updater", "LastCheck", 0);
+    time_t lastCheck = (time_t)m_preferences.updater.lastCheck();
     time_t now = std::time(NULL);
 
     // Verify if we are in the "WaitDays" period...
-    if (now < lastCheck+60*60*24*waitDays &&
+    if (now < lastCheck+int(double(60*60*24*waitDays)) &&
         now > lastCheck) {                               // <- Avoid broken clocks
       // So we do not check for updates.
       m_doCheck = false;
@@ -113,8 +88,8 @@ CheckUpdateThreadLauncher::CheckUpdateThreadLauncher()
   }
 
   // Minimal stats: number of initializations
-  set_config_int("Updater", "Inits", get_config_int("Updater", "Inits", 0)+1);
-  flush_config_file();
+  m_preferences.updater.inits(m_inits+1);
+  m_preferences.save();
 }
 
 CheckUpdateThreadLauncher::~CheckUpdateThreadLauncher()
@@ -124,28 +99,32 @@ CheckUpdateThreadLauncher::~CheckUpdateThreadLauncher()
 
   if (m_thread) {
     if (m_bgJob)
-      m_bgJob->cancel();
+      m_bgJob->abort();
 
     m_thread->join();
   }
 
   // Minimal stats: number of exits
-  set_config_int("Updater", "Exits", get_config_int("Updater", "Exits", 0)+1);
-  flush_config_file();
+  m_preferences.updater.exits(m_exits+1);
+  m_preferences.save();
 }
 
 void CheckUpdateThreadLauncher::launch()
 {
   // In this case we are in the "wait days" period, so we don't check
   // for updates.
-  if (!m_doCheck)
+  if (!m_doCheck) {
+    showUI();
     return;
+  }
 
   if (m_uuid.empty())
-    m_uuid = get_config_string("Updater", "Uuid", "");
+    m_uuid = m_preferences.updater.uuid();
+
+  m_delegate->onCheckingUpdates();
 
   m_bgJob.reset(new CheckUpdateBackgroundJob);
-  m_thread.reset(new base::thread(Bind<void>(&CheckUpdateThreadLauncher::checkForUpdates, this)));
+  m_thread.reset(new base::thread(base::Bind<void>(&CheckUpdateThreadLauncher::checkForUpdates, this)));
 
   // Start a timer to monitoring the progress of the background job
   // executed in "m_thread". The "onMonitoringTick" method will be
@@ -169,27 +148,32 @@ void CheckUpdateThreadLauncher::onMonitoringTick()
   switch (m_response.getUpdateType()) {
 
     case updater::CheckUpdateResponse::NoUpdate:
-      // Nothing to do, we are up-to-date
+      // Clear
+      m_preferences.updater.newVersion("");
+      m_preferences.updater.newUrl("");
       break;
 
     case updater::CheckUpdateResponse::Critical:
     case updater::CheckUpdateResponse::Major:
-      App::instance()->showNotification(this);
+      m_preferences.updater.newVersion(m_response.getLatestVersion());
+      m_preferences.updater.newUrl(m_response.getUrl());
       break;
   }
+
+  showUI();
 
   // Save the new UUID
   if (!m_response.getUuid().empty()) {
     m_uuid = m_response.getUuid();
-    set_config_string("Updater", "Uuid", m_uuid.c_str());
+    m_preferences.updater.uuid(m_uuid);
   }
 
   // Set the date of the last "check for updates" and the "WaitDays" parameter.
-  set_config_int("Updater", "LastCheck", (int)std::time(NULL));
-  set_config_int("Updater", "WaitDays", m_response.getWaitDays());
+  m_preferences.updater.lastCheck((int)std::time(NULL));
+  m_preferences.updater.waitDays(m_response.getWaitDays());
 
   // Save the config file right now
-  flush_config_file();
+  m_preferences.save();
 
   // Stop the monitoring timer.
   m_timer.stop();
@@ -215,15 +199,23 @@ void CheckUpdateThreadLauncher::checkForUpdates()
   }
 }
 
-std::string CheckUpdateThreadLauncher::notificationText()
+void CheckUpdateThreadLauncher::showUI()
 {
-  return "New Version Available!";
-}
+  bool newVer = false;
 
-void CheckUpdateThreadLauncher::notificationClick()
-{
-  if (!m_response.getUrl().empty())
-    base::launcher::open_url(m_response.getUrl());
+  if (!m_preferences.updater.newVersion().empty()) {
+    base::Version serverVersion(m_preferences.updater.newVersion());
+    base::Version localVersion(VERSION);
+    newVer = (localVersion < serverVersion);
+  }
+
+  if (newVer) {
+    m_delegate->onNewUpdate(m_preferences.updater.newUrl(),
+                            m_preferences.updater.newVersion());
+  }
+  else {
+    m_delegate->onUpToDate();
+  }
 }
 
 }

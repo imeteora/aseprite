@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,7 +11,7 @@
 #include "ui/listitem.h"
 
 #include "ui/message.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/resize_event.h"
 #include "ui/theme.h"
 #include "ui/view.h"
@@ -24,46 +24,60 @@ ListItem::ListItem(const std::string& text)
   : Widget(kListItemWidget)
 {
   setDoubleBuffered(true);
-  setAlign(JI_LEFT | JI_MIDDLE);
+  setAlign(LEFT | MIDDLE);
   setText(text);
   initTheme();
 }
 
+bool ListItem::onProcessMessage(Message* msg)
+{
+  switch (msg->type()) {
+    case kDoubleClickMessage:
+      // Propagate the message to the parent.
+      if (parent())
+        return parent()->sendMessage(msg);
+      else
+        break;
+      break;
+  }
+  return Widget::onProcessMessage(msg);
+}
+
 void ListItem::onPaint(PaintEvent& ev)
 {
-  getTheme()->paintListItem(ev);
+  theme()->paintListItem(ev);
 }
 
 void ListItem::onResize(ResizeEvent& ev)
 {
-  setBoundsQuietly(ev.getBounds());
+  setBoundsQuietly(ev.bounds());
 
-  Rect crect = getChildrenBounds();
-  UI_FOREACH_WIDGET(getChildren(), it)
-    (*it)->setBounds(crect);
+  Rect crect = childrenBounds();
+  for (auto child : children())
+    child->setBounds(crect);
 }
 
-void ListItem::onPreferredSize(PreferredSizeEvent& ev)
+void ListItem::onSizeHint(SizeHintEvent& ev)
 {
   int w = 0, h = 0;
   Size maxSize;
 
   if (hasText())
-    maxSize = getTextSize();
+    maxSize = textSize();
   else
     maxSize.w = maxSize.h = 0;
 
-  UI_FOREACH_WIDGET(getChildren(), it) {
-    Size reqSize = (*it)->getPreferredSize();
+  for (auto child : children()) {
+    Size reqSize = child->sizeHint();
 
     maxSize.w = MAX(maxSize.w, reqSize.w);
     maxSize.h = MAX(maxSize.h, reqSize.h);
   }
 
-  w = this->border_width.l + maxSize.w + this->border_width.r;
-  h = this->border_width.t + maxSize.h + this->border_width.b;
+  w = maxSize.w + border().width();
+  h = maxSize.h + border().height();
 
-  ev.setPreferredSize(Size(w, h));
+  ev.setSizeHint(Size(w, h));
 }
 
 } // namespace ui

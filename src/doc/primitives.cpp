@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,11 +11,10 @@
 #include "doc/primitives.h"
 
 #include "doc/algo.h"
-#include "doc/blend.h"
 #include "doc/brush.h"
-#include "doc/image.h"
 #include "doc/image_impl.h"
 #include "doc/palette.h"
+#include "doc/remap.h"
 #include "doc/rgbmap.h"
 
 #include <stdexcept>
@@ -24,6 +23,8 @@ namespace doc {
 
 color_t get_pixel(const Image* image, int x, int y)
 {
+  ASSERT(image);
+
   if ((x >= 0) && (y >= 0) && (x < image->width()) && (y < image->height()))
     return image->getPixel(x, y);
   else
@@ -32,53 +33,41 @@ color_t get_pixel(const Image* image, int x, int y)
 
 void put_pixel(Image* image, int x, int y, color_t color)
 {
+  ASSERT(image);
+
   if ((x >= 0) && (y >= 0) && (x < image->width()) && (y < image->height()))
     image->putPixel(x, y, color);
 }
 
-void draw_brush(Image* image, Brush* brush, int x, int y, color_t fg, color_t bg)
-{
-  Image* brush_image = brush->image();
-  const gfx::Rect& brushBounds = brush->bounds();
-
-  x += brushBounds.x;
-  y += brushBounds.y;
-
-  if (fg == bg) {
-    fill_rect(image, x, y, x+brushBounds.w-1, y+brushBounds.h-1, bg);
-  }
-  else {
-    int u, v;
-    for (v=0; v<brushBounds.h; v++) {
-      for (u=0; u<brushBounds.w; u++) {
-        if (get_pixel(brush_image, u, v))
-          put_pixel(image, x+u, y+v, fg);
-        else
-          put_pixel(image, x+u, y+v, bg);
-      }
-    }
-  }
-}
-
 void clear_image(Image* image, color_t color)
 {
+  ASSERT(image);
+
   image->clear(color);
 }
 
 void copy_image(Image* dst, const Image* src)
 {
+  ASSERT(dst);
+  ASSERT(src);
+
   dst->copy(src, gfx::Clip(0, 0, 0, 0, src->width(), src->height()));
 }
 
 void copy_image(Image* dst, const Image* src, int x, int y)
 {
+  ASSERT(dst);
+  ASSERT(src);
+
   dst->copy(src, gfx::Clip(x, y, 0, 0, src->width(), src->height()));
 }
 
 Image* crop_image(const Image* image, int x, int y, int w, int h, color_t bg, const ImageBufferPtr& buffer)
 {
-  if (w < 1) throw std::invalid_argument("image_crop: Width is less than 1");
-  if (h < 1) throw std::invalid_argument("image_crop: Height is less than 1");
+  ASSERT(image);
+
+  if (w < 1) throw std::invalid_argument("crop_image: Width is less than 1");
+  if (h < 1) throw std::invalid_argument("crop_image: Height is less than 1");
 
   Image* trim = Image::create(image->pixelFormat(), w, h, buffer);
   trim->setMaskColor(image->maskColor());
@@ -89,8 +78,15 @@ Image* crop_image(const Image* image, int x, int y, int w, int h, color_t bg, co
   return trim;
 }
 
+Image* crop_image(const Image* image, const gfx::Rect& bounds, color_t bg, const ImageBufferPtr& buffer)
+{
+  return crop_image(image, bounds.x, bounds.y, bounds.w, bounds.h, bg, buffer);
+}
+
 void rotate_image(const Image* src, Image* dst, int angle)
 {
+  ASSERT(src);
+  ASSERT(dst);
   int x, y;
 
   switch (angle) {
@@ -131,6 +127,7 @@ void rotate_image(const Image* src, Image* dst, int angle)
 
 void draw_hline(Image* image, int x1, int y, int x2, color_t color)
 {
+  ASSERT(image);
   int t;
 
   if (x1 > x2) {
@@ -150,6 +147,7 @@ void draw_hline(Image* image, int x1, int y, int x2, color_t color)
 
 void draw_vline(Image* image, int x, int y1, int y2, color_t color)
 {
+  ASSERT(image);
   int t;
 
   if (y1 > y2) {
@@ -170,6 +168,7 @@ void draw_vline(Image* image, int x, int y1, int y2, color_t color)
 
 void draw_rect(Image* image, int x1, int y1, int x2, int y2, color_t color)
 {
+  ASSERT(image);
   int t;
 
   if (x1 > x2) {
@@ -197,6 +196,7 @@ void draw_rect(Image* image, int x1, int y1, int x2, int y2, color_t color)
 
 void fill_rect(Image* image, int x1, int y1, int x2, int y2, color_t color)
 {
+  ASSERT(image);
   int t;
 
   if (x1 > x2) {
@@ -224,7 +224,9 @@ void fill_rect(Image* image, int x1, int y1, int x2, int y2, color_t color)
 
 void fill_rect(Image* image, const gfx::Rect& rc, color_t c)
 {
-  gfx::Rect clip = rc.createIntersect(image->bounds());
+  ASSERT(image);
+
+  gfx::Rect clip = rc.createIntersection(image->bounds());
   if (!clip.isEmpty())
     image->fillRect(clip.x, clip.y,
       clip.x+clip.w-1, clip.y+clip.h-1, c);
@@ -232,6 +234,7 @@ void fill_rect(Image* image, const gfx::Rect& rc, color_t c)
 
 void blend_rect(Image* image, int x1, int y1, int x2, int y2, color_t color, int opacity)
 {
+  ASSERT(image);
   int t;
 
   if (x1 > x2) {
@@ -329,6 +332,21 @@ int count_diff_between_images(const Image* i1, const Image* i2)
 
   ASSERT(false);
   return -1;
+}
+
+void remap_image(Image* image, const Remap& remap)
+{
+  ASSERT(image->pixelFormat() == IMAGE_INDEXED);
+  if (image->pixelFormat() != IMAGE_INDEXED)
+    return;
+
+  LockImageBits<IndexedTraits> bits(image);
+  LockImageBits<IndexedTraits>::iterator
+    it = bits.begin(),
+    end = bits.end();
+
+  for (; it != end; ++it)
+    *it = remap[*it];
 }
 
 } // namespace doc

@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,6 +8,7 @@
 #define DOC_PALETTE_H_INCLUDED
 #pragma once
 
+#include "base/debug.h"
 #include "doc/color.h"
 #include "doc/frame.h"
 #include "doc/object.h"
@@ -17,62 +18,53 @@
 
 namespace doc {
 
-  class SortPalette {
-  public:
-    enum Channel {
-      RGB_Red,
-      RGB_Green,
-      RGB_Blue,
-      HSV_Hue,
-      HSV_Saturation,
-      HSV_Value,
-      HSL_Lightness,
-      YUV_Luma,
-    };
-
-    SortPalette(Channel channel, bool ascending);
-    ~SortPalette();
-
-    void addChain(SortPalette* chain);
-
-    bool operator()(color_t c1, color_t c2);
-
-  private:
-    Channel m_channel;
-    bool m_ascending;
-    SortPalette* m_chain;
-  };
+  class Remap;
 
   class Palette : public Object {
   public:
-    enum { MaxColors = 256 };
-
     Palette(frame_t frame, int ncolors);
     Palette(const Palette& palette);
+    Palette(const Palette& palette, const Remap& remap);
     ~Palette();
 
     static Palette* createGrayscale();
 
-    int size() const { return m_colors.size(); }
+    int size() const { return (int)m_colors.size(); }
     void resize(int ncolors);
 
-    std::string filename() const { return m_filename; }
+    const std::string& filename() const { return m_filename; }
+    const std::string& comment() const { return m_comment; }
+
     void setFilename(const std::string& filename) {
       m_filename = filename;
     }
 
+    void setComment(const std::string& comment) {
+      m_comment = comment;
+    }
+
     int getModifications() const { return m_modifications; }
+
+    // Return true if the palette has alpha != 255 in some entry
+    bool hasAlpha() const;
 
     frame_t frame() const { return m_frame; }
     void setFrame(frame_t frame);
 
     color_t entry(int i) const {
-      ASSERT(i >= 0 && i < size());
-      return m_colors[i];
+      // TODO At this moment we cannot enable this assert because
+      //      there are situations that are not handled quite well yet.
+      //      E.g. A palette with lesser colors is loaded
+      //
+      //ASSERT(i < size());
+      ASSERT(i >= 0);
+      if (i >= 0 && i < size())
+        return m_colors[i];
+      else
+        return 0;
     }
     color_t getEntry(int i) const {
-      ASSERT(i >= 0 && i < size());
-      return m_colors[i];
+      return entry(i);
     }
     void setEntry(int i, color_t color);
     void addEntry(color_t color);
@@ -81,23 +73,31 @@ namespace doc {
 
     int countDiff(const Palette* other, int* from, int* to) const;
 
+    bool operator==(const Palette& other) const {
+      return (countDiff(&other, nullptr, nullptr) == 0);
+    }
+
+    bool operator!=(const Palette& other) const {
+      return !operator==(other);
+    }
+
     // Returns true if the palette is completelly black.
     bool isBlack() const;
     void makeBlack();
 
-    void makeHorzRamp(int from, int to);
-    void makeVertRamp(int from, int to, int columns);
-    void makeRectRamp(int from, int to, int columns);
-    void sort(int from, int to, SortPalette* sort_palette, std::vector<int>& mapping);
+    void makeGradient(int from, int to);
 
-    int findExactMatch(int r, int g, int b) const;
-    int findBestfit(int r, int g, int b, int mask_index = 0) const;
+    int findExactMatch(int r, int g, int b, int a, int mask_index) const;
+    int findBestfit(int r, int g, int b, int a, int mask_index) const;
+
+    void applyRemap(const Remap& remap);
 
   private:
     frame_t m_frame;
     std::vector<color_t> m_colors;
     int m_modifications;
     std::string m_filename; // If the palette is associated with a file.
+    std::string m_comment; // Some extra comment from the .gpl file (author, website, etc.).
   };
 
 } // namespace doc

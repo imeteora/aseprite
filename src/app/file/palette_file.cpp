@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -25,67 +13,88 @@
 #include "app/file/file.h"
 #include "app/file/file_format.h"
 #include "app/file/file_formats_manager.h"
-#include "base/path.h"
+#include "base/fs.h"
 #include "base/string.h"
 #include "doc/cel.h"
 #include "doc/file/col_file.h"
 #include "doc/file/gpl_file.h"
+#include "doc/file/hex_file.h"
+#include "doc/file/pal_file.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
+#include "docio/detect_format.h"
+
+#include <cstring>
 
 namespace app {
 
 using namespace doc;
 
-void get_readable_palette_extensions(char* buf, int size)
+std::string get_readable_palette_extensions()
 {
-  get_readable_extensions(buf, size);
-  strcat(buf, ",col,gpl");
+  std::string buf = get_readable_extensions();
+  buf += ",col,gpl,hex,pal";
+  return buf;
 }
 
-void get_writable_palette_extensions(char* buf, int size)
+std::string get_writable_palette_extensions()
 {
-  get_writable_extensions(buf, size);
-  strcat(buf, ",col,gpl");
+  std::string buf = get_writable_extensions();
+  buf += ",col,gpl,hex,pal";
+  return buf;
 }
 
-Palette* load_palette(const char *filename)
+Palette* load_palette(const char* filename)
 {
-  std::string ext = base::string_to_lower(base::get_file_extension(filename));
-  Palette* pal = NULL;
+  docio::FileFormat docioFormat = docio::detect_format(filename);
+  Palette* pal = nullptr;
 
-  if (ext == "col") {
-    pal = doc::file::load_col_file(filename);
-  }
-  else if (ext == "gpl") {
-    pal = doc::file::load_gpl_file(filename);
-  }
-  else {
-    FileFormat* ff = FileFormatsManager::instance()->getFileFormatByExtension(ext.c_str());
-    if (ff->support(FILE_SUPPORT_LOAD)) {
-      FileOp* fop = fop_to_load_document(NULL, filename,
-        FILE_LOAD_SEQUENCE_NONE |
-        FILE_LOAD_ONE_FRAME);
-      if (fop && !fop->has_error()) {
-        fop_operate(fop, NULL);
-        fop_post_load(fop);
+  switch (docioFormat) {
 
-        if (fop->document &&
-            fop->document->sprite() &&
-            fop->document->sprite()->palette(frame_t(0))) {
+    case docio::FileFormat::COL_PALETTE:
+      pal = doc::file::load_col_file(filename);
+      break;
+
+    case docio::FileFormat::GPL_PALETTE:
+      pal = doc::file::load_gpl_file(filename);
+      break;
+
+    case docio::FileFormat::HEX_PALETTE:
+      pal = doc::file::load_hex_file(filename);
+      break;
+
+    case docio::FileFormat::PAL_PALETTE:
+      pal = doc::file::load_pal_file(filename);
+      break;
+
+    default: {
+      FileFormat* ff = FileFormatsManager::instance()->getFileFormat(docioFormat);
+      if (!ff || !ff->support(FILE_SUPPORT_LOAD))
+        break;
+
+      base::UniquePtr<FileOp> fop(
+        FileOp::createLoadDocumentOperation(
+          nullptr, filename,
+          FILE_LOAD_SEQUENCE_NONE |
+          FILE_LOAD_ONE_FRAME));
+
+      if (fop && !fop->hasError()) {
+        fop->operate(nullptr);
+        fop->postLoad();
+
+        if (fop->document() &&
+            fop->document()->sprite() &&
+            fop->document()->sprite()->palette(frame_t(0))) {
           pal = new Palette(
-            *fop->document->sprite()->palette(frame_t(0)));
-
-          // TODO remove this line when support for palettes with less
-          // than 256 colors is added.
-          pal->resize(Palette::MaxColors);
+            *fop->document()->sprite()->palette(frame_t(0)));
         }
 
-        delete fop->document;
-        fop_done(fop);
+        delete fop->releaseDocument();
+        fop->done();
       }
+      break;
     }
   }
 
@@ -95,41 +104,71 @@ Palette* load_palette(const char *filename)
   return pal;
 }
 
-bool save_palette(const char *filename, Palette* pal)
+bool save_palette(const char* filename, const Palette* pal, int columns)
 {
-  std::string ext = base::string_to_lower(base::get_file_extension(filename));
+  docio::FileFormat docioFormat = docio::detect_format_by_file_extension(filename);
   bool success = false;
 
-  if (ext == "col") {
-    success = doc::file::save_col_file(pal, filename);
-  }
-  else if (ext == "gpl") {
-    success = doc::file::save_gpl_file(pal, filename);
-  }
-  else {
-    FileFormat* ff = FileFormatsManager::instance()->getFileFormatByExtension(ext.c_str());
-    if (ff->support(FILE_SUPPORT_SAVE)) {
+  switch (docioFormat) {
+
+    case docio::FileFormat::COL_PALETTE:
+      success = doc::file::save_col_file(pal, filename);
+      break;
+
+    case docio::FileFormat::GPL_PALETTE:
+      success = doc::file::save_gpl_file(pal, filename);
+      break;
+
+    case docio::FileFormat::HEX_PALETTE:
+      success = doc::file::save_hex_file(pal, filename);
+      break;
+
+    case docio::FileFormat::PAL_PALETTE:
+      success = doc::file::save_pal_file(pal, filename);
+      break;
+
+    default: {
+      FileFormat* ff = FileFormatsManager::instance()->getFileFormat(docioFormat);
+      if (!ff || !ff->support(FILE_SUPPORT_SAVE))
+        break;
+
+      int w = (columns > 0 ? MID(0, columns, pal->size()): pal->size());
+      int h = (pal->size() / w) + (pal->size() % w > 0 ? 1: 0);
+
       app::Context tmpContext;
       doc::Document* doc = tmpContext.documents().add(
-        16, 16, doc::ColorMode::INDEXED,
-        Palette::MaxColors);
+        w, h, (pal->size() <= 256 ? doc::ColorMode::INDEXED:
+                                    doc::ColorMode::RGB), pal->size());
 
       Sprite* sprite = doc->sprite();
       doc->sprite()->setPalette(pal, false);
 
-      Layer* layer = sprite->folder()->getFirstLayer();
+      LayerImage* layer = static_cast<LayerImage*>(sprite->folder()->getFirstLayer());
+      layer->configureAsBackground();
+
       Image* image = layer->cel(frame_t(0))->image();
+      image->clear(0);
 
       int x, y, c;
-      for (y=c=0; y<16; y++)
-        for (x=0; x<16; x++)
-          image->putPixel(x, y, c++);
+      for (y=c=0; y<h; ++y) {
+        for (x=0; x<w; ++x) {
+          if (doc->colorMode() == doc::ColorMode::INDEXED)
+            image->putPixel(x, y, c);
+          else
+            image->putPixel(x, y, pal->entry(c));
+
+          if (++c == pal->size())
+            goto done;
+        }
+      }
+    done:;
 
       doc->setFilename(filename);
       success = (save_document(&tmpContext, doc) == 0);
 
       doc->close();
       delete doc;
+      break;
     }
   }
 

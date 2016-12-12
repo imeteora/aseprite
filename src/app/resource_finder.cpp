@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,10 +12,15 @@
 
 #include "app/app.h"
 #include "base/fs.h"
-#include "base/path.h"
 #include "base/string.h"
 
 #include <cstdio>
+#include <cstdlib>
+
+#ifdef _WIN32
+  #include <windows.h>
+  #include <shlobj.h>
+#endif
 
 namespace app {
 
@@ -63,18 +56,17 @@ bool ResourceFinder::findFirst()
 {
   while (next()) {
     if (m_log)
-      PRINTF("Loading resource from \"%s\"...\n", filename().c_str());
+      LOG("FIND: \"%s\"", filename().c_str());
 
     if (base::is_file(filename())) {
       if (m_log)
-        PRINTF("- OK\n");
+        LOG(" (found)\n");
 
       return true;
     }
+    else if (m_log)
+      LOG(" (not found)\n");
   }
-
-  if (m_log)
-    PRINTF("- Resource not found.\n");
 
   return false;
 }
@@ -93,11 +85,20 @@ void ResourceFinder::includeDataDir(const char* filename)
 {
   char buf[4096];
 
-#ifdef WIN32
+#ifdef _WIN32
 
-  // $BINDIR/data/filename
   sprintf(buf, "data/%s", filename);
-  includeBinDir(buf);
+  includeHomeDir(buf); // %AppData%/Aseprite/data/filename
+  includeBinDir(buf);  // $BINDIR/data/filename
+
+#elif __APPLE__
+
+  sprintf(buf, "data/%s", filename);
+  includeUserDir(buf); // $HOME/Library/Application Support/Aseprite/data/filename
+  includeBinDir(buf);  // $BINDIR/data/filename (outside the bundle)
+
+  sprintf(buf, "../Resources/data/%s", filename);
+  includeBinDir(buf);  // $BINDIR/../Resources/data/filename (inside a bundle)
 
 #else
 
@@ -109,22 +110,16 @@ void ResourceFinder::includeDataDir(const char* filename)
   sprintf(buf, "data/%s", filename);
   includeBinDir(buf);
 
-  #ifdef __APPLE__
-    // $BINDIR/../Resources/data/filename (inside a bundle)
-    sprintf(buf, "../Resources/data/%s", filename);
-    includeBinDir(buf);
-  #else
-    // $BINDIR/../share/aseprite/data/filename (installed in /usr/ or /usr/local/)
-    sprintf(buf, "../share/aseprite/data/%s", filename);
-    includeBinDir(buf);
-  #endif
+  // $BINDIR/../share/aseprite/data/filename (installed in /usr/ or /usr/local/)
+  sprintf(buf, "../share/aseprite/data/%s", filename);
+  includeBinDir(buf);
 
 #endif
 }
 
 void ResourceFinder::includeHomeDir(const char* filename)
 {
-#ifdef WIN32
+#ifdef _WIN32
 
   // %AppData%/Aseprite/filename
   wchar_t* env = _wgetenv(L"AppData");
@@ -137,7 +132,7 @@ void ResourceFinder::includeHomeDir(const char* filename)
 
 #else
 
-  char* env = getenv("HOME");
+  char* env = std::getenv("HOME");
   char buf[4096];
 
   if ((env) && (*env)) {
@@ -146,7 +141,7 @@ void ResourceFinder::includeHomeDir(const char* filename)
     addPath(buf);
   }
   else {
-    PRINTF("You don't have set $HOME variable\n");
+    LOG("FIND: You don't have set $HOME variable\n");
     addPath(filename);
   }
 
@@ -155,7 +150,7 @@ void ResourceFinder::includeHomeDir(const char* filename)
 
 void ResourceFinder::includeUserDir(const char* filename)
 {
-#ifdef WIN32
+#ifdef _WIN32
 
   if (App::instance()->isPortable()) {
     // $BINDIR/filename
@@ -166,10 +161,53 @@ void ResourceFinder::includeUserDir(const char* filename)
     includeHomeDir(filename);
   }
 
+#elif __APPLE__
+
+  // $HOME/Library/Application Support/Aseprite/filename
+  addPath(
+    base::join_path(
+      base::join_path(base::get_lib_app_support_path(), PACKAGE),
+      filename).c_str());
+
 #else
 
   // $HOME/.config/aseprite/filename
   includeHomeDir((std::string(".config/aseprite/") + filename).c_str());
+
+#endif
+}
+
+void ResourceFinder::includeDesktopDir(const char* filename)
+{
+#ifdef _WIN32
+
+  std::vector<wchar_t> buf(MAX_PATH);
+  HRESULT hr = SHGetFolderPath(NULL, CSIDL_DESKTOPDIRECTORY, NULL,
+                               SHGFP_TYPE_DEFAULT, &buf[0]);
+  if (hr == S_OK) {
+    addPath(base::join_path(base::to_utf8(&buf[0]), filename));
+  }
+  else {
+    includeHomeDir(filename);
+  }
+
+#elif defined(__APPLE__)
+
+  // TODO get the desktop folder
+  // $HOME/Desktop/filename
+  includeHomeDir(base::join_path(std::string("Desktop"), filename).c_str());
+
+#else
+
+  char* desktopDir = std::getenv("XDG_DESKTOP_DIR");
+  if (desktopDir) {
+    // $XDG_DESKTOP_DIR/filename
+    addPath(base::join_path(desktopDir, filename));
+  }
+  else {
+    // $HOME/Desktop/filename
+    includeHomeDir(base::join_path(std::string("Desktop"), filename).c_str());
+  }
 
 #endif
 }

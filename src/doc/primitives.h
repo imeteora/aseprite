@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -16,16 +16,17 @@ namespace doc {
   class Brush;
   class Image;
   class Palette;
+  class Remap;
 
   color_t get_pixel(const Image* image, int x, int y);
   void put_pixel(Image* image, int x, int y, color_t c);
-  void draw_brush(Image* image, Brush* brush, int x, int y, color_t fg, color_t bg);
 
   void clear_image(Image* image, color_t bg);
 
   void copy_image(Image* dst, const Image* src);
   void copy_image(Image* dst, const Image* src, int x, int y);
   Image* crop_image(const Image* image, int x, int y, int w, int h, color_t bg, const ImageBufferPtr& buffer = ImageBufferPtr());
+  Image* crop_image(const Image* image, const gfx::Rect& bounds, color_t bg, const ImageBufferPtr& buffer = ImageBufferPtr());
   void rotate_image(const Image* src, Image* dst, int angle);
 
   void draw_hline(Image* image, int x1, int y, int x2, color_t c);
@@ -39,6 +40,8 @@ namespace doc {
   void fill_ellipse(Image* image, int x1, int y1, int x2, int y2, color_t c);
 
   int count_diff_between_images(const Image* i1, const Image* i2);
+
+  void remap_image(Image* image, const Remap& remap);
 
 } // namespace doc
 

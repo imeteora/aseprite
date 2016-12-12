@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,7 +10,7 @@
 
 #include "app/file/split_filename.h"
 #include "base/convert_to.h"
-#include "base/path.h"
+#include "base/fs.h"
 #include "base/string.h"
 
 #include <cstring>
@@ -41,11 +29,12 @@ int split_filename(const char* filename, std::string& left, std::string& right, 
   if (!right.empty())
     right.insert(right.begin(), '.');
 
-  // Remove all trailing numbers in the "left" side, and pass they to "buf".
+  // Remove all trailing numbers in the "left" side, and pass they to "result_str".
   std::string result_str;
   width = 0;
   for (;;) {
-    // Get the last utf-8 character
+    // Get the last UTF-8 character (as we don't have a
+    // reverse_iterator, we iterate from the beginning)
     int chr = 0;
     base::utf8_const_iterator begin(left.begin()), end(left.end());
     base::utf8_const_iterator it(begin), prev(begin);
@@ -56,7 +45,7 @@ int split_filename(const char* filename, std::string& left, std::string& right, 
       result_str.insert(result_str.begin(), chr);
       width++;
 
-      left.erase(std::distance(begin, prev));
+      left.erase(prev - begin);
     }
     else
       break;

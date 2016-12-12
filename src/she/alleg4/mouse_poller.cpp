@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2014  David Capello
+// Copyright (C) 2012-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,14 +8,15 @@
 #include "config.h"
 #endif
 
-#include "she/alleg4/internals.h"
-#include "she/clock.h"
+#include "base/time.h"
+#include "she/alleg4/alleg_display.h"
 #include "she/display.h"
 #include "she/event.h"
+#include "she/event_queue.h"
 
 #include <allegro.h>
 
-#ifdef WIN32
+#ifdef _WIN32
   #include <winalleg.h>
 #endif
 
@@ -41,15 +42,40 @@ int she_mouse_y;
 int she_mouse_z;
 int she_mouse_b;
 
+bool she_mouse_polling_required;
+
 // Flag to block all the generation of mouse messages from polling.
 bool mouse_left = false;
 
 DlbClk double_click_level;
 Event::MouseButton double_click_button = Event::NoneButton;
-int double_click_ticks;
+base::tick_t double_click_ticks;
 
-inline int display_w() { return (unique_display->width() / unique_display->scale()); }
-inline int display_h() { return (unique_display->height() / unique_display->scale()); }
+#if !defined(__APPLE__) && !defined(_WIN32)
+// Mouse enter/leave
+int old_mouse_on = 0;
+extern "C" int _mouse_on;
+#endif
+
+inline int display_w()
+{
+  ASSERT(unique_display);
+  int scale = unique_display->scale();
+  ASSERT(scale > 0);
+  if (scale == 0)
+    scale = 1;
+  return (unique_display->width() / scale);
+}
+
+inline int display_h()
+{
+  ASSERT(unique_display);
+  int scale = unique_display->scale();
+  ASSERT(scale > 0);
+  if (scale == 0)
+    scale = 1;
+  return (unique_display->height() / scale);
+}
 
 void update_mouse_position()
 {
@@ -95,11 +121,11 @@ void generate_mouse_event_for_button(Event::MouseButton button, int old_b, int n
   ev.setButton(button);
 
   // Double Click
-  int current_ticks = clock_value();
+  base::tick_t current_ticks = base::current_tick();
   if (ev.type() == Event::MouseDown) {
     if (double_click_level != DOUBLE_CLICK_NONE) {
       // Time out, back to NONE
-      if (current_ticks - double_click_ticks > DOUBLE_CLICK_TIMEOUT_MSECS) {
+      if ((current_ticks - double_click_ticks) > DOUBLE_CLICK_TIMEOUT_MSECS) {
         double_click_level = DOUBLE_CLICK_NONE;
       }
       else if (double_click_button == button) {
@@ -126,7 +152,7 @@ void generate_mouse_event_for_button(Event::MouseButton button, int old_b, int n
   else if (ev.type() == Event::MouseUp) {
     if (double_click_level != DOUBLE_CLICK_NONE) {
       // Time out, back to NONE
-      if (current_ticks - double_click_ticks > DOUBLE_CLICK_TIMEOUT_MSECS) {
+      if ((current_ticks - double_click_ticks) > DOUBLE_CLICK_TIMEOUT_MSECS) {
         double_click_level = DOUBLE_CLICK_NONE;
       }
       else if (double_click_level == DOUBLE_CLICK_DOWN) {
@@ -162,9 +188,66 @@ void osx_mouser_leave_she_callback()
 
 #endif // __APPLE__
 
+void she_mouse_callback(int flags)
+{
+  // Avoid callbacks when the display is destroyed.
+  if (!unique_display || unique_display->scale() < 1)
+    return;
+
+  update_mouse_position();
+  Event ev;
+  ev.setPosition(gfx::Point(she_mouse_x, she_mouse_y));
+
+  // Mouse enter/leave for Linux
+#if !defined(__APPLE__) && !defined(_WIN32)
+  if (old_mouse_on != _mouse_on) {
+    old_mouse_on = _mouse_on;
+    ev.setType(_mouse_on ? Event::MouseEnter: Event::MouseLeave);
+    queue_event(ev);
+  }
+#endif
+
+  // move
+  if (flags & MOUSE_FLAG_MOVE) {
+    ev.setType(Event::MouseMove);
+    queue_event(ev);
+
+    // Reset double click status
+    double_click_level = DOUBLE_CLICK_NONE;
+  }
+
+  // buttons
+  if (flags & MOUSE_FLAG_LEFT_DOWN) {
+    generate_mouse_event_for_button(Event::LeftButton, 0, 1);
+  }
+  if (flags & MOUSE_FLAG_LEFT_UP) {
+    generate_mouse_event_for_button(Event::LeftButton, 1, 0);
+  }
+  if (flags & MOUSE_FLAG_RIGHT_DOWN) {
+    generate_mouse_event_for_button(Event::RightButton, 0, 2);
+  }
+  if (flags & MOUSE_FLAG_RIGHT_UP) {
+    generate_mouse_event_for_button(Event::RightButton, 2, 0);
+  }
+  if (flags & MOUSE_FLAG_MIDDLE_DOWN) {
+    generate_mouse_event_for_button(Event::MiddleButton, 0, 4);
+  }
+  if (flags & MOUSE_FLAG_MIDDLE_UP) {
+    generate_mouse_event_for_button(Event::MiddleButton, 4, 0);
+  }
+
+  // mouse wheel
+  if (flags & MOUSE_FLAG_MOVE_Z) {
+    ev.setType(Event::MouseWheel);
+    ev.setWheelDelta(gfx::Point(0, int(she_mouse_z - mouse_z)));
+    queue_event(ev);
+    she_mouse_z = mouse_z;
+  }
 }
 
-namespace she { 
+}
+
+namespace she {
 
 void mouse_poller_init()
 {
@@ -176,10 +259,17 @@ void mouse_poller_init()
   osx_mouse_enter_callback = osx_mouser_enter_she_callback;
   osx_mouse_leave_callback = osx_mouser_leave_she_callback;
 #endif
+
+  // optional mouse callback for supported platforms
+  she_mouse_polling_required = (mouse_needs_poll() != 0);
+  if (!she_mouse_polling_required)
+    mouse_callback = she_mouse_callback;
 }
 
 void mouse_poller_generate_events()
 {
+  if (!she_mouse_polling_required)
+    return;
   if (mouse_left)
     return;
 
@@ -215,4 +305,3 @@ void mouse_poller_generate_events()
 }
 
 } // namespace she
-

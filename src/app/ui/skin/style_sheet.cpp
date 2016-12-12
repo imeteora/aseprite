@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -34,8 +22,11 @@ namespace skin {
 
 css::Rule StyleSheet::m_backgroundColorRule("background-color");
 css::Rule StyleSheet::m_backgroundPartRule("background-part");
+css::Rule StyleSheet::m_backgroundRepeatRule("background-repeat");
 css::Rule StyleSheet::m_iconAlignRule("icon-align");
 css::Rule StyleSheet::m_iconPartRule("icon-part");
+css::Rule StyleSheet::m_iconXRule("icon-x");
+css::Rule StyleSheet::m_iconYRule("icon-y");
 css::Rule StyleSheet::m_textAlignRule("text-align");
 css::Rule StyleSheet::m_textColorRule("text-color");
 css::Rule StyleSheet::m_paddingLeftRule("padding-left");
@@ -48,8 +39,11 @@ StyleSheet::StyleSheet()
   m_sheet = new css::Sheet;
   m_sheet->addRule(&m_backgroundColorRule);
   m_sheet->addRule(&m_backgroundPartRule);
+  m_sheet->addRule(&m_backgroundRepeatRule);
   m_sheet->addRule(&m_iconAlignRule);
   m_sheet->addRule(&m_iconPartRule);
+  m_sheet->addRule(&m_iconXRule);
+  m_sheet->addRule(&m_iconYRule);
   m_sheet->addRule(&m_textAlignRule);
   m_sheet->addRule(&m_textColorRule);
   m_sheet->addRule(&m_paddingLeftRule);
@@ -106,7 +100,7 @@ SkinPartPtr StyleSheet::convertPart(const css::Value& value)
   if (value.type() == css::Value::String) {
     const std::string& part_id = value.string();
     part = get_part_by_id(part_id);
-    if (part == NULL)
+    if (!part)
       throw base::Exception("Unknown part '%s'\n", part_id.c_str());
   }
   return part;
@@ -123,6 +117,26 @@ gfx::Color StyleSheet::convertColor(const css::Value& value)
       throw base::Exception("Unknown color '%s'\n", color_id.c_str());
   }
   return color;
+}
+
+// static
+BackgroundRepeat StyleSheet::convertRepeat(const css::Value& value)
+{
+  BackgroundRepeat repeat = BackgroundRepeat::NO_REPEAT;
+  if (value.type() == css::Value::String) {
+    const std::string& id = value.string();
+    if (id == "repeat")
+      repeat = BackgroundRepeat::REPEAT;
+    else if (id == "repeat-x")
+      repeat = BackgroundRepeat::REPEAT_X;
+    else if (id == "repeat-y")
+      repeat = BackgroundRepeat::REPEAT_Y;
+    else if (id == "no_repeat")
+      repeat = BackgroundRepeat::NO_REPEAT;
+    else
+      throw base::Exception("Unknown repeat value '%s'\n", id.c_str());
+  }
+  return repeat;
 }
 
 } // namespace skin

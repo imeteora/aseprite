@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,24 +10,30 @@
 
 #include "app/document.h"
 
+#include "app/app.h"
+#include "app/color_target.h"
+#include "app/color_utils.h"
+#include "app/context.h"
 #include "app/document_api.h"
 #include "app/document_undo.h"
 #include "app/file/format_options.h"
 #include "app/flatten.h"
-#include "app/objects_container_impl.h"
-#include "app/undoers/add_layer.h"
-#include "app/util/boundary.h"
+#include "app/pref/preferences.h"
+#include "app/util/create_cel_copy.h"
 #include "base/memory.h"
-#include "base/mutex.h"
-#include "base/scoped_lock.h"
 #include "base/unique_ptr.h"
 #include "doc/cel.h"
+#include "doc/context.h"
 #include "doc/document_event.h"
 #include "doc/document_observer.h"
+#include "doc/frame_tag.h"
 #include "doc/layer.h"
 #include "doc/mask.h"
+#include "doc/mask_boundaries.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
+
+#include <map>
 
 namespace app {
 
@@ -49,24 +43,13 @@ using namespace doc;
 Document::Document(Sprite* sprite)
   : m_undo(new DocumentUndo)
   , m_associated_to_file(false)
-  , m_mutex(new mutex)
-  , m_write_lock(false)
-  , m_read_locks(0)
     // Information about the file format used to load/save this document
   , m_format_options(NULL)
-    // Extra cel
-  , m_extraCel(NULL)
-  , m_extraImage(NULL)
-  , m_extraCelBlendMode(BLEND_MODE_NORMAL)
   // Mask
   , m_mask(new Mask())
   , m_maskVisible(true)
 {
   setFilename("Sprite");
-
-  // Boundary stuff
-  m_bound.nseg = 0;
-  m_bound.seg = NULL;
 
   if (sprite)
     sprites().add(sprite);
@@ -80,30 +63,51 @@ Document::~Document()
   // which could result in serious problems for observers expecting a
   // fully created app::Document.
   ASSERT(context() == NULL);
-
-  if (m_bound.seg)
-    base_free(m_bound.seg);
-
-  destroyExtraCel();
 }
 
-DocumentApi Document::getApi(undo::UndoersCollector* undoers)
+DocumentApi Document::getApi(Transaction& transaction)
 {
-  return DocumentApi(this, undoers ? undoers: m_undo->getDefaultUndoersCollector());
+  return DocumentApi(this, transaction);
 }
+
+//////////////////////////////////////////////////////////////////////
+// Main properties
+
+color_t Document::bgColor() const
+{
+  return color_utils::color_for_target(
+    Preferences::instance().colorBar.bgColor(),
+    ColorTarget(ColorTarget::BackgroundLayer,
+                sprite()->pixelFormat(),
+                sprite()->transparentColor()));
+}
+
+color_t Document::bgColor(Layer* layer) const
+{
+  if (layer->isBackground())
+    return color_utils::color_for_layer(
+      Preferences::instance().colorBar.bgColor(),
+      layer);
+  else
+    return layer->sprite()->transparentColor();
+}
+
+//////////////////////////////////////////////////////////////////////
+// Notifications
 
 void Document::notifyGeneralUpdate()
 {
   doc::DocumentEvent ev(this);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onGeneralUpdate, ev);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onGeneralUpdate, ev);
 }
 
-void Document::notifySpritePixelsModified(Sprite* sprite, const gfx::Region& region)
+void Document::notifySpritePixelsModified(Sprite* sprite, const gfx::Region& region, frame_t frame)
 {
   doc::DocumentEvent ev(this);
   ev.sprite(sprite);
   ev.region(region);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onSpritePixelsModified, ev);
+  ev.frame(frame);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onSpritePixelsModified, ev);
 }
 
 void Document::notifyExposeSpritePixels(Sprite* sprite, const gfx::Region& region)
@@ -111,7 +115,7 @@ void Document::notifyExposeSpritePixels(Sprite* sprite, const gfx::Region& regio
   doc::DocumentEvent ev(this);
   ev.sprite(sprite);
   ev.region(region);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onExposeSpritePixels, ev);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onExposeSpritePixels, ev);
 }
 
 void Document::notifyLayerMergedDown(Layer* srcLayer, Layer* targetLayer)
@@ -120,7 +124,7 @@ void Document::notifyLayerMergedDown(Layer* srcLayer, Layer* targetLayer)
   ev.sprite(srcLayer->sprite());
   ev.layer(srcLayer);
   ev.targetLayer(targetLayer);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onLayerMergedDown, ev);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onLayerMergedDown, ev);
 }
 
 void Document::notifyCelMoved(Layer* fromLayer, frame_t fromFrame, Layer* toLayer, frame_t toFrame)
@@ -131,7 +135,7 @@ void Document::notifyCelMoved(Layer* fromLayer, frame_t fromFrame, Layer* toLaye
   ev.frame(fromFrame);
   ev.targetLayer(toLayer);
   ev.targetFrame(toFrame);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onCelMoved, ev);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onCelMoved, ev);
 }
 
 void Document::notifyCelCopied(Layer* fromLayer, frame_t fromFrame, Layer* toLayer, frame_t toFrame)
@@ -142,13 +146,13 @@ void Document::notifyCelCopied(Layer* fromLayer, frame_t fromFrame, Layer* toLay
   ev.frame(fromFrame);
   ev.targetLayer(toLayer);
   ev.targetFrame(toFrame);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onCelCopied, ev);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onCelCopied, ev);
 }
 
 void Document::notifySelectionChanged()
 {
   doc::DocumentEvent ev(this);
-  notifyObservers<doc::DocumentEvent&>(&doc::DocumentObserver::onSelectionChanged, ev);
+  notify_observers<doc::DocumentEvent&>(&doc::DocumentObserver::onSelectionChanged, ev);
 }
 
 bool Document::isModified() const
@@ -172,10 +176,17 @@ void Document::impossibleToBackToSavedState()
   m_undo->impossibleToBackToSavedState();
 }
 
+bool Document::needsBackup() const
+{
+  // If the undo history isn't empty, the user has modified the
+  // document, so we need to backup those changes.
+  return m_undo->canUndo() || m_undo->canRedo();
+}
+
 //////////////////////////////////////////////////////////////////////
 // Loaded options from file
 
-void Document::setFormatOptions(const SharedPtr<FormatOptions>& format_options)
+void Document::setFormatOptions(const base::SharedPtr<FormatOptions>& format_options)
 {
   m_format_options = format_options;
 }
@@ -183,23 +194,9 @@ void Document::setFormatOptions(const SharedPtr<FormatOptions>& format_options)
 //////////////////////////////////////////////////////////////////////
 // Boundaries
 
-int Document::getBoundariesSegmentsCount() const
+void Document::generateMaskBoundaries(const Mask* mask)
 {
-  return m_bound.nseg;
-}
-
-const BoundSeg* Document::getBoundariesSegments() const
-{
-  return m_bound.seg;
-}
-
-void Document::generateMaskBoundaries(Mask* mask)
-{
-  if (m_bound.seg) {
-    base_free(m_bound.seg);
-    m_bound.seg = NULL;
-    m_bound.nseg = 0;
-  }
+  m_maskBoundaries.reset();
 
   // No mask specified? Use the current one in the document
   if (!mask) {
@@ -209,62 +206,16 @@ void Document::generateMaskBoundaries(Mask* mask)
       mask = this->mask();      // Use the document mask
   }
 
-  ASSERT(mask != NULL);
+  ASSERT(mask);
 
   if (!mask->isEmpty()) {
-    m_bound.seg = find_mask_boundary(mask->bitmap(),
-                                     &m_bound.nseg,
-                                     IgnoreBounds, 0, 0, 0, 0);
-    for (int c=0; c<m_bound.nseg; c++) {
-      m_bound.seg[c].x1 += mask->bounds().x;
-      m_bound.seg[c].y1 += mask->bounds().y;
-      m_bound.seg[c].x2 += mask->bounds().x;
-      m_bound.seg[c].y2 += mask->bounds().y;
-    }
+    m_maskBoundaries.reset(new MaskBoundaries(mask->bitmap()));
+    m_maskBoundaries->offset(mask->bounds().x,
+                             mask->bounds().y);
   }
 
   // TODO move this to the exact place where selection is modified.
   notifySelectionChanged();
-}
-
-//////////////////////////////////////////////////////////////////////
-// Extra Cel (it is used to draw pen preview, pixels in movement, etc.)
-
-void Document::destroyExtraCel()
-{
-  delete m_extraCel;
-
-  m_extraCel = NULL;
-  m_extraImage.reset(NULL);
-}
-
-void Document::prepareExtraCel(const gfx::Rect& bounds, int opacity)
-{
-  ASSERT(sprite() != NULL);
-
-  if (!m_extraCel)
-    m_extraCel = new Cel(frame_t(0), ImageRef(NULL)); // Ignored fields for this cel (frame, and image index)
-
-  m_extraCel->setPosition(bounds.getOrigin());
-  m_extraCel->setOpacity(opacity);
-
-  if (!m_extraImage ||
-      m_extraImage->pixelFormat() != sprite()->pixelFormat() ||
-      m_extraImage->width() != bounds.w ||
-      m_extraImage->height() != bounds.h) {
-    m_extraImage.reset(Image::create(sprite()->pixelFormat(),
-        bounds.w, bounds.h));
-  }
-}
-
-Cel* Document::getExtraCel() const
-{
-  return m_extraCel;
-}
-
-Image* Document::getExtraCelImage() const
-{
-  return m_extraImage.get();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -294,12 +245,12 @@ void Document::setMaskVisible(bool visible)
 //////////////////////////////////////////////////////////////////////
 // Transformation
 
-gfx::Transformation Document::getTransformation() const
+Transformation Document::getTransformation() const
 {
   return m_transformation;
 }
 
-void Document::setTransformation(const gfx::Transformation& transform)
+void Document::setTransformation(const Transformation& transform)
 {
   m_transformation = transform;
 }
@@ -307,9 +258,9 @@ void Document::setTransformation(const gfx::Transformation& transform)
 void Document::resetTransformation()
 {
   if (m_mask)
-    m_transformation = gfx::Transformation(m_mask->bounds());
+    m_transformation = Transformation(gfx::RectF(m_mask->bounds()));
   else
-    m_transformation = gfx::Transformation();
+    m_transformation = Transformation();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -317,29 +268,51 @@ void Document::resetTransformation()
 
 void Document::copyLayerContent(const Layer* sourceLayer0, Document* destDoc, Layer* destLayer0) const
 {
-  // Copy the layer name
+  LayerFlags dstFlags = sourceLayer0->flags();
+
+  // Remove the "background" flag if the destDoc already has a background layer.
+  if (((int)dstFlags & (int)LayerFlags::Background) == (int)LayerFlags::Background &&
+      (destDoc->sprite()->backgroundLayer())) {
+    dstFlags = (LayerFlags)((int)dstFlags & ~(int)(LayerFlags::BackgroundLayerFlags));
+  }
+
+  // Copy the layer name/flags/user data
   destLayer0->setName(sourceLayer0->name());
+  destLayer0->setFlags(dstFlags);
+  destLayer0->setUserData(sourceLayer0->userData());
 
   if (sourceLayer0->isImage() && destLayer0->isImage()) {
     const LayerImage* sourceLayer = static_cast<const LayerImage*>(sourceLayer0);
     LayerImage* destLayer = static_cast<LayerImage*>(destLayer0);
 
-    // copy cels
+    // Copy blend mode and opacity
+    destLayer->setBlendMode(sourceLayer->blendMode());
+    destLayer->setOpacity(sourceLayer->opacity());
+
+    // Copy cels
     CelConstIterator it = sourceLayer->getCelBegin();
     CelConstIterator end = sourceLayer->getCelEnd();
+
+    std::map<ObjectId, Cel*> linked;
 
     for (; it != end; ++it) {
       const Cel* sourceCel = *it;
       if (sourceCel->frame() > destLayer->sprite()->lastFrame())
         break;
 
-      base::UniquePtr<Cel> newCel(new Cel(*sourceCel));
+      base::UniquePtr<Cel> newCel;
 
-      const Image* sourceImage = sourceCel->image();
-      ASSERT(sourceImage != NULL);
-
-      ImageRef newImage(Image::createCopy(sourceImage));
-      newCel->setImage(newImage);
+      auto it = linked.find(sourceCel->data()->id());
+      if (it != linked.end()) {
+        newCel.reset(Cel::createLink(it->second));
+        newCel->setFrame(sourceCel->frame());
+      }
+      else {
+        newCel.reset(create_cel_copy(sourceCel,
+                                     destLayer->sprite(),
+                                     sourceCel->frame()));
+        linked.insert(std::make_pair(sourceCel->data()->id(), newCel.get()));
+      }
 
       destLayer->addCel(newCel);
       newCel.release();
@@ -404,6 +377,10 @@ Document* Document::duplicate(DuplicateType type) const
   for (frame_t i(0); i < sourceSprite->totalFrames(); ++i)
     spriteCopy->setFrameDuration(i, sourceSprite->frameDuration(i));
 
+  // Copy frame tags
+  for (const FrameTag* tag : sourceSprite->frameTags())
+    spriteCopy->frameTags().add(new FrameTag(*tag));
+
   // Copy color palettes
   {
     PalettesList::const_iterator it = sourceSprite->getPalettes().begin();
@@ -420,10 +397,8 @@ Document* Document::duplicate(DuplicateType type) const
       // Copy the layer folder
       copyLayerContent(sourceSprite->folder(), documentCopy, spriteCopy->folder());
 
-      if (sourceSprite->backgroundLayer() != NULL) {
-        ASSERT(spriteCopy->folder()->getFirstLayer());
-        static_cast<LayerImage*>(spriteCopy->folder()->getFirstLayer())->configureAsBackground();
-      }
+      ASSERT((spriteCopy->backgroundLayer() && sourceSprite->backgroundLayer()) ||
+             (!spriteCopy->backgroundLayer() && !sourceSprite->backgroundLayer()));
       break;
 
     case DuplicateWithFlattenLayers:
@@ -453,79 +428,6 @@ Document* Document::duplicate(DuplicateType type) const
   documentCopy->generateMaskBoundaries();
 
   return documentCopy.release();
-}
-
-//////////////////////////////////////////////////////////////////////
-// Multi-threading ("sprite wrappers" use this)
-
-bool Document::lock(LockType lockType)
-{
-  scoped_lock lock(*m_mutex);
-
-  switch (lockType) {
-
-    case ReadLock:
-      // If no body is writting the sprite...
-      if (!m_write_lock) {
-        // We can read it
-        ++m_read_locks;
-        return true;
-      }
-      break;
-
-    case WriteLock:
-      // If no body is reading and writting...
-      if (m_read_locks == 0 && !m_write_lock) {
-        // We can start writting the sprite...
-        m_write_lock = true;
-        return true;
-      }
-      break;
-
-  }
-
-  return false;
-}
-
-bool Document::lockToWrite()
-{
-  scoped_lock lock(*m_mutex);
-
-  // this only is possible if there are just one reader
-  if (m_read_locks == 1) {
-    ASSERT(!m_write_lock);
-    m_read_locks = 0;
-    m_write_lock = true;
-    return true;
-  }
-  else
-    return false;
-}
-
-void Document::unlockToRead()
-{
-  scoped_lock lock(*m_mutex);
-
-  ASSERT(m_read_locks == 0);
-  ASSERT(m_write_lock);
-
-  m_write_lock = false;
-  m_read_locks = 1;
-}
-
-void Document::unlock()
-{
-  scoped_lock lock(*m_mutex);
-
-  if (m_write_lock) {
-    m_write_lock = false;
-  }
-  else if (m_read_locks > 0) {
-    --m_read_locks;
-  }
-  else {
-    ASSERT(false);
-  }
 }
 
 void Document::onContextChanged()

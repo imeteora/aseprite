@@ -1,53 +1,42 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_EDITOR_VIEW_H_INCLUDED
 #define APP_UI_EDITOR_VIEW_H_INCLUDED
 #pragma once
 
+#include "obs/connection.h"
 #include "ui/view.h"
-#include "app/settings/settings_observers.h"
 
 namespace app {
+  class Editor;
 
-  // TODO hardcoded scroll bar width should be get from skin.xml file
-  const int kEditorViewScrollbarWidth = 6;
-
-  class EditorView : public ui::View,
-                     public GlobalSettingsObserver {
+  class EditorView : public ui::View {
   public:
     enum Type { CurrentEditorMode, AlwaysSelected };
 
+    enum Method { KeepOrigin, KeepCenter };
+    static void SetScrollUpdateMethod(Method method);
+
     EditorView(Type type);
-    ~EditorView();
 
   protected:
     void onPaint(ui::PaintEvent& ev) override;
     void onResize(ui::ResizeEvent& ev) override;
+    void onSetViewScroll(const gfx::Point& pt) override;
+    void onScrollRegion(ui::ScrollRegionEvent& ev) override;
     void onScrollChange() override;
 
-    // GlobalSettingsObserver impl
-    void onSetShowSpriteEditorScrollbars(bool state) override;
-
   private:
+    Editor* editor();
     void setupScrollbars();
 
     Type m_type;
+    obs::scoped_connection m_scrollSettingsConn;
+    static Method g_scrollUpdateMethod;
   };
 
 } // namespace app

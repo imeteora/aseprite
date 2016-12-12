@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_TOOLS_INK_H_INCLUDED
 #define APP_TOOLS_INK_H_INCLUDED
@@ -40,6 +28,12 @@ namespace app {
     public:
       virtual ~Ink() { }
 
+      // Creates a copy of the ink to avoid sharing state between
+      // different ToolLoop implementations. (e.g. PaintInk::m_proc is
+      // set in PaintInk::prepareInk() member function, so we cannot
+      // share the same PaintInk instance.)
+      virtual Ink* clone() = 0;
+
       // Returns true if this ink modifies the selection/mask
       virtual bool isSelection() const { return false; }
 
@@ -56,6 +50,9 @@ namespace app {
       // Returns true if this ink picks colors from the image
       virtual bool isEyedropper() const { return false; }
 
+      // Returns true if this ink is shading
+      virtual bool isShading() const { return false; }
+
       // Returns true if this ink moves the scroll only
       virtual bool isScrollMovement() const { return false; }
 
@@ -67,6 +64,11 @@ namespace app {
 
       // Returns true if this ink is used to mark slices
       virtual bool isSlice() const { return false; }
+
+      // Returns true if inkHline() needs source cel coordinates
+      // instead of sprite coordinates (i.e. relative to
+      // ToolLoop::getCelOrigin()).
+      virtual bool needsCelCoordinates() const { return true; }
 
       // Returns true if this ink needs a special source area.  For
       // example, blur tool needs one extra pixel to all sides of the

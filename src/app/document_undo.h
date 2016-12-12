@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_DOCUMENT_UNDO_H_INCLUDED
 #define APP_DOCUMENT_UNDO_H_INCLUDED
@@ -23,38 +11,34 @@
 #include "base/disable_copying.h"
 #include "base/unique_ptr.h"
 #include "doc/sprite_position.h"
+#include "obs/observable.h"
 #include "undo/undo_history.h"
+
+#include <string>
 
 namespace doc {
   class Context;
 }
 
-namespace undo {
-  class ObjectsContainer;
-  class Undoer;
-}
-
 namespace app {
-  namespace undoers {
-    class CloseGroup;
-  }
-
   using namespace doc;
 
-  class DocumentUndo : public undo::UndoHistoryDelegate {
+  class Cmd;
+  class CmdTransaction;
+  class DocumentUndoObserver;
+
+  class DocumentUndo : public obs::observable<DocumentUndoObserver> {
   public:
     DocumentUndo();
 
     void setContext(doc::Context* ctx);
 
-    bool isEnabled() const { return m_enabled; }
-    void setEnabled(bool state) { m_enabled = state; }
+    void add(CmdTransaction* cmd);
 
     bool canUndo() const;
     bool canRedo() const;
-
-    void doUndo();
-    void doRedo();
+    void undo();
+    void redo();
 
     void clearRedo();
 
@@ -62,40 +46,38 @@ namespace app {
     void markSavedState();
     void impossibleToBackToSavedState();
 
-    // UndoHistoryDelegate implementation.
-    undo::ObjectsContainer* getObjects() const override { return m_objects; }
-    size_t getUndoSizeLimit() const override;
+    std::string nextUndoLabel() const;
+    std::string nextRedoLabel() const;
 
-    void pushUndoer(undo::Undoer* undoer);
+    SpritePosition nextUndoSpritePosition() const;
+    SpritePosition nextRedoSpritePosition() const;
 
-    bool implantUndoerInLastGroup(undo::Undoer* undoer);
+    Cmd* lastExecutedCmd() const;
 
-    const char* getNextUndoLabel() const;
-    const char* getNextRedoLabel() const;
+    int* savedCounter() { return &m_savedCounter; }
 
-    SpritePosition getNextUndoSpritePosition() const;
-    SpritePosition getNextRedoSpritePosition() const;
+    const undo::UndoState* firstState() const { return m_undoHistory.firstState(); }
+    const undo::UndoState* currentState() const { return m_undoHistory.currentState(); }
 
-    undo::UndoersCollector* getDefaultUndoersCollector() {
-      return m_undoHistory;
-    }
+    void moveToState(const undo::UndoState* state);
 
   private:
-    undoers::CloseGroup* getNextUndoGroup() const;
-    undoers::CloseGroup* getNextRedoGroup() const;
+    const undo::UndoState* nextUndo() const;
+    const undo::UndoState* nextRedo() const;
 
-    // Collection of objects used by UndoHistory to reference deleted
-    // objects that are re-created by an Undoer. The container keeps an
-    // ID that is saved in the serialization process, and loaded in the
-    // deserialization process. The ID can be used by different undoers
-    // to keep references to deleted objects.
-    base::UniquePtr<undo::ObjectsContainer> m_objects;
-
-    // Stack of undoers to undo operations.
-    base::UniquePtr<undo::UndoHistory> m_undoHistory;
-
-    bool m_enabled;
+    undo::UndoHistory m_undoHistory;
     doc::Context* m_ctx;
+
+    // This counter is equal to 0 if we are in the "saved state", i.e.
+    // the document on memory is equal to the document on disk. This
+    // value is less than 0 if we're in a past version of the document
+    // (due undoes), or greater than 0 if we are in a future version
+    // (due redoes).
+    int m_savedCounter;
+
+    // True if the saved state was invalidated/corrupted/lost in some
+    // way. E.g. If the save process fails.
+    bool m_savedStateIsLost;
 
     DISABLE_COPYING(DocumentUndo);
   };

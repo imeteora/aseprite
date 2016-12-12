@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -23,17 +11,14 @@
 #include "app/commands/command.h"
 #include "app/context_access.h"
 #include "app/document_api.h"
-#include "app/find_widget.h"
-#include "app/load_widget.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
-#include "app/settings/settings.h"
 #include "app/ui/button_set.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/select_box_state.h"
 #include "app/ui/skin/skin_theme.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "base/bind.h"
 #include "base/unique_ptr.h"
 #include "doc/image.h"
@@ -41,7 +26,7 @@
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
-#include "generated_canvas_size.h"
+#include "canvas_size.xml.h"
 
 namespace app {
 
@@ -63,9 +48,12 @@ public:
   CanvasSizeWindow()
     : m_editor(current_editor)
     , m_rect(0, 0, current_editor->sprite()->width(), current_editor->sprite()->height())
-    , m_selectBoxState(new SelectBoxState(this, m_rect,
-        SelectBoxState::PaintRulers |
-        SelectBoxState::PaintDarkOutside)) {
+    , m_selectBoxState(
+      new SelectBoxState(
+        this, m_rect,
+        SelectBoxState::Flags(
+          int(SelectBoxState::Flags::Rulers) |
+          int(SelectBoxState::Flags::DarkOutside)))) {
     setWidth(m_rect.w);
     setHeight(m_rect.h);
     setLeft(0);
@@ -73,13 +61,13 @@ public:
     setTop(0);
     setBottom(0);
 
-    width() ->EntryChange.connect(Bind<void>(&CanvasSizeWindow::onSizeChange, this));
-    height()->EntryChange.connect(Bind<void>(&CanvasSizeWindow::onSizeChange, this));
-    dir()   ->ItemChange.connect(Bind<void>(&CanvasSizeWindow::onDirChange, this));;
-    left()  ->EntryChange.connect(Bind<void>(&CanvasSizeWindow::onBorderChange, this));
-    right() ->EntryChange.connect(Bind<void>(&CanvasSizeWindow::onBorderChange, this));
-    top()   ->EntryChange.connect(Bind<void>(&CanvasSizeWindow::onBorderChange, this));
-    bottom()->EntryChange.connect(Bind<void>(&CanvasSizeWindow::onBorderChange, this));
+    width() ->Change.connect(base::Bind<void>(&CanvasSizeWindow::onSizeChange, this));
+    height()->Change.connect(base::Bind<void>(&CanvasSizeWindow::onSizeChange, this));
+    dir()   ->ItemChange.connect(base::Bind<void>(&CanvasSizeWindow::onDirChange, this));;
+    left()  ->Change.connect(base::Bind<void>(&CanvasSizeWindow::onBorderChange, this));
+    right() ->Change.connect(base::Bind<void>(&CanvasSizeWindow::onBorderChange, this));
+    top()   ->Change.connect(base::Bind<void>(&CanvasSizeWindow::onBorderChange, this));
+    bottom()->Change.connect(base::Bind<void>(&CanvasSizeWindow::onBorderChange, this));
 
     m_editor->setState(m_selectBoxState);
 
@@ -91,24 +79,28 @@ public:
     m_editor->backToPreviousState();
   }
 
-  bool pressedOk() { return getKiller() == ok(); }
+  bool pressedOk() { return closer() == ok(); }
 
-  int getWidth()  { return width()->getTextInt(); }
-  int getHeight() { return height()->getTextInt(); }
-  int getLeft()   { return left()->getTextInt(); }
-  int getRight()  { return right()->getTextInt(); }
-  int getTop()    { return top()->getTextInt(); }
-  int getBottom() { return bottom()->getTextInt(); }
+  int getWidth()  { return width()->textInt(); }
+  int getHeight() { return height()->textInt(); }
+  int getLeft()   { return left()->textInt(); }
+  int getRight()  { return right()->textInt(); }
+  int getTop()    { return top()->textInt(); }
+  int getBottom() { return bottom()->textInt(); }
 
 protected:
 
   // SelectBoxDelegate impleentation
-  virtual void onChangeRectangle(const gfx::Rect& rect) override {
+  void onChangeRectangle(const gfx::Rect& rect) override {
     m_rect = rect;
 
     updateSizeFromRect();
     updateBorderFromRect();
     updateIcons();
+  }
+
+  std::string onGetContextBarHelp() override {
+    return "Select new canvas size";
   }
 
   void onSizeChange() {
@@ -221,44 +213,44 @@ private:
   }
 
   void updateIcons() {
-    SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
+    SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
 
     int sel = dir()->selectedItem();
 
     int c = 0;
     for (int v=0; v<3; ++v) {
       for (int u=0; u<3; ++u) {
-        const char* iconId = "canvas_empty";
+        SkinPartPtr icon = theme->parts.canvasEmpty();
 
         if (c == sel) {
-          iconId = "canvas_c";
+          icon = theme->parts.canvasC();
         }
         else if (u+1 < 3 && (u+1)+3*v == sel) {
-          iconId = "canvas_w";
+          icon = theme->parts.canvasW();
         }
         else if (u-1 >= 0 && (u-1)+3*v == sel) {
-          iconId = "canvas_e";
+          icon = theme->parts.canvasE();
         }
         else if (v+1 < 3 && u+3*(v+1) == sel) {
-          iconId = "canvas_n";
+          icon = theme->parts.canvasN();
         }
         else if (v-1 >= 0 && u+3*(v-1) == sel) {
-          iconId = "canvas_s";
+          icon = theme->parts.canvasS();
         }
         else if (u+1 < 3 && v+1 < 3 && (u+1)+3*(v+1) == sel) {
-          iconId = "canvas_nw";
+          icon = theme->parts.canvasNw();
         }
         else if (u-1 >= 0 && v+1 < 3 && (u-1)+3*(v+1) == sel) {
-          iconId = "canvas_ne";
+          icon = theme->parts.canvasNe();
         }
         else if (u+1 < 3 && v-1 >= 0 && (u+1)+3*(v-1) == sel) {
-          iconId = "canvas_sw";
+          icon = theme->parts.canvasSw();
         }
         else if (u-1 >= 0 && v-1 >= 0 && (u-1)+3*(v-1) == sel) {
-          iconId = "canvas_se";
+          icon = theme->parts.canvasSe();
         }
 
-        dir()->getItem(c)->setIcon(theme->get_part(iconId));
+        dir()->getItem(c)->setIcon(icon);
         ++c;
       }
     }
@@ -284,8 +276,8 @@ public:
   Command* clone() const override { return new CanvasSizeCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 CanvasSizeCommand::CanvasSizeCommand()
@@ -307,7 +299,7 @@ void CanvasSizeCommand::onExecute(Context* context)
   const ContextReader reader(context);
   const Sprite* sprite(reader.sprite());
 
-  if (context->isUiAvailable()) {
+  if (context->isUIAvailable()) {
     // load the window widget
     base::UniquePtr<CanvasSizeWindow> window(new CanvasSizeWindow());
 
@@ -342,11 +334,11 @@ void CanvasSizeCommand::onExecute(Context* context)
     ContextWriter writer(reader);
     Document* document = writer.document();
     Sprite* sprite = writer.sprite();
-    UndoTransaction undoTransaction(writer.context(), "Canvas Size");
-    DocumentApi api = document->getApi();
+    Transaction transaction(writer.context(), "Canvas Size");
+    DocumentApi api = document->getApi(transaction);
 
     api.cropSprite(sprite, gfx::Rect(x1, y1, x2-x1, y2-y1));
-    undoTransaction.commit();
+    transaction.commit();
 
     document->generateMaskBoundaries();
     update_screen_for_document(document);

@@ -1,33 +1,27 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_DOCUMENT_EXPORTER_H_INCLUDED
 #define APP_DOCUMENT_EXPORTER_H_INCLUDED
 #pragma once
 
+#include "app/sprite_sheet_type.h"
 #include "base/disable_copying.h"
+#include "doc/image_buffer.h"
+#include "doc/object_id.h"
 #include "gfx/fwd.h"
 
 #include <iosfwd>
-#include <vector>
+#include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace doc {
+  class FrameTag;
   class Image;
   class Layer;
 }
@@ -38,8 +32,9 @@ namespace app {
   class DocumentExporter {
   public:
     enum DataFormat {
-      JsonDataFormat,
-      DefaultDataFormat = JsonDataFormat
+      JsonHashDataFormat,
+      JsonArrayDataFormat,
+      DefaultDataFormat = JsonHashDataFormat
     };
 
     enum TextureFormat {
@@ -53,51 +48,32 @@ namespace app {
 
     DocumentExporter();
 
-    void setDataFormat(DataFormat format) {
-      m_dataFormat = format;
+    void setDataFormat(DataFormat format) { m_dataFormat = format; }
+    void setDataFilename(const std::string& filename) { m_dataFilename = filename; }
+    void setTextureFormat(TextureFormat format) { m_textureFormat = format; }
+    void setTextureFilename(const std::string& filename) { m_textureFilename = filename; }
+    void setTextureWidth(int width) { m_textureWidth = width; }
+    void setTextureHeight(int height) { m_textureHeight = height; }
+    void setSpriteSheetType(SpriteSheetType type) { m_sheetType = type; }
+    void setScale(double scale) { m_scale = scale; }
+    void setScaleMode(ScaleMode mode) { m_scaleMode = mode; }
+    void setIgnoreEmptyCels(bool ignore) { m_ignoreEmptyCels = ignore; }
+    void setBorderPadding(int padding) { m_borderPadding = padding; }
+    void setShapePadding(int padding) { m_shapePadding = padding; }
+    void setInnerPadding(int padding) { m_innerPadding = padding; }
+    void setTrimCels(bool trim) { m_trimCels = trim; }
+    void setFilenameFormat(const std::string& format) { m_filenameFormat = format; }
+    void setListFrameTags(bool value) { m_listFrameTags = value; }
+    void setListLayers(bool value) { m_listLayers = value; }
+
+    void addDocument(Document* document,
+                     doc::Layer* layer = nullptr,
+                     doc::FrameTag* tag = nullptr,
+                     bool temporalTag = false) {
+      m_documents.push_back(Item(document, layer, tag, temporalTag));
     }
 
-    void setDataFilename(const std::string& filename) {
-      m_dataFilename = filename;
-    }
-
-    void setTextureFormat(TextureFormat format) {
-      m_textureFormat = format;
-    }
-
-    void setTextureFilename(const std::string& filename) {
-      m_textureFilename = filename;
-    }
-
-    void setTextureWidth(int width) {
-      m_textureWidth = width;
-    }
-
-    void setTextureHeight(int height) {
-      m_textureHeight = height;
-    }
-
-    void setTexturePack(bool state) {
-      m_texturePack = state;
-    }
-
-    void setScale(double scale) {
-      m_scale = scale;
-    }
-
-    void setScaleMode(ScaleMode mode) {
-      m_scaleMode = mode;
-    }
-
-    void setIgnoreEmptyCels(bool ignore) {
-      m_ignoreEmptyCels = ignore;
-    }
-
-    void addDocument(Document* document, doc::Layer* layer = NULL) {
-      m_documents.push_back(Item(document, layer));
-    }
-
-    void exportSheet();
+    Document* exportSheet();
 
   private:
     class Sample;
@@ -116,9 +92,20 @@ namespace app {
     public:
       Document* doc;
       doc::Layer* layer;
-      Item(Document* doc, doc::Layer* layer)
-        : doc(doc), layer(layer) {
+      doc::FrameTag* frameTag;
+      bool temporalTag;
+
+      Item(Document* doc,
+           doc::Layer* layer,
+           doc::FrameTag* frameTag,
+           bool temporalTag)
+        : doc(doc), layer(layer), frameTag(frameTag)
+        , temporalTag(temporalTag) {
       }
+
+      int frames() const;
+      int fromFrame() const;
+      int toFrame() const;
     };
     typedef std::vector<Item> Items;
 
@@ -128,11 +115,24 @@ namespace app {
     std::string m_textureFilename;
     int m_textureWidth;
     int m_textureHeight;
-    bool m_texturePack;
+    SpriteSheetType m_sheetType;
     double m_scale;
     ScaleMode m_scaleMode;
     bool m_ignoreEmptyCels;
+    int m_borderPadding;
+    int m_shapePadding;
+    int m_innerPadding;
+    bool m_trimCels;
     Items m_documents;
+    std::string m_filenameFormat;
+    doc::ImageBufferPtr m_sampleRenderBuf;
+    bool m_listFrameTags;
+    bool m_listLayers;
+
+    // Displacement for each tag from/to frames in case we export
+    // them. It's used in case we trim frames outside tags and they
+    // will not be exported at all in the final result.
+    std::map<doc::ObjectId, std::pair<int, int> > m_tagDelta;
 
     DISABLE_COPYING(DocumentExporter);
   };

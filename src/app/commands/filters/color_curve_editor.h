@@ -1,27 +1,15 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_COMMANDS_FILTERS_COLOR_CURVE_EDITOR_H_INCLUDED
 #define APP_COMMANDS_FILTERS_COLOR_CURVE_EDITOR_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
 #include "gfx/point.h"
+#include "obs/signal.h"
 #include "ui/widget.h"
 
 namespace filters {
@@ -37,11 +25,11 @@ namespace app {
 
     ColorCurve* getCurve() const { return m_curve; }
 
-    Signal0<void> CurveEditorChange;
+    obs::signal<void()> CurveEditorChange;
 
   protected:
     bool onProcessMessage(ui::Message* msg) override;
-    void onPreferredSize(ui::PreferredSizeEvent& ev) override;
+    void onSizeHint(ui::SizeHintEvent& ev) override;
     void onPaint(ui::PaintEvent& ev) override;
 
   private:
@@ -50,10 +38,13 @@ namespace app {
     gfx::Point viewToClient(const gfx::Point& viewPt);
     gfx::Point screenToView(const gfx::Point& screenPt);
     gfx::Point clientToView(const gfx::Point& clientPt);
+    void addPoint(const gfx::Point& viewPoint);
+    void removePoint(gfx::Point* viewPoint);
 
     ColorCurve* m_curve;
     int m_status;
     gfx::Rect m_viewBounds;
+    gfx::Point* m_hotPoint;
     gfx::Point* m_editPoint;
   };
 

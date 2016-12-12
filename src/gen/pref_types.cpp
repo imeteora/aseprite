@@ -1,12 +1,12 @@
 // Aseprite Code Generator
-// Copyright (c) 2014 David Capello
+// Copyright (c) 2014-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
 
 #include "base/exception.h"
 #include "base/file_handle.h"
-#include "base/path.h"
+#include "base/fs.h"
 #include "base/split_string.h"
 #include "base/string.h"
 #include "gen/common.h"
@@ -21,12 +21,11 @@ typedef std::vector<TiXmlElement*> XmlElements;
 static void print_pref_class_def(TiXmlElement* elem, const std::string& className, const char* section, int indentSpaces)
 {
   std::string indent(indentSpaces, ' ');
-  std::cout 
+  std::cout
     << "\n"
-    << indent << "class " << className << " {\n"
-    << indent << "  std::string m_section;\n"
+    << indent << "class " << className << " : public Section {\n"
     << indent << "public:\n"
-    << indent << "  " << className << "(const std::string& section);\n";
+    << indent << "  " << className << "(const std::string& name);\n";
 
   std::cout
     << indent << "  void load();\n"
@@ -65,12 +64,12 @@ static void print_pref_class_impl(TiXmlElement* elem, const std::string& prefix,
 {
   std::cout
     << "\n"
-    << prefix << className << "::" << className << "(const std::string& section)\n";
+    << prefix << className << "::" << className << "(const std::string& name)\n";
 
   if (section)
-    std::cout << "  : m_section((!section.empty() ? section + \".\": section) + \"" << section << "\")\n";
+    std::cout << "  : Section(std::string(!name.empty() ? name + \".\": \"\") + \"" << section << "\")\n";
   else
-    std::cout << "  : m_section(section)\n";
+    std::cout << "  : Section(name)\n";
 
   TiXmlElement* child = (elem->FirstChild() ? elem->FirstChild()->ToElement(): NULL);
   while (child) {
@@ -83,7 +82,7 @@ static void print_pref_class_impl(TiXmlElement* elem, const std::string& prefix,
         if (!childId) throw std::runtime_error("missing 'id' attr in <option>");
         std::string memberName = convert_xmlid_to_cppid(childId, false);
         std::cout << "  , "
-                  << memberName << "(m_section.c_str(), \"" << childId << "\"";
+                  << memberName << "(this, \"" << childId << "\"";
         if (child->Attribute("default"))
           std::cout << ", " << child->Attribute("default");
         std::cout << ")\n";
@@ -91,17 +90,17 @@ static void print_pref_class_impl(TiXmlElement* elem, const std::string& prefix,
       else if (name == "section") {
         if (!childId) throw std::runtime_error("missing 'id' attr in <option>");
         std::string memberName = convert_xmlid_to_cppid(childId, false);
-        std::cout << "  , " << memberName << "(m_section)\n";
+        std::cout << "  , " << memberName << "(name)\n";
       }
     }
     child = child->NextSiblingElement();
   }
 
-  std::cout 
+  std::cout
     << "{\n"
     << "}\n";
 
-  std::cout 
+  std::cout
     << "\n"
     << "void " << prefix << className << "::load()\n"
     << "{\n";
@@ -135,7 +134,7 @@ static void print_pref_class_impl(TiXmlElement* elem, const std::string& prefix,
     child = child->NextSiblingElement();
   }
 
-  std::cout 
+  std::cout
     << "}\n"
     << "\n"
     << "void " << prefix << className << "::save()\n"
@@ -157,7 +156,7 @@ static void print_pref_class_impl(TiXmlElement* elem, const std::string& prefix,
     child = child->NextSiblingElement();
   }
 
-  std::cout 
+  std::cout
     << "}\n";
 
   child = (elem->FirstChild() ? elem->FirstChild()->ToElement(): NULL);
@@ -178,16 +177,11 @@ void gen_pref_header(TiXmlDocument* doc, const std::string& inputFn)
   std::cout
     << "// Don't modify, generated file from " << inputFn << "\n"
     << "\n";
-  
+
   std::cout
     << "#ifndef GENERATED_PREF_TYPES_H_INCLUDED\n"
     << "#define GENERATED_PREF_TYPES_H_INCLUDED\n"
     << "#pragma once\n"
-    << "\n"
-    << "#include \"app/color.h\"\n"
-    << "#include \"app/pref/option.h\"\n"
-    << "#include \"doc/frame.h\"\n"
-    << "#include \"gfx/rect.h\"\n"
     << "\n"
     << "#include <string>\n"
     << "\n"
@@ -256,9 +250,8 @@ void gen_pref_impl(TiXmlDocument* doc, const std::string& inputFn)
     << "#include \"config.h\"\n"
     << "#endif\n"
     << "\n"
-    << "#include \"generated_pref_types.h\"\n"
-    << "\n"
     << "#include \"app/pref/option_io.h\"\n"
+    << "#include \"app/pref/preferences.h\"\n"
     << "\n"
     << "namespace app {\n"
     << "namespace gen {\n";

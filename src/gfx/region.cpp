@@ -1,5 +1,5 @@
 // Aseprite Gfx Library
-// Copyright (C) 2001-2013 David Capello
+// Copyright (C) 2001-2013, 2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,16 +10,14 @@
 
 #include <pixman.h>
 
-#include "gfx/region.h"
 #include "gfx/point.h"
-#include <limits>
-#include <cassert>
+#include "gfx/region.h"
 
-#include <stdlib.h>
-#include <limits.h>
-#include <string.h>
-#include <stdio.h>
-  
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 namespace gfx {
 
 inline Rect to_rect(const pixman_box32& extends)
@@ -109,7 +107,7 @@ Rect Region::bounds() const
   return to_rect(*pixman_region32_extents(&m_region));
 }
 
-size_t Region::size() const
+std::size_t Region::size() const
 {
   return pixman_region32_n_rects(&m_region);
 }
@@ -155,9 +153,9 @@ bool Region::contains(const PointT<int>& pt) const
 Region::Overlap Region::contains(const Rect& rect) const
 {
   static_assert(
-    Out   == PIXMAN_REGION_OUT &&
-    In    == PIXMAN_REGION_IN &&
-    Part  == PIXMAN_REGION_PART, "Pixman constants have changed");
+    int(Out)   == int(PIXMAN_REGION_OUT) &&
+    int(In)    == int(PIXMAN_REGION_IN) &&
+    int(Part)  == int(PIXMAN_REGION_PART), "Pixman constants have changed");
 
   pixman_box32 box = { rect.x, rect.y, rect.x2(), rect.y2() };
   return (Region::Overlap)pixman_region32_contains_rectangle(&m_region, &box);

@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,34 +12,48 @@
 #include <string>
 
 #include "app/ui/hex_color_entry.h"
+#include "base/hex.h"
 #include "gfx/border.h"
+#include "ui/message.h"
 #include "ui/theme.h"
 
 namespace app {
 
 using namespace ui;
 
-static inline bool is_hex_digit(char digit)
+HexColorEntry::CustomEntry::CustomEntry()
+  : Entry(16, "")
 {
-  return ((digit >= '0' && digit <= '9') ||
-          (digit >= 'a' && digit <= 'f') ||
-          (digit >= 'A' && digit <= 'F'));
+}
+
+bool HexColorEntry::CustomEntry::onProcessMessage(ui::Message* msg)
+{
+  switch (msg->type()) {
+    case kMouseDownMessage:
+      setFocusStop(true);
+      requestFocus();
+      break;
+    case kFocusLeaveMessage:
+      setFocusStop(false);
+      break;
+  }
+  return Entry::onProcessMessage(msg);
 }
 
 HexColorEntry::HexColorEntry()
-  : Box(JI_HORIZONTAL)
+  : Box(HORIZONTAL)
   , m_label("#")
-  , m_entry(16, "")
 {
   addChild(&m_label);
   addChild(&m_entry);
 
-  m_entry.EntryChange.connect(&HexColorEntry::onEntryChange, this);
+  m_entry.Change.connect(&HexColorEntry::onEntryChange, this);
+  m_entry.setFocusStop(false);
 
   initTheme();
 
   setBorder(gfx::Border(2*guiscale(), 0, 0, 0));
-  child_spacing = 0;
+  setChildSpacing(0);
 }
 
 void HexColorEntry::setColor(const app::Color& color)
@@ -64,11 +66,11 @@ void HexColorEntry::setColor(const app::Color& color)
 
 void HexColorEntry::onEntryChange()
 {
-  std::string text = m_entry.getText();
+  std::string text = m_entry.text();
   int r, g, b;
 
   // Remove non hex digits
-  while (text.size() > 0 && !is_hex_digit(text[0]))
+  while (text.size() > 0 && !base::is_hex_digit(text[0]))
     text.erase(0, 1);
 
   // Fill with zeros at the end of the text

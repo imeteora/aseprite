@@ -1,27 +1,12 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-
-#include <stdlib.h>
-#include <string.h>
 
 #include "app/app.h"
 #include "app/commands/filters/filter_manager_impl.h"
@@ -30,18 +15,20 @@
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/ui/editor/editor.h"
-#include "app/ui/status_bar.h"
 #include "base/mutex.h"
 #include "base/scoped_lock.h"
 #include "base/thread.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace app {
 
 using namespace base;
 using namespace ui;
-  
+
 static const int kMonitoringPeriod = 100;
 
 // Applies filters in two threads: a background worker thread to
@@ -75,7 +62,6 @@ private:
   bool m_cancelled;             // Was the effect cancelled by the user?
   bool m_abort;                 // An exception was thrown
   ui::Timer m_timer;            // Monitoring timer to update the progress-bar
-  Progress* m_progressBar;      // The progress-bar.
   AlertPtr m_alertWindow;       // Alert for the user to cancel the filter-progress if he wants.
   std::string m_error;
 };
@@ -91,10 +77,9 @@ FilterWorker::FilterWorker(FilterManagerImpl* filterMgr)
   m_cancelled = false;
   m_abort = false;
 
-  m_progressBar = StatusBar::instance()->addProgress();
-
   m_alertWindow = ui::Alert::create(PACKAGE
     "<<Applying effect...||&Cancel");
+  m_alertWindow->addProgress();
 
   m_timer.Tick.connect(&FilterWorker::onMonitoringTick, this);
   m_timer.start();
@@ -102,10 +87,8 @@ FilterWorker::FilterWorker(FilterManagerImpl* filterMgr)
 
 FilterWorker::~FilterWorker()
 {
-  if (m_alertWindow != NULL)
+  if (m_alertWindow)
     m_alertWindow->closeWindow(NULL);
-
-  delete m_progressBar;
 }
 
 void FilterWorker::run()
@@ -184,8 +167,8 @@ void FilterWorker::onMonitoringTick()
 {
   scoped_lock lock(m_mutex);
 
-  if (m_progressBar)
-    m_progressBar->setPos(m_pos);
+  if (m_alertWindow)
+    m_alertWindow->setProgress(m_pos);
 
   if (m_done || m_abort)
     m_alertWindow->closeWindow(NULL);

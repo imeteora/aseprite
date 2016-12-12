@@ -1,25 +1,15 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
+#include "app/app.h"
+#include "app/cmd/shift_masked_cel.h"
 #include "app/commands/cmd_move_mask.h"
 #include "app/commands/command.h"
 #include "app/commands/params.h"
@@ -27,11 +17,11 @@
 #include "app/document_api.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
-#include "app/settings/document_settings.h"
-#include "app/settings/settings.h"
+#include "app/pref/preferences.h"
+#include "app/transaction.h"
+#include "app/ui/document_view.h"
 #include "app/ui/editor/editor.h"
-#include "app/undo_transaction.h"
-#include "app/undoers/set_mask_position.h"
+#include "app/ui_context.h"
 #include "base/convert_to.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -46,19 +36,19 @@ MoveMaskCommand::MoveMaskCommand()
 {
 }
 
-void MoveMaskCommand::onLoadParams(Params* params)
+void MoveMaskCommand::onLoadParams(const Params& params)
 {
-  std::string target = params->get("target");
+  std::string target = params.get("target");
   if (target == "boundaries") m_target = Boundaries;
   else if (target == "content") m_target = Content;
 
-  std::string direction = params->get("direction");
+  std::string direction = params.get("direction");
   if (direction == "left") m_direction = Left;
   else if (direction == "right") m_direction = Right;
   else if (direction == "up") m_direction = Up;
   else if (direction == "down") m_direction = Down;
 
-  std::string units = params->get("units");
+  std::string units = params.get("units");
   if (units == "pixel") m_units = Pixel;
   else if (units == "tile-width") m_units = TileWidth;
   else if (units == "tile-height") m_units = TileHeight;
@@ -68,22 +58,86 @@ void MoveMaskCommand::onLoadParams(Params* params)
   else if (units == "viewport-width") m_units = ViewportWidth;
   else if (units == "viewport-height") m_units = ViewportHeight;
 
-  int quantity = params->get_as<int>("quantity");
+  int quantity = params.get_as<int>("quantity");
   m_quantity = std::max<int>(1, quantity);
+
+  if (params.has_param("wrap"))
+    m_wrap = params.get_as<bool>("wrap");
+  else
+    m_wrap = false;
 }
 
 bool MoveMaskCommand::onEnabled(Context* context)
 {
-  return context->checkFlags(ContextFlags::HasActiveDocument |
-                             ContextFlags::HasVisibleMask);
+  switch (m_target) {
+
+    case Boundaries:
+      return context->checkFlags(ContextFlags::HasActiveDocument |
+                                 ContextFlags::HasVisibleMask);
+
+    case Content:
+      if (m_wrap)
+        return context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
+                                   ContextFlags::HasVisibleMask |
+                                   ContextFlags::HasActiveImage);
+      else
+        return (current_editor ? true: false);
+
+  }
+
+  return false;
 }
 
 void MoveMaskCommand::onExecute(Context* context)
 {
-  IDocumentSettings* docSettings = context->settings()->getDocumentSettings(context->activeDocument());
-  ui::View* view = ui::View::getView(current_editor);
-  gfx::Rect vp = view->getViewportBounds();
-  gfx::Rect gridBounds = docSettings->getGridBounds();
+  gfx::Point delta = getDelta(context);
+
+  switch (m_target) {
+
+    case Boundaries: {
+      ContextWriter writer(context);
+      Document* document(writer.document());
+      {
+        Transaction transaction(writer.context(), "Move Selection", DoesntModifyDocument);
+        gfx::Point pt = document->mask()->bounds().origin();
+        document->getApi(transaction).setMaskPosition(pt.x+delta.x, pt.y+delta.y);
+        transaction.commit();
+      }
+
+      document->generateMaskBoundaries();
+      update_screen_for_document(document);
+      break;
+    }
+
+    case Content:
+      if (m_wrap) {
+        ContextWriter writer(context);
+        if (writer.cel()) {
+          // Rotate content
+          Transaction transaction(writer.context(), "Shift Pixels");
+          transaction.execute(new cmd::ShiftMaskedCel(writer.cel(), delta.x, delta.y));
+          transaction.commit();
+        }
+        update_screen_for_document(writer.document());
+      }
+      else {
+        current_editor->startSelectionTransformation(delta, 0.0);
+      }
+      break;
+
+  }
+}
+
+gfx::Point MoveMaskCommand::getDelta(Context* context) const
+{
+  DocumentView* view = static_cast<UIContext*>(context)->activeView();
+  if (!view)
+    return gfx::Point(0, 0);
+
+  DocumentPreferences& docPref = Preferences::instance().document(view->document());
+  Editor* editor = view->editor();
+  gfx::Rect vp = view->viewWidget()->viewportBounds();
+  gfx::Rect gridBounds = docPref.grid.bounds();
   int dx = 0;
   int dy = 0;
   int pixels = 0;
@@ -99,13 +153,13 @@ void MoveMaskCommand::onExecute(Context* context)
       pixels = gridBounds.h;
       break;
     case ZoomedPixel:
-      pixels = current_editor->zoom().apply(1);
+      pixels = editor->zoom().apply(1);
       break;
     case ZoomedTileWidth:
-      pixels = current_editor->zoom().apply(gridBounds.w);
+      pixels = editor->zoom().apply(gridBounds.w);
       break;
     case ZoomedTileHeight:
-      pixels = current_editor->zoom().apply(gridBounds.h);
+      pixels = editor->zoom().apply(gridBounds.h);
       break;
     case ViewportWidth:
       pixels = vp.h;
@@ -122,29 +176,7 @@ void MoveMaskCommand::onExecute(Context* context)
     case Down:  dy = +m_quantity * pixels; break;
   }
 
-  switch (m_target) {
-
-    case Boundaries: {
-      ContextWriter writer(context);
-      Document* document(writer.document());
-      {
-        UndoTransaction undo(writer.context(), "Move Selection", undo::DoesntModifyDocument);
-        gfx::Point pt = document->mask()->bounds().getOrigin();
-        document->getApi().setMaskPosition(pt.x+dx, pt.y+dy);
-        undo.commit();
-      }
-
-      document->generateMaskBoundaries();
-      update_screen_for_document(document);
-      break;
-    }
-
-    case Content: {
-      current_editor->startSelectionTransformation(gfx::Point(dx, dy));
-      break;
-    }
-
-  }
+  return gfx::Point(dx, dy);
 }
 
 std::string MoveMaskCommand::onGetFriendlyName() const

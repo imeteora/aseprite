@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -28,7 +16,6 @@
 #include "app/file/file_format.h"
 #include "app/file/format_options.h"
 #include "app/find_widget.h"
-#include "app/ini_file.h"
 #include "app/ini_file.h"
 #include "app/load_widget.h"
 #include "base/file_handle.h"
@@ -53,9 +40,10 @@ class JpegFormat : public FileFormat {
     float quality;              // 1.0 maximum quality.
   };
 
-  const char* onGetName() const { return "jpeg"; }
-  const char* onGetExtensions() const { return "jpeg,jpg"; }
-  int onGetFlags() const {
+  const char* onGetName() const override { return "jpeg"; }
+  const char* onGetExtensions() const override { return "jpeg,jpg"; }
+  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::JPEG_IMAGE; }
+  int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
       FILE_SUPPORT_SAVE |
@@ -70,7 +58,7 @@ class JpegFormat : public FileFormat {
   bool onSave(FileOp* fop) override;
 #endif
 
-  SharedPtr<FormatOptions> onGetFormatOptions(FileOp* fop) override;
+  base::SharedPtr<FormatOptions> onGetFormatOptions(FileOp* fop) override;
 };
 
 FileFormat* CreateJpegFormat()
@@ -101,10 +89,10 @@ static void output_message(j_common_ptr cinfo)
   (*cinfo->err->format_message)(cinfo, buffer);
 
   // Put in the log file if.
-  PRINTF("JPEG library: \"%s\"\n", buffer);
+  LOG(ERROR) << "JPEG: \"" << buffer << "\"\n";
 
   // Leave the message for the application.
-  fop_error(((struct error_mgr *)cinfo->err)->fop, "%s\n", buffer);
+  ((struct error_mgr *)cinfo->err)->fop->setError("%s\n", buffer);
 }
 
 bool JpegFormat::onLoad(FileOp* fop)
@@ -116,7 +104,8 @@ bool JpegFormat::onLoad(FileOp* fop)
   JDIMENSION buffer_height;
   int c;
 
-  FileHandle file(open_file_with_exception(fop->filename, "rb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "rb"));
+  FILE* file = handle.get();
 
   // Initialize the JPEG decompression object with error handling.
   jerr.fop = fop;
@@ -148,11 +137,11 @@ bool JpegFormat::onLoad(FileOp* fop)
   jpeg_start_decompress(&cinfo);
 
   // Create the image.
-  Image* image = fop_sequence_image(fop,
-                                    (cinfo.out_color_space == JCS_RGB ? IMAGE_RGB:
-                                                                        IMAGE_GRAYSCALE),
-                                    cinfo.output_width,
-                                    cinfo.output_height);
+  Image* image = fop->sequenceImage(
+    (cinfo.out_color_space == JCS_RGB ? IMAGE_RGB:
+                                        IMAGE_GRAYSCALE),
+    cinfo.output_width,
+    cinfo.output_height);
   if (!image) {
     jpeg_destroy_decompress(&cinfo);
     return false;
@@ -181,7 +170,7 @@ bool JpegFormat::onLoad(FileOp* fop)
   // Generate a grayscale palette if is necessary.
   if (image->pixelFormat() == IMAGE_GRAYSCALE)
     for (c=0; c<256; c++)
-      fop_sequence_set_color(fop, c, c, c, c);
+      fop->sequenceSetColor(c, c, c, c);
 
   // Read each scan line.
   while (cinfo.output_scanline < cinfo.output_height) {
@@ -224,8 +213,8 @@ bool JpegFormat::onLoad(FileOp* fop)
       }
     }
 
-    fop_progress(fop, (float)(cinfo.output_scanline+1) / (float)(cinfo.output_height));
-    if (fop_is_stop(fop))
+    fop->setProgress((float)(cinfo.output_scanline+1) / (float)(cinfo.output_height));
+    if (fop->isStop())
       break;
   }
 
@@ -245,14 +234,16 @@ bool JpegFormat::onSave(FileOp* fop)
 {
   struct jpeg_compress_struct cinfo;
   struct error_mgr jerr;
-  Image *image = fop->seq.image;
+  const Image* image = fop->sequenceImage();
   JSAMPARRAY buffer;
   JDIMENSION buffer_height;
-  SharedPtr<JpegOptions> jpeg_options = fop->seq.format_options;
+  const base::SharedPtr<JpegOptions> jpeg_options =
+    fop->sequenceGetFormatOptions();
   int c;
 
   // Open the file for write in it.
-  FileHandle file(open_file_with_exception(fop->filename, "wb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FILE* file = handle.get();
 
   // Allocate and initialize JPEG compression object.
   jerr.fop = fop;
@@ -287,7 +278,7 @@ bool JpegFormat::onSave(FileOp* fop)
   buffer_height = 1;
   buffer = (JSAMPARRAY)base_malloc(sizeof(JSAMPROW) * buffer_height);
   if (!buffer) {
-    fop_error(fop, "Not enough memory for the buffer.\n");
+    fop->setError("Not enough memory for the buffer.\n");
     jpeg_destroy_compress(&cinfo);
     return false;
   }
@@ -296,7 +287,7 @@ bool JpegFormat::onSave(FileOp* fop)
     buffer[c] = (JSAMPROW)base_malloc(sizeof(JSAMPLE) *
                                       cinfo.image_width * cinfo.num_components);
     if (!buffer[c]) {
-      fop_error(fop, "Not enough memory for buffer scanlines.\n");
+      fop->setError("Not enough memory for buffer scanlines.\n");
       for (c--; c>=0; c--)
         base_free(buffer[c]);
       base_free(buffer);
@@ -338,7 +329,7 @@ bool JpegFormat::onSave(FileOp* fop)
     }
     jpeg_write_scanlines(&cinfo, buffer, buffer_height);
 
-    fop_progress(fop, (float)(cinfo.next_scanline+1) / (float)(cinfo.image_height));
+    fop->setProgress((float)(cinfo.next_scanline+1) / (float)(cinfo.image_height));
   }
 
   // Destroy all data.
@@ -358,17 +349,18 @@ bool JpegFormat::onSave(FileOp* fop)
 #endif
 
 // Shows the JPEG configuration dialog.
-SharedPtr<FormatOptions> JpegFormat::onGetFormatOptions(FileOp* fop)
+base::SharedPtr<FormatOptions> JpegFormat::onGetFormatOptions(FileOp* fop)
 {
-  SharedPtr<JpegOptions> jpeg_options;
-  if (fop->document->getFormatOptions() != NULL)
-    jpeg_options = SharedPtr<JpegOptions>(fop->document->getFormatOptions());
+  base::SharedPtr<JpegOptions> jpeg_options;
+  if (fop->document()->getFormatOptions())
+    jpeg_options = base::SharedPtr<JpegOptions>(fop->document()->getFormatOptions());
 
   if (!jpeg_options)
     jpeg_options.reset(new JpegOptions);
 
   // Non-interactive mode
-  if (!fop->context || !fop->context->isUiAvailable())
+  if (!fop->context() ||
+      !fop->context()->isUIAvailable())
     return jpeg_options;
 
   try {
@@ -380,11 +372,11 @@ SharedPtr<FormatOptions> JpegFormat::onGetFormatOptions(FileOp* fop)
     ui::Slider* slider_quality = app::find_widget<ui::Slider>(window, "quality");
     ui::Widget* ok = app::find_widget<ui::Widget>(window, "ok");
 
-    slider_quality->setValue(jpeg_options->quality * 10.0f);
+    slider_quality->setValue(int(jpeg_options->quality * 10.0f));
 
     window->openWindowInForeground();
 
-    if (window->getKiller() == ok) {
+    if (window->closer() == ok) {
       jpeg_options->quality = slider_quality->getValue() / 10.0f;
       set_config_float("JPEG", "Quality", jpeg_options->quality);
     }
@@ -396,7 +388,7 @@ SharedPtr<FormatOptions> JpegFormat::onGetFormatOptions(FileOp* fop)
   }
   catch (std::exception& e) {
     Console::showException(e);
-    return SharedPtr<JpegOptions>(0);
+    return base::SharedPtr<JpegOptions>(0);
   }
 }
 

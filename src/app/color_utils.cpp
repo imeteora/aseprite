@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -63,14 +51,16 @@ gfx::Color color_utils::color_for_ui(const app::Color& color)
       c = gfx::rgba(
         color.getRed(),
         color.getGreen(),
-        color.getBlue(), 255);
+        color.getBlue(),
+        color.getAlpha());
       break;
 
     case app::Color::GrayType:
       c = gfx::rgba(
         color.getGray(),
         color.getGray(),
-        color.getGray(), 255);
+        color.getGray(),
+        color.getAlpha());
       break;
 
     case app::Color::IndexType: {
@@ -81,7 +71,8 @@ gfx::Color color_utils::color_for_ui(const app::Color& color)
       c = gfx::rgba(
         rgba_getr(_c),
         rgba_getg(_c),
-        rgba_getb(_c), 255);
+        rgba_getb(_c),
+        color.getAlpha());
       break;
     }
 
@@ -119,7 +110,7 @@ doc::color_t color_utils::color_for_layer(const app::Color& color, Layer* layer)
 
 doc::color_t color_utils::color_for_target_mask(const app::Color& color, const ColorTarget& colorTarget)
 {
-  doc::color_t c = -1;
+  int c = -1;
 
   if (color.getType() == app::Color::MaskType) {
     c = colorTarget.maskColor();
@@ -127,44 +118,45 @@ doc::color_t color_utils::color_for_target_mask(const app::Color& color, const C
   else {
     switch (colorTarget.pixelFormat()) {
       case IMAGE_RGB:
-        c = doc::rgba(color.getRed(), color.getGreen(), color.getBlue(), 255);
+        c = doc::rgba(color.getRed(), color.getGreen(), color.getBlue(), color.getAlpha());
         break;
       case IMAGE_GRAYSCALE:
-        c = doc::graya(color.getGray(), 255);
+        c = doc::graya(color.getGray(), color.getAlpha());
         break;
       case IMAGE_INDEXED:
         if (color.getType() == app::Color::IndexType) {
           c = color.getIndex();
         }
         else {
-          c = get_current_palette()->findBestfit(
-            color.getRed(),
-            color.getGreen(),
-            color.getBlue(),
-            colorTarget.isTransparent() ?
-              colorTarget.maskColor(): // Don't return the mask color
-              -1);                     // Return any color, we are in a background layer.
+          int r = color.getRed();
+          int g = color.getGreen();
+          int b = color.getBlue();
+          int a = color.getAlpha();
+          int mask = (colorTarget.isTransparent() ?
+                      colorTarget.maskColor(): // Don't return the mask color
+                      -1);
+
+          c = get_current_palette()->findExactMatch(r, g, b, a, mask);
+          if (c < 0)
+            c = get_current_palette()->findBestfit(r, g, b, a, mask);
         }
         break;
     }
   }
 
-  return c;
+  return (doc::color_t)c;
 }
 
+// TODO remove this function using a special RGB background layer (24bpp or 32bpp ignoring alpha)
 doc::color_t color_utils::color_for_target(const app::Color& color, const ColorTarget& colorTarget)
 {
   doc::color_t c = color_utils::color_for_target_mask(color, colorTarget);
 
-  switch (colorTarget.pixelFormat()) {
-    case IMAGE_RGB:
-      if (colorTarget.isBackground())
-        c |= doc::rgba(0, 0, 0, 255);
-      break;
-    case IMAGE_GRAYSCALE:
-      if (colorTarget.isBackground())
-        c |= doc::graya(0, 255);
-      break;
+  if (colorTarget.isBackground()) {
+    switch (colorTarget.pixelFormat()) {
+      case IMAGE_RGB: c |= doc::rgba_a_mask; break;
+      case IMAGE_GRAYSCALE: c |= doc::graya_a_mask; break;
+    }
   }
 
   return c;

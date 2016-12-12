@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,14 +10,20 @@
 
 #include "app/color_utils.h"
 #include "app/ui/color_sliders.h"
-#include "base/bind.h"
 #include "app/ui/skin/skin_slider_property.h"
+#include "app/ui/skin/skin_theme.h"
+#include "base/bind.h"
+#include "base/scoped_value.h"
 #include "ui/box.h"
 #include "ui/entry.h"
 #include "ui/graphics.h"
 #include "ui/label.h"
-#include "ui/preferred_size_event.h"
+#include "ui/message.h"
+#include "ui/size_hint_event.h"
 #include "ui/slider.h"
+#include "ui/theme.h"
+
+#include <climits>
 
 namespace app {
 
@@ -53,28 +47,31 @@ namespace {
 
     void paint(Slider* slider, Graphics* g, const gfx::Rect& rc) {
       gfx::Color color = gfx::ColorNone;
-      for (int x=0; x < rc.w; ++x) {
+      int w = MAX(rc.w-1, 1);
+
+      for (int x=0; x <= w; ++x) {
         switch (m_channel) {
           case ColorSliders::Red:
-            color = gfx::rgba(255 * x / (rc.w-1), m_color.getGreen(), m_color.getBlue());
+            color = gfx::rgba(255 * x / w, m_color.getGreen(), m_color.getBlue());
             break;
           case ColorSliders::Green:
-            color = gfx::rgba(m_color.getRed(), 255 * x / (rc.w-1), m_color.getBlue());
+            color = gfx::rgba(m_color.getRed(), 255 * x / w, m_color.getBlue());
             break;
           case ColorSliders::Blue:
-            color = gfx::rgba(m_color.getRed(), m_color.getGreen(), 255 * x / (rc.w-1));
+            color = gfx::rgba(m_color.getRed(), m_color.getGreen(), 255 * x / w);
             break;
           case ColorSliders::Hue:
-            color = color_utils::color_for_ui(app::Color::fromHsv(360 * x / (rc.w-1), m_color.getSaturation(), m_color.getValue()));
+            color = color_utils::color_for_ui(app::Color::fromHsv(360 * x / w, m_color.getSaturation(), m_color.getValue()));
             break;
           case ColorSliders::Saturation:
-            color = color_utils::color_for_ui(app::Color::fromHsv(m_color.getHue(), 100 * x / (rc.w-1), m_color.getValue()));
+            color = color_utils::color_for_ui(app::Color::fromHsv(m_color.getHue(), 100 * x / w, m_color.getValue()));
             break;
           case ColorSliders::Value:
-            color = color_utils::color_for_ui(app::Color::fromHsv(m_color.getHue(), m_color.getSaturation(), 100 * x / (rc.w-1)));
+            color = color_utils::color_for_ui(app::Color::fromHsv(m_color.getHue(), m_color.getSaturation(), 100 * x / w));
             break;
           case ColorSliders::Gray:
-            color = color_utils::color_for_ui(app::Color::fromGray(255 * x / (rc.w-1)));
+          case ColorSliders::Alpha:
+            color = color_utils::color_for_ui(app::Color::fromGray(255 * x / w));
             break;
         }
         g->drawVLine(color, rc.x+x, rc.y, rc.h);
@@ -86,6 +83,104 @@ namespace {
     app::Color m_color;
   };
 
+  class ColorEntry : public Entry {
+  public:
+    ColorEntry(Slider* absSlider, Slider* relSlider)
+      : Entry(4, "0")
+      , m_absSlider(absSlider)
+      , m_relSlider(relSlider)
+      , m_recent_focus(false) {
+    }
+
+  private:
+    int minValue() const {
+      if (m_absSlider->isVisible())
+        return m_absSlider->getMinValue();
+      else if (m_relSlider->isVisible())
+        return m_relSlider->getMinValue();
+      else
+        return 0;
+    }
+
+    int maxValue() const {
+      if (m_absSlider->isVisible())
+        return m_absSlider->getMaxValue();
+      else if (m_relSlider->isVisible())
+        return m_relSlider->getMaxValue();
+      else
+        return 0;
+    }
+
+    bool onProcessMessage(Message* msg) override {
+      switch (msg->type()) {
+
+        case kFocusEnterMessage:
+          m_recent_focus = true;
+          break;
+
+        case kKeyDownMessage:
+          if (Entry::onProcessMessage(msg))
+            return true;
+
+          if (hasFocus()) {
+            int scancode = static_cast<KeyMessage*>(msg)->scancode();
+
+            switch (scancode) {
+              // Enter just remove the focus
+              case kKeyEnter:
+              case kKeyEnterPad:
+                releaseFocus();
+                return true;
+
+              case kKeyDown:
+              case kKeyUp: {
+                int value = textInt();
+                if (scancode == kKeyDown)
+                  --value;
+                else
+                  ++value;
+
+                setTextf("%d", MID(minValue(), value, maxValue()));
+                selectAllText();
+
+                onChange();
+                return true;
+              }
+            }
+
+            // Process focus movement key here because if our
+            // CustomizedGuiManager catches this kKeyDownMessage it
+            // will process it as a shortcut to switch the Timeline.
+            //
+            // Note: The default ui::Manager handles focus movement
+            // shortcuts only for foreground windows.
+            // TODO maybe that should change
+            if (hasFocus() &&
+                manager()->processFocusMovementMessage(msg))
+              return true;
+          }
+          return false;
+      }
+
+      bool result = Entry::onProcessMessage(msg);
+
+      if (msg->type() == kMouseDownMessage && m_recent_focus) {
+        m_recent_focus = false;
+        selectAllText();
+      }
+
+      return result;
+    }
+
+    Slider* m_absSlider;
+    Slider* m_relSlider;
+
+    // TODO remove this calling setFocus() in
+    //      Widget::onProcessMessage() instead of
+    //      Manager::handleWindowZOrder()
+    bool m_recent_focus;
+  };
+
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -94,8 +189,11 @@ namespace {
 ColorSliders::ColorSliders()
   : Widget(kGenericWidget)
   , m_grid(3, false)
+  , m_mode(Absolute)
+  , m_lockEntry(-1)
 {
   addChild(&m_grid);
+  m_grid.setChildSpacing(0);
 }
 
 ColorSliders::~ColorSliders()
@@ -109,46 +207,85 @@ void ColorSliders::setColor(const app::Color& color)
   updateSlidersBgColor(color);
 }
 
-void ColorSliders:: onPreferredSize(PreferredSizeEvent& ev)
+void ColorSliders::setMode(Mode mode)
 {
-  ev.setPreferredSize(m_grid.getPreferredSize());
+  m_mode = mode;
+
+  for (Slider* slider : m_absSlider)
+    slider->setVisible(mode == Absolute);
+
+  for (Slider* slider : m_relSlider)
+    slider->setVisible(mode == Relative);
+
+  resetRelativeSliders();
+  layout();
+}
+
+void ColorSliders::resetRelativeSliders()
+{
+  for (Slider* slider : m_relSlider)
+    slider->setValue(0);
+}
+
+void ColorSliders::onSizeHint(SizeHintEvent& ev)
+{
+  ev.setSizeHint(m_grid.sizeHint());
 }
 
 void ColorSliders::addSlider(Channel channel, const char* labelText, int min, int max)
 {
-  Label*  label  = new Label(labelText);
-  Slider* slider = new Slider(min, max, 0);
-  Entry*  entry  = new Entry(3, "0");
+  Label*  label     = new Label(labelText);
+  Slider* absSlider = new Slider(min, max, 0);
+  Slider* relSlider = new Slider(min-max, max-min, 0);
+  Entry*  entry     = new ColorEntry(absSlider, relSlider);
 
   m_label.push_back(label);
-  m_slider.push_back(slider);
+  m_absSlider.push_back(absSlider);
+  m_relSlider.push_back(relSlider);
   m_entry.push_back(entry);
   m_channel.push_back(channel);
 
-  slider->setProperty(SkinSliderPropertyPtr(new SkinSliderProperty(new ColorSliderBgPainter(channel))));
-  slider->setDoubleBuffered(true);
+  absSlider->setProperty(SkinSliderPropertyPtr(new SkinSliderProperty(new ColorSliderBgPainter(channel))));
+  absSlider->setDoubleBuffered(true);
+  get_skin_property(entry)->setLook(MiniLook);
 
-  slider->Change.connect(Bind<void>(&ColorSliders::onSliderChange, this, m_slider.size()-1));
-  entry->EntryChange.connect(Bind<void>(&ColorSliders::onEntryChange, this, m_entry.size()-1));
+  absSlider->Change.connect(base::Bind<void>(&ColorSliders::onSliderChange, this, m_absSlider.size()-1));
+  relSlider->Change.connect(base::Bind<void>(&ColorSliders::onSliderChange, this, m_relSlider.size()-1));
+  entry->Change.connect(base::Bind<void>(&ColorSliders::onEntryChange, this, m_entry.size()-1));
 
-  m_grid.addChildInCell(label,  1, 1, JI_LEFT | JI_MIDDLE);
-  m_grid.addChildInCell(slider, 1, 1, JI_HORIZONTAL | JI_VERTICAL | JI_EXPANSIVE);
-  m_grid.addChildInCell(entry,  1, 1, JI_LEFT | JI_MIDDLE);
+  HBox* box = new HBox();
+  box->addChild(absSlider);
+  box->addChild(relSlider);
+  absSlider->setFocusStop(false);
+  relSlider->setFocusStop(false);
+  absSlider->setExpansive(true);
+  relSlider->setExpansive(true);
+  relSlider->setVisible(false);
+
+  gfx::Size sz(INT_MAX, SkinTheme::instance()->dimensions.colorSliderHeight());
+  label->setMaxSize(sz);
+  box->setMaxSize(sz);
+  entry->setMaxSize(sz);
+
+  m_grid.addChildInCell(label, 1, 1, LEFT | MIDDLE);
+  m_grid.addChildInCell(box,   1, 1, HORIZONTAL | VERTICAL);
+  m_grid.addChildInCell(entry, 1, 1, LEFT | MIDDLE);
 }
 
-void ColorSliders::setSliderValue(int sliderIndex, int value)
+void ColorSliders::setAbsSliderValue(int sliderIndex, int value)
 {
-  Slider* slider = m_slider[sliderIndex];
-  slider->setValue(value);
-
+  m_absSlider[sliderIndex]->setValue(value);
   updateEntryText(sliderIndex);
 }
 
-int ColorSliders::getSliderValue(int sliderIndex) const
+int ColorSliders::getAbsSliderValue(int sliderIndex) const
 {
-  Slider* slider = m_slider[sliderIndex];
+  return m_absSlider[sliderIndex]->getValue();
+}
 
-  return slider->getValue();
+int ColorSliders::getRelSliderValue(int sliderIndex) const
+{
+  return m_relSlider[sliderIndex]->getValue();
 }
 
 void ColorSliders::onSliderChange(int i)
@@ -159,14 +296,14 @@ void ColorSliders::onSliderChange(int i)
 
 void ColorSliders::onEntryChange(int i)
 {
+  base::ScopedValue<int> lock(m_lockEntry, i, m_lockEntry);
+
   // Update the slider related to the changed entry widget.
-  int value = m_entry[i]->getTextInt();
+  int value = m_entry[i]->textInt();
 
-  value = MID(m_slider[i]->getMinValue(),
-              value,
-              m_slider[i]->getMaxValue());
-
-  m_slider[i]->setValue(value);
+  Slider* slider = (m_mode == Absolute ? m_absSlider[i]: m_relSlider[i]);
+  value = MID(slider->getMinValue(), value, slider->getMaxValue());
+  slider->setValue(value);
 
   onControlChange(i);
 }
@@ -180,20 +317,29 @@ void ColorSliders::onControlChange(int i)
   updateSlidersBgColor(color);
 
   // Fire ColorChange() signal
-  ColorSlidersChangeEvent ev(color, m_channel[i], this);
+  ColorSlidersChangeEvent ev(m_channel[i], m_mode,
+                             color, m_relSlider[i]->getValue(), this);
   ColorChange(ev);
 }
 
 // Updates the entry related to the changed slider widget.
 void ColorSliders::updateEntryText(int entryIndex)
 {
-  m_entry[entryIndex]->setTextf("%d", m_slider[entryIndex]->getValue());
+  if (m_lockEntry == entryIndex)
+    return;
+
+  Slider* slider = (m_mode == Absolute ? m_absSlider[entryIndex]:
+                                         m_relSlider[entryIndex]);
+
+  m_entry[entryIndex]->setTextf("%d", slider->getValue());
+  if (m_entry[entryIndex]->hasFocus())
+    m_entry[entryIndex]->selectAllText();
 }
 
 void ColorSliders::updateSlidersBgColor(const app::Color& color)
 {
-  for (size_t i = 0; i < m_slider.size(); ++i)
-    updateSliderBgColor(m_slider[i], color);
+  for (size_t i = 0; i < m_absSlider.size(); ++i)
+    updateSliderBgColor(m_absSlider[i], color);
 }
 
 void ColorSliders::updateSliderBgColor(Slider* slider, const app::Color& color)
@@ -214,20 +360,23 @@ RgbSliders::RgbSliders()
   addSlider(Red,   "R", 0, 255);
   addSlider(Green, "G", 0, 255);
   addSlider(Blue,  "B", 0, 255);
+  addSlider(Alpha, "A", 0, 255);
 }
 
 void RgbSliders::onSetColor(const app::Color& color)
 {
-  setSliderValue(0, color.getRed());
-  setSliderValue(1, color.getGreen());
-  setSliderValue(2, color.getBlue());
+  setAbsSliderValue(0, color.getRed());
+  setAbsSliderValue(1, color.getGreen());
+  setAbsSliderValue(2, color.getBlue());
+  setAbsSliderValue(3, color.getAlpha());
 }
 
 app::Color RgbSliders::getColorFromSliders()
 {
-  return app::Color::fromRgb(getSliderValue(0),
-                             getSliderValue(1),
-                             getSliderValue(2));
+  return app::Color::fromRgb(getAbsSliderValue(0),
+                             getAbsSliderValue(1),
+                             getAbsSliderValue(2),
+                             getAbsSliderValue(3));
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -239,20 +388,23 @@ HsvSliders::HsvSliders()
   addSlider(Hue,        "H", 0, 360);
   addSlider(Saturation, "S", 0, 100);
   addSlider(Value,      "B", 0, 100);
+  addSlider(Alpha,      "A", 0, 255);
 }
 
 void HsvSliders::onSetColor(const app::Color& color)
 {
-  setSliderValue(0, color.getHue());
-  setSliderValue(1, color.getSaturation());
-  setSliderValue(2, color.getValue());
+  setAbsSliderValue(0, int(color.getHue()));
+  setAbsSliderValue(1, int(color.getSaturation()));
+  setAbsSliderValue(2, int(color.getValue()));
+  setAbsSliderValue(3, color.getAlpha());
 }
 
 app::Color HsvSliders::getColorFromSliders()
 {
-  return app::Color::fromHsv(getSliderValue(0),
-                             getSliderValue(1),
-                             getSliderValue(2));
+  return app::Color::fromHsv(getAbsSliderValue(0),
+                             getAbsSliderValue(1),
+                             getAbsSliderValue(2),
+                             getAbsSliderValue(3));
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -261,18 +413,20 @@ app::Color HsvSliders::getColorFromSliders()
 GraySlider::GraySlider()
   : ColorSliders()
 {
-  addSlider(Gray, "V", 0, 255);
+  addSlider(Gray,  "V", 0, 255);
+  addSlider(Alpha, "A", 0, 255);
 }
 
 void GraySlider::onSetColor(const app::Color& color)
 {
-  setSliderValue(0, color.getGray());
+  setAbsSliderValue(0, color.getGray());
+  setAbsSliderValue(1, color.getAlpha());
 }
-
 
 app::Color GraySlider::getColorFromSliders()
 {
-  return app::Color::fromGray(getSliderValue(0));
+  return app::Color::fromGray(getAbsSliderValue(0),
+                              getAbsSliderValue(1));
 }
 
 } // namespace app

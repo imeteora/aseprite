@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -26,7 +14,7 @@
 #include "app/context_access.h"
 #include "app/document_api.h"
 #include "app/document_range.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
 
@@ -40,6 +28,12 @@ static DocumentRange drop_range_op(
   Document* doc, Op op, const DocumentRange& from,
   DocumentRangePlace place, const DocumentRange& to)
 {
+  if (place != kDocumentRangeBefore &&
+      place != kDocumentRangeAfter) {
+    ASSERT(false);
+    throw std::invalid_argument("Invalid 'place' argument");
+  }
+
   Sprite* sprite = doc->sprite();
 
   // Check noop/trivial/do nothing cases, i.e., move a range to the same place.
@@ -68,13 +62,13 @@ static DocumentRange drop_range_op(
         for (LayerIndex i = from.layerBegin(); i <= from.layerEnd(); ++i)
           if (sprite->indexToLayer(i)->isBackground())
             throw std::runtime_error("The background layer cannot be moved");
+      }
 
-        // Before background
-        if (place == kDocumentRangeBefore) {
-          Layer* background = sprite->indexToLayer(to.layerBegin());
-          if (background && background->isBackground())
-            throw std::runtime_error("You cannot move something below the background layer");
-        }
+      // Before background
+      if (place == kDocumentRangeBefore) {
+        Layer* background = sprite->indexToLayer(to.layerBegin());
+        if (background && background->isBackground())
+          throw std::runtime_error("You cannot move or copy something below the background layer");
       }
       break;
   }
@@ -83,15 +77,18 @@ static DocumentRange drop_range_op(
   switch (op) {
     case Move: undoLabel = "Move Range"; break;
     case Copy: undoLabel = "Copy Range"; break;
+    default:
+      ASSERT(false);
+      throw std::invalid_argument("Invalid 'op' argument");
   }
   DocumentRange resultRange;
 
   {
     const app::Context* context = static_cast<app::Context*>(doc->context());
     const ContextReader reader(context);
-    ContextWriter writer(reader);
-    UndoTransaction undo(writer.context(), undoLabel, undo::ModifyDocument);
-    DocumentApi api = doc->getApi();
+    ContextWriter writer(reader, 500);
+    Transaction transaction(writer.context(), undoLabel, ModifyDocument);
+    DocumentApi api = doc->getApi(transaction);
 
     // TODO Try to add the range with just one call to DocumentApi
     // methods, to avoid generating a lot of SetCelFrame undoers (see
@@ -143,6 +140,10 @@ static DocumentRange drop_range_op(
                  dstLayerIdx = dstLayerBegin; srcLayerIdx != srcLayerEnd; ) {
             for (frame_t srcFrame = srcFrameBegin,
                    dstFrame = dstFrameBegin; srcFrame != srcFrameEnd; ) {
+              if (dstLayerIdx < 0 || dstLayerIdx >= int(layers.size()) ||
+                  srcLayerIdx < 0 || srcLayerIdx >= int(layers.size()))
+                break;
+
               LayerImage* srcLayer = static_cast<LayerImage*>(layers[srcLayerIdx]);
               LayerImage* dstLayer = static_cast<LayerImage*>(layers[dstLayerIdx]);
 
@@ -164,8 +165,8 @@ static DocumentRange drop_range_op(
 
       case DocumentRange::kFrames:
         {
-          frame_t srcFrameBegin, srcFrameStep, srcFrameEnd;
-          frame_t dstFrameBegin, dstFrameStep;
+          frame_t srcFrameBegin = 0, srcFrameStep, srcFrameEnd = 0;
+          frame_t dstFrameBegin = 0, dstFrameStep;
 
           switch (op) {
 
@@ -191,7 +192,7 @@ static DocumentRange drop_range_op(
                   srcFrameBegin = from.frameBegin();
                   srcFrameStep = frame_t(1);
                   srcFrameEnd = from.frameEnd()+1;
-                  dstFrameBegin = to.frameEnd();
+                  dstFrameBegin = to.frameEnd()+1;
                   dstFrameStep = frame_t(1);
                 }
                 else {
@@ -324,7 +325,7 @@ static DocumentRange drop_range_op(
         break;
     }
 
-    undo.commit();
+    transaction.commit();
   }
 
   return resultRange;
@@ -344,13 +345,14 @@ void reverse_frames(Document* doc, const DocumentRange& range)
 {
   const app::Context* context = static_cast<app::Context*>(doc->context());
   const ContextReader reader(context);
-  ContextWriter writer(reader);
-  UndoTransaction undo(writer.context(), "Reverse Frames");
-  DocumentApi api = doc->getApi();
+  ContextWriter writer(reader, 500);
+  Transaction transaction(writer.context(), "Reverse Frames");
+  DocumentApi api = doc->getApi(transaction);
   Sprite* sprite = doc->sprite();
   frame_t frameBegin, frameEnd;
   int layerBegin, layerEnd;
   bool moveFrames = false;
+  bool swapCels = false;
 
   switch (range.type()) {
     case DocumentRange::kCels:
@@ -358,6 +360,7 @@ void reverse_frames(Document* doc, const DocumentRange& range)
       frameEnd = range.frameEnd();
       layerBegin = range.layerBegin();
       layerEnd = range.layerEnd() + 1;
+      swapCels = true;
       break;
     case DocumentRange::kFrames:
       frameBegin = range.frameBegin();
@@ -369,6 +372,7 @@ void reverse_frames(Document* doc, const DocumentRange& range)
       frameEnd = sprite->totalFrames()-1;
       layerBegin = range.layerBegin();
       layerEnd = range.layerEnd() + 1;
+      swapCels = true;
       break;
   }
 
@@ -379,7 +383,7 @@ void reverse_frames(Document* doc, const DocumentRange& range)
       api.moveFrame(sprite, frameBegin, frameRev);
     }
   }
-  else {
+  else if (swapCels) {
     std::vector<Layer*> layers;
     sprite->getLayersList(layers);
 
@@ -388,13 +392,16 @@ void reverse_frames(Document* doc, const DocumentRange& range)
              frameRev = frameEnd;
            frame != (frameBegin+frameEnd)/2+1;
            ++frame, --frameRev) {
+        if (frame == frameRev)
+          continue;
+
         LayerImage* layer = static_cast<LayerImage*>(layers[layerIdx]);
         api.swapCel(layer, frame, frameRev);
       }
     }
   }
 
-  undo.commit();
+  transaction.commit();
 }
 
 } // namespace app

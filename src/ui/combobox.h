@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,7 +8,7 @@
 #define UI_COMBOBOX_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
+#include "obs/signal.h"
 #include "ui/widget.h"
 
 #include <string>
@@ -25,8 +25,7 @@ namespace ui {
   class ComboBoxEntry;
   class ComboBoxListBox;
 
-  class ComboBox : public Widget
-  {
+  class ComboBox : public Widget {
     friend class ComboBoxEntry;
     friend class ComboBoxListBox;
 
@@ -43,9 +42,9 @@ namespace ui {
     void setClickOpen(bool state);
     void setCaseSensitive(bool state);
 
-    bool isEditable();
-    bool isClickOpen();
-    bool isCaseSensitive();
+    bool isEditable() const { return m_editable; }
+    bool isClickOpen() const { return m_clickopen; }
+    bool isCaseSensitive() const { return m_casesensitive; }
 
     int addItem(ListItem* item);
     int addItem(const std::string& text);
@@ -65,13 +64,17 @@ namespace ui {
     ListItem* getItem(int itemIndex);
     const std::string& getItemText(int itemIndex) const;
     void setItemText(int itemIndex, const std::string& text);
-    int findItemIndex(const std::string& text);
+    int findItemIndex(const std::string& text) const;
+    int findItemIndexByValue(const std::string& value) const;
 
     ListItem* getSelectedItem() const;
     void setSelectedItem(ListItem* item);
 
     int getSelectedItemIndex() const;
     void setSelectedItemIndex(int itemIndex);
+
+    std::string getValue() const;
+    void setValue(const std::string& value);
 
     Entry* getEntryWidget();
     Button* getButtonWidget();
@@ -82,14 +85,14 @@ namespace ui {
     gfx::Rect getListBoxPos() const;
 
     // Signals
-    Signal0<void> Change;
-    Signal0<void> OpenListBox;
-    Signal0<void> CloseListBox;
+    obs::signal<void()> Change;
+    obs::signal<void()> OpenListBox;
+    obs::signal<void()> CloseListBox;
 
   protected:
     bool onProcessMessage(Message* msg) override;
     void onResize(ResizeEvent& ev) override;
-    void onPreferredSize(PreferredSizeEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     virtual void onChange();
     virtual void onOpenListBox();
     virtual void onCloseListBox();
@@ -103,9 +106,9 @@ namespace ui {
     ComboBoxListBox* m_listbox;
     ListItems m_items;
     int m_selected;
-    bool m_editable : 1;
-    bool m_clickopen : 1;
-    bool m_casesensitive : 1;
+    bool m_editable;
+    bool m_clickopen;
+    bool m_casesensitive;
   };
 
 } // namespace ui

@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,36 +10,50 @@
 
 #include "doc/algorithm/resize_image.h"
 
-#include "gfx/point.h"
-#include "doc/image.h"
-#include "doc/image_bits.h"
+#include "doc/algorithm/rotsprite.h"
+#include "doc/image_impl.h"
 #include "doc/palette.h"
+#include "doc/primitives_fast.h"
 #include "doc/rgbmap.h"
+#include "gfx/point.h"
+
+#include <cmath>
 
 namespace doc {
 namespace algorithm {
 
-void resize_image(const Image* src, Image* dst, ResizeMethod method, const Palette* pal, const RgbMap* rgbmap)
+template<typename ImageTraits>
+void resize_image_nearest(const Image* src, Image* dst)
+{
+  double x_ratio = double(src->width()) / double(dst->width());
+  double y_ratio = double(src->height()) / double(dst->height());
+  double px, py;
+
+  LockImageBits<ImageTraits> dstBits(dst);
+  auto dstIt = dstBits.begin();
+
+  for (int y=0; y<dst->height(); ++y) {
+    py = std::floor(y * y_ratio);
+    for (int x=0; x<dst->width(); ++x, ++dstIt) {
+      px = std::floor(x * x_ratio);
+      *dstIt = get_pixel_fast<ImageTraits>(src, px, py);
+    }
+  }
+}
+
+void resize_image(const Image* src, Image* dst, ResizeMethod method, const Palette* pal, const RgbMap* rgbmap, color_t maskColor)
 {
   switch (method) {
 
     // TODO optimize this
-    case RESIZE_METHOD_NEAREST_NEIGHBOR: 
-    {
-      int o_width = src->width(), o_height = src->height();
-      int n_width = dst->width(), n_height = dst->height();
-      double x_ratio = o_width / (double)n_width;
-      double y_ratio = o_height / (double)n_height;
-      double px, py;
-      int i;
+    case RESIZE_METHOD_NEAREST_NEIGHBOR: {
+      ASSERT(src->pixelFormat() == dst->pixelFormat());
 
-      for (int y = 0; y < n_height; y++) {
-        for (int x = 0; x < n_width; x++) {
-          px = floor(x * x_ratio);
-          py = floor(y * y_ratio);
-          i = (int)(py * o_width + px);
-          dst->putPixel(x, y, src->getPixel(i % o_width, i / o_width));
-        }
+      switch (src->pixelFormat()) {
+        case IMAGE_RGB: resize_image_nearest<RgbTraits>(src, dst); break;
+        case IMAGE_GRAYSCALE: resize_image_nearest<GrayscaleTraits>(src, dst); break;
+        case IMAGE_INDEXED: resize_image_nearest<IndexedTraits>(src, dst); break;
+        case IMAGE_BITMAP: resize_image_nearest<BitmapTraits>(src, dst); break;
       }
       break;
     }
@@ -57,8 +71,8 @@ void resize_image(const Image* src, Image* dst, ResizeMethod method, const Palet
       dv = (src->height()-1) * 1.0 / (dst->height()-1);
       for (y=0; y<dst->height(); ++y) {
         for (x=0; x<dst->width(); ++x) {
-          u_floor = floor(u);
-          v_floor = floor(v);
+          u_floor = (int)std::floor(u);
+          v_floor = (int)std::floor(v);
 
           if (u_floor > src->width()-1) {
             u_floor = src->width()-1;
@@ -92,35 +106,43 @@ void resize_image(const Image* src, Image* dst, ResizeMethod method, const Palet
 
           switch (dst->pixelFormat()) {
             case IMAGE_RGB: {
-              int r = ((rgba_getr(color[0])*u2 + rgba_getr(color[1])*u1)*v2 +
-                       (rgba_getr(color[2])*u2 + rgba_getr(color[3])*u1)*v1);
-              int g = ((rgba_getg(color[0])*u2 + rgba_getg(color[1])*u1)*v2 +
-                       (rgba_getg(color[2])*u2 + rgba_getg(color[3])*u1)*v1);
-              int b = ((rgba_getb(color[0])*u2 + rgba_getb(color[1])*u1)*v2 +
-                       (rgba_getb(color[2])*u2 + rgba_getb(color[3])*u1)*v1);
-              int a = ((rgba_geta(color[0])*u2 + rgba_geta(color[1])*u1)*v2 +
-                       (rgba_geta(color[2])*u2 + rgba_geta(color[3])*u1)*v1);
+              int r = int((rgba_getr(color[0])*u2 + rgba_getr(color[1])*u1)*v2 +
+                          (rgba_getr(color[2])*u2 + rgba_getr(color[3])*u1)*v1);
+              int g = int((rgba_getg(color[0])*u2 + rgba_getg(color[1])*u1)*v2 +
+                          (rgba_getg(color[2])*u2 + rgba_getg(color[3])*u1)*v1);
+              int b = int((rgba_getb(color[0])*u2 + rgba_getb(color[1])*u1)*v2 +
+                          (rgba_getb(color[2])*u2 + rgba_getb(color[3])*u1)*v1);
+              int a = int((rgba_geta(color[0])*u2 + rgba_geta(color[1])*u1)*v2 +
+                          (rgba_geta(color[2])*u2 + rgba_geta(color[3])*u1)*v1);
               dst_color = rgba(r, g, b, a);
               break;
             }
             case IMAGE_GRAYSCALE: {
-              int v = ((graya_getv(color[0])*u2 + graya_getv(color[1])*u1)*v2 +
-                       (graya_getv(color[2])*u2 + graya_getv(color[3])*u1)*v1);
-              int a = ((graya_geta(color[0])*u2 + graya_geta(color[1])*u1)*v2 +
-                       (graya_geta(color[2])*u2 + graya_geta(color[3])*u1)*v1);
+              int v = int((graya_getv(color[0])*u2 + graya_getv(color[1])*u1)*v2 +
+                          (graya_getv(color[2])*u2 + graya_getv(color[3])*u1)*v1);
+              int a = int((graya_geta(color[0])*u2 + graya_geta(color[1])*u1)*v2 +
+                          (graya_geta(color[2])*u2 + graya_geta(color[3])*u1)*v1);
               dst_color = graya(v, a);
               break;
             }
             case IMAGE_INDEXED: {
-              int r = ((rgba_getr(pal->getEntry(color[0]))*u2 + rgba_getr(pal->getEntry(color[1]))*u1)*v2 +
-                       (rgba_getr(pal->getEntry(color[2]))*u2 + rgba_getr(pal->getEntry(color[3]))*u1)*v1);
-              int g = ((rgba_getg(pal->getEntry(color[0]))*u2 + rgba_getg(pal->getEntry(color[1]))*u1)*v2 +
-                       (rgba_getg(pal->getEntry(color[2]))*u2 + rgba_getg(pal->getEntry(color[3]))*u1)*v1);
-              int b = ((rgba_getb(pal->getEntry(color[0]))*u2 + rgba_getb(pal->getEntry(color[1]))*u1)*v2 +
-                       (rgba_getb(pal->getEntry(color[2]))*u2 + rgba_getb(pal->getEntry(color[3]))*u1)*v1);
-              int a = (((color[0] == 0 ? 0: 255)*u2 + (color[1] == 0 ? 0: 255)*u1)*v2 +
-                       ((color[2] == 0 ? 0: 255)*u2 + (color[3] == 0 ? 0: 255)*u1)*v1);
-              dst_color = a > 127 ? rgbmap->mapColor(r, g, b): 0;
+              // Convert index to RGBA values
+              for (int i=0; i<4; ++i) {
+                if (color[i] == maskColor)
+                  color[i] = pal->getEntry(color[i]) & rgba_rgb_mask; // Set alpha = 0
+                else
+                  color[i] = pal->getEntry(color[i]);
+              }
+
+              int r = int((rgba_getr(color[0])*u2 + rgba_getr(color[1])*u1)*v2 +
+                          (rgba_getr(color[2])*u2 + rgba_getr(color[3])*u1)*v1);
+              int g = int((rgba_getg(color[0])*u2 + rgba_getg(color[1])*u1)*v2 +
+                          (rgba_getg(color[2])*u2 + rgba_getg(color[3])*u1)*v1);
+              int b = int((rgba_getb(color[0])*u2 + rgba_getb(color[1])*u1)*v2 +
+                          (rgba_getb(color[2])*u2 + rgba_getb(color[3])*u1)*v1);
+              int a = int((rgba_geta(color[0])*u2 + rgba_geta(color[1])*u1)*v2 +
+                          (rgba_geta(color[2])*u2 + rgba_geta(color[3])*u1)*v1);
+              dst_color = rgbmap->mapColor(r, g, b, a);
               break;
             }
           }
@@ -131,6 +153,16 @@ void resize_image(const Image* src, Image* dst, ResizeMethod method, const Palet
         u = 0.0;
         v += dv;
       }
+      break;
+    }
+
+    case RESIZE_METHOD_ROTSPRITE: {
+      rotsprite_image(
+        dst, src, nullptr,
+        0, 0,
+        dst->width(), 0,
+        dst->width(), dst->height(),
+        0, dst->height());
       break;
     }
 
@@ -157,7 +189,7 @@ void fixup_image_transparent_colors(Image* image)
             count = 0;
             r = g = b = 0;
 
-            gfx::Rect area = gfx::Rect(x-1, y-1, 3, 3).createIntersect(image->bounds());
+            gfx::Rect area = gfx::Rect(x-1, y-1, 3, 3).createIntersection(image->bounds());
             LockImageBits<RgbTraits>::iterator it2 = bits.begin_area(area);
             LockImageBits<RgbTraits>::iterator end2 = bits.end_area(area);
 
@@ -197,7 +229,7 @@ void fixup_image_transparent_colors(Image* image)
             count = 0;
             k = 0;
 
-            gfx::Rect area = gfx::Rect(x-1, y-1, 3, 3).createIntersect(image->bounds());
+            gfx::Rect area = gfx::Rect(x-1, y-1, 3, 3).createIntersection(image->bounds());
             LockImageBits<GrayscaleTraits>::iterator it2 = bits.begin_area(area);
             LockImageBits<GrayscaleTraits>::iterator end2 = bits.end_area(area);
 

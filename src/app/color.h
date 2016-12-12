@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_COLOR_H_INCLUDED
 #define APP_COLOR_H_INCLUDED
@@ -53,9 +41,9 @@ namespace app {
     Color() : m_type(MaskType) { }
 
     static Color fromMask();
-    static Color fromRgb(int r, int g, int b);
-    static Color fromHsv(int h, int s, int v); // h=[0,360], s=[0,100], v=[0,100]
-    static Color fromGray(int g);
+    static Color fromRgb(int r, int g, int b, int a = 255);
+    static Color fromHsv(double h, double s, double v, int a = 255); // h=[0,360], s=[0,100], v=[0,100]
+    static Color fromGray(int g, int a = 255);
     static Color fromIndex(int index);
 
     static Color fromImage(PixelFormat pixelFormat, color_t c);
@@ -80,11 +68,12 @@ namespace app {
     int getRed() const;
     int getGreen() const;
     int getBlue() const;
-    int getHue() const;
-    int getSaturation() const;
-    int getValue() const;
+    double getHue() const;
+    double getSaturation() const;
+    double getValue() const;
     int getGray() const;
     int getIndex() const;
+    int getAlpha() const;
 
   private:
     Color(Type type) : m_type(type) { }
@@ -95,12 +84,15 @@ namespace app {
     // Color value
     union {
       struct {
-        int r, g, b;
+        int r, g, b, a;
       } rgb;
       struct {
-        int h, s, v;
+        double h, s, v;
+        int a;
       } hsv;
-      int gray;
+      struct {
+        int g, a;
+      } gray;
       int index;
     } m_value;
   };

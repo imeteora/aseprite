@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_TOOLS_TOOL_BOX_H_INCLUDED
 #define APP_TOOLS_TOOL_BOX_H_INCLUDED
@@ -25,6 +13,7 @@
 #include <string>
 
 #include "app/tools/tool.h"
+#include "base/unique_ptr.h"
 
 class TiXmlElement;
 
@@ -33,8 +22,11 @@ namespace app {
 
     namespace WellKnownTools {
       extern const char* RectangularMarquee;
+      extern const char* Lasso;
+      extern const char* Pencil;
       extern const char* Eraser;
       extern const char* Eyedropper;
+      extern const char* Hand;
     };
 
     namespace WellKnownInks {
@@ -42,8 +34,7 @@ namespace app {
       extern const char* Paint;
       extern const char* PaintFg;
       extern const char* PaintBg;
-      extern const char* PaintOpaque;
-      extern const char* PaintSetAlpha;
+      extern const char* PaintCopy;
       extern const char* PaintLockAlpha;
       extern const char* Shading;
       extern const char* Eraser;
@@ -66,6 +57,14 @@ namespace app {
       extern const char* AsEllipses;
       extern const char* AsBezier;
       extern const char* AsPixelPerfect;
+    };
+
+    namespace WellKnownPointShapes {
+      extern const char* None;
+      extern const char* Pixel;
+      extern const char* Brush;
+      extern const char* FloodFill;
+      extern const char* Spray;
     };
 
     typedef std::list<Tool*> ToolList;
@@ -91,6 +90,7 @@ namespace app {
       Tool* getToolById(const std::string& id);
       Ink* getInkById(const std::string& id);
       Intertwine* getIntertwinerById(const std::string& id);
+      PointShape* getPointShapeById(const std::string& id);
       int getGroupsCount() const { return m_groups.size(); }
 
     private:

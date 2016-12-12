@@ -11,12 +11,13 @@
 #include "config.h"
 #endif
 
-#include "fixmath/fixmath.h"
-#include "doc/blend.h"
-#include "doc/image.h"
-#include "doc/image_bits.h"
+#include "base/pi.h"
+#include "doc/blend_funcs.h"
+#include "doc/image_impl.h"
+#include "doc/mask.h"
 #include "doc/primitives.h"
 #include "doc/primitives_fast.h"
+#include "fixmath/fixmath.h"
 
 #include <cmath>
 
@@ -25,36 +26,69 @@ namespace algorithm {
 
 using namespace fixmath;
 
-static void ase_parallelogram_map_standard(Image *bmp, Image *sprite, fixed xs[4], fixed ys[4]);
-static void ase_rotate_scale_flip_coordinates(fixed w, fixed h,
-                                              fixed x, fixed y,
-                                              fixed cx, fixed cy,
-                                              fixed angle,
-                                              fixed scale_x, fixed scale_y,
-                                              int h_flip, int v_flip,
-                                              fixed xs[4], fixed ys[4]);
+static void ase_parallelogram_map_standard(
+  Image* bmp, const Image* sprite, const Image* mask,
+  fixed xs[4], fixed ys[4]);
+
+static void ase_rotate_scale_flip_coordinates(
+  fixed w, fixed h,
+  fixed x, fixed y,
+  fixed cx, fixed cy,
+  fixed angle,
+  fixed scale_x, fixed scale_y,
+  int h_flip, int v_flip,
+  fixed xs[4], fixed ys[4]);
 
 template<typename ImageTraits, typename BlendFunc>
-static void image_scale_tpl(Image* dst, const Image* src, int x, int y, int w, int h, BlendFunc blend)
+static void image_scale_tpl(
+  Image* dst, const Image* src,
+  int dst_x, int dst_y, int dst_w, int dst_h,
+  int src_x, int src_y, int src_w, int src_h, BlendFunc blend)
 {
-  int src_w = src->width();
-  int src_h = src->height();
+  LockImageBits<ImageTraits> dst_bits(dst, gfx::Rect(dst_x, dst_y, dst_w, dst_h));
+  typename LockImageBits<ImageTraits>::iterator dst_it = dst_bits.begin();
+  fixed x, first_x = itofix(src_x);
+  fixed y = itofix(src_y);
+  fixed dx = fixdiv(itofix(src_w-1), itofix(dst_w-1));
+  fixed dy = fixdiv(itofix(src_h-1), itofix(dst_h-1));
+  int old_x, new_x;
 
-  for (int v=0; v<h; ++v) {
-    for (int u=0; u<w; ++u) {
-      color_t c = get_pixel_fast<ImageTraits>(src, src_w*u/w, src_h*v/h);
-      put_pixel_fast<ImageTraits>(dst, x+u, y+v,
-        blend(get_pixel_fast<ImageTraits>(dst, x+u, y+v), c));
+  for (int v=0; v<dst_h; ++v) {
+    old_x = fixtoi(x = first_x);
+
+    const LockImageBits<ImageTraits> src_bits(src, gfx::Rect(src_x, fixtoi(y), src_w, 1));
+    auto src_it = src_bits.begin();
+
+    for (int u=0; u<dst_w; ++u) {
+      ASSERT(dst_it != dst_bits.end());
+
+      *dst_it = blend(*dst_it, *src_it);
+      ++dst_it;
+
+      x = fixadd(x, dx);
+      new_x = fixtoi(x);
+      if (old_x != new_x) {
+        // We don't want to move the "src_it" iterator outside the src
+        // image bounds.
+        if (new_x < src_w) {
+          src_it += (new_x - old_x);
+          old_x = new_x;
+        }
+        else
+          break;
+      }
     }
+
+    y = fixadd(y, dy);
   }
 }
 
 static color_t rgba_blender(color_t back, color_t front) {
-  return rgba_blenders[BLEND_MODE_NORMAL](back, front, 255);
+  return rgba_blender_normal(back, front);
 }
 
 static color_t grayscale_blender(color_t back, color_t front) {
-  return graya_blenders[BLEND_MODE_NORMAL](back, front, 255);
+  return graya_blender_normal(back, front);
 }
 
 class if_blender {
@@ -71,33 +105,52 @@ private:
   color_t m_mask;
 };
 
-void scale_image(Image *dst, Image *src, int x, int y, int w, int h)
+void scale_image(Image* dst, const Image* src,
+                 int dst_x, int dst_y, int dst_w, int dst_h,
+                 int src_x, int src_y, int src_w, int src_h)
 {
-  if (w == src->width() && src->height() == h)
-    dst->copy(src, gfx::Clip(x, y, 0, 0, w, h));
-  else {
-    switch (dst->pixelFormat()) {
+  gfx::Clip clip(dst_x, dst_y, src_x, src_y, dst_w, dst_h);
+  if (src_w == dst_w && src_h == dst_h) {
+    dst->copy(src, clip);
+    return;
+  }
 
-      case IMAGE_RGB:
-        image_scale_tpl<RgbTraits>(dst, src, x, y, w, h, rgba_blender);
-        break;
+  if (!clip.clip(dst->width(), dst->height(), src->width(), src->height()))
+    return;
 
-      case IMAGE_GRAYSCALE:
-        image_scale_tpl<GrayscaleTraits>(dst, src, x, y, w, h, grayscale_blender);
-        break;
+  switch (dst->pixelFormat()) {
 
-      case IMAGE_INDEXED:
-        image_scale_tpl<IndexedTraits>(dst, src, x, y, w, h, if_blender(src->maskColor()));
-        break;
+    case IMAGE_RGB:
+      image_scale_tpl<RgbTraits>(
+        dst, src,
+        dst_x, dst_y, dst_w, dst_h,
+        src_x, src_y, src_w, src_h, rgba_blender);
+      break;
 
-      case IMAGE_BITMAP:
-        image_scale_tpl<BitmapTraits>(dst, src, x, y, w, h, if_blender(0));
-        break;
-    }
+    case IMAGE_GRAYSCALE:
+      image_scale_tpl<GrayscaleTraits>(
+        dst, src,
+        dst_x, dst_y, dst_w, dst_h,
+        src_x, src_y, src_w, src_h, grayscale_blender);
+      break;
+
+    case IMAGE_INDEXED:
+      image_scale_tpl<IndexedTraits>(
+        dst, src,
+        dst_x, dst_y, dst_w, dst_h,
+        src_x, src_y, src_w, src_h, if_blender(src->maskColor()));
+      break;
+
+    case IMAGE_BITMAP:
+      image_scale_tpl<BitmapTraits>(
+        dst, src,
+        dst_x, dst_y, dst_w, dst_h,
+        src_x, src_y, src_w, src_h, if_blender(0));
+      break;
   }
 }
 
-void rotate_image(Image *dst, Image *src, int x, int y, int w, int h,
+void rotate_image(Image* dst, const Image* src, int x, int y, int w, int h,
   int cx, int cy, double angle)
 {
   fixed xs[4], ys[4];
@@ -110,35 +163,38 @@ void rotate_image(Image *dst, Image *src, int x, int y, int w, int h,
                                     fixdiv(itofix(h), itofix(src->height())),
                                     false, false, xs, ys);
 
-  ase_parallelogram_map_standard (dst, src, xs, ys);
+  ase_parallelogram_map_standard(dst, src, nullptr, xs, ys);
 }
 
 /*    1-----2
       |     |
       4-----3
  */
-void parallelogram(Image *bmp, Image *sprite,
+void parallelogram(Image* bmp, const Image* sprite, const Image* mask,
   int x1, int y1, int x2, int y2,
   int x3, int y3, int x4, int y4)
 {
   fixed xs[4], ys[4];
 
-  xs[0] = itofix (x1);
-  ys[0] = itofix (y1);
-  xs[1] = itofix (x2);
-  ys[1] = itofix (y2);
-  xs[2] = itofix (x3);
-  ys[2] = itofix (y3);
-  xs[3] = itofix (x4);
-  ys[3] = itofix (y4);
+  xs[0] = itofix(x1);
+  ys[0] = itofix(y1);
+  xs[1] = itofix(x2);
+  ys[1] = itofix(y2);
+  xs[2] = itofix(x3);
+  ys[2] = itofix(y3);
+  xs[3] = itofix(x4);
+  ys[3] = itofix(y4);
 
-  ase_parallelogram_map_standard (bmp, sprite, xs, ys);
+  ase_parallelogram_map_standard(bmp, sprite, mask, xs, ys);
 }
 
 // Scanline drawers.
 
 template<class Traits, class Delegate>
-static void draw_scanline(Image *bmp, Image *spr,
+static void draw_scanline(
+  Image* bmp,
+  const Image* spr,
+  const Image* mask,
   fixed l_bmp_x, int bmp_y_i,
   fixed r_bmp_x,
   fixed l_spr_x, fixed l_spr_y,
@@ -150,8 +206,16 @@ static void draw_scanline(Image *bmp, Image *spr,
 
   delegate.lockBits(bmp, gfx::Rect(l_bmp_x, bmp_y_i, r_bmp_x - l_bmp_x + 1, 1));
 
+  gfx::Rect maskBounds = (mask ? mask->bounds(): spr->bounds());
+
   for (int x=(int)l_bmp_x; x<=(int)r_bmp_x; ++x) {
-    delegate.feedLine(spr, l_spr_x>>16, l_spr_y>>16);
+    int u = l_spr_x>>16;
+    int v = l_spr_y>>16;
+
+    if (!mask ||
+        (maskBounds.contains(u, v) && get_pixel_fast<BitmapTraits>(mask, u, v)))
+      delegate.putPixel(spr, u, v);
+    delegate.nextPixel();
 
     l_spr_x += spr_dx;
     l_spr_y += spr_dy;
@@ -173,6 +237,11 @@ public:
     m_bits.unlock();
   }
 
+  void nextPixel() {
+    ASSERT(m_it != m_end);
+    ++m_it;
+  }
+
 private:
   ImageBits<Traits> m_bits;
 
@@ -183,44 +252,36 @@ protected:
 class RgbDelegate : public GenericDelegate<RgbTraits> {
 public:
   RgbDelegate(color_t mask_color) {
-    m_blender = rgba_blenders[BLEND_MODE_NORMAL];
     m_mask_color = mask_color;
   }
 
-  void feedLine(Image* spr, int spr_x, int spr_y) {
+  void putPixel(const Image* spr, int spr_x, int spr_y) {
     ASSERT(m_it != m_end);
 
-    int c = spr->getPixel(spr_x, spr_y);
+    int c = get_pixel_fast<RgbTraits>(spr, spr_x, spr_y);
     if ((rgba_geta(m_mask_color) == 0) || ((c & rgba_rgb_mask) != (m_mask_color & rgba_rgb_mask)))
-      *m_it = m_blender(*m_it, c, 255);
-
-    ++m_it;
+      *m_it = rgba_blender_normal(*m_it, c);
   }
 
 private:
-  BLEND_COLOR m_blender;
   color_t m_mask_color;
 };
 
 class GrayscaleDelegate : public GenericDelegate<GrayscaleTraits> {
 public:
   GrayscaleDelegate(color_t mask_color) {
-    m_blender = graya_blenders[BLEND_MODE_NORMAL];
     m_mask_color = mask_color;
   }
 
-  void feedLine(Image* spr, int spr_x, int spr_y) {
+  void putPixel(const Image* spr, int spr_x, int spr_y) {
     ASSERT(m_it != m_end);
 
-    int c = spr->getPixel(spr_x, spr_y);
+    int c = get_pixel_fast<GrayscaleTraits>(spr, spr_x, spr_y);
     if ((graya_geta(m_mask_color) == 0) || ((c & graya_v_mask) != (m_mask_color & graya_v_mask)))
-      *m_it = m_blender(*m_it, c, 255);
-
-    ++m_it;
+      *m_it = graya_blender_normal(*m_it, c, 255);
   }
 
 private:
-  BLEND_COLOR m_blender;
   color_t m_mask_color;
 };
 
@@ -230,13 +291,12 @@ public:
     m_mask_color(mask_color) {
   }
 
-  void feedLine(Image* spr, int spr_x, int spr_y) {
+  void putPixel(const Image* spr, int spr_x, int spr_y) {
     ASSERT(m_it != m_end);
 
-    int c = spr->getPixel(spr_x, spr_y);
+    color_t c = get_pixel_fast<IndexedTraits>(spr, spr_x, spr_y);
     if (c != m_mask_color)
       *m_it = c;
-    ++m_it;
   }
 
 private:
@@ -245,13 +305,12 @@ private:
 
 class BitmapDelegate : public GenericDelegate<BitmapTraits> {
 public:
-  void feedLine(Image* spr, int spr_x, int spr_y) {
+  void putPixel(const Image* spr, int spr_x, int spr_y) {
     ASSERT(m_it != m_end);
 
-    int c = spr->getPixel(spr_x, spr_y);
+    int c = get_pixel_fast<BitmapTraits>(spr, spr_x, spr_y);
     if (c != 0)                 // TODO
       *m_it = c;
-    ++m_it;
   }
 };
 
@@ -281,7 +340,8 @@ public:
  */
 template<class Traits, class Delegate>
 static void ase_parallelogram_map(
-  Image *bmp, Image *spr, fixed xs[4], fixed ys[4],
+  Image* bmp, const Image* spr, const Image* mask,
+  fixed xs[4], fixed ys[4],
   int sub_pixel_accuracy, Delegate delegate)
 {
   /* Index in xs[] and ys[] to topmost point. */
@@ -653,7 +713,7 @@ static void ase_parallelogram_map(
           }
         }
       }
-      draw_scanline<Traits, Delegate>(bmp, spr,
+      draw_scanline<Traits, Delegate>(bmp, spr, mask,
         l_bmp_x_rounded, bmp_y_i, r_bmp_x_rounded,
         l_spr_x_rounded, l_spr_y_rounded,
         spr_dx, spr_dy, delegate);
@@ -684,32 +744,33 @@ static void ase_parallelogram_map(
  *  _parallelogram_map() function since then you can bypass it and define
  *  your own scanline drawer, eg. for anti-aliased rotations.
  */
-static void ase_parallelogram_map_standard(Image *bmp, Image *sprite,
-                                           fixed xs[4], fixed ys[4])
+static void ase_parallelogram_map_standard(
+  Image* bmp, const Image* sprite, const Image* mask,
+  fixed xs[4], fixed ys[4])
 {
   switch (bmp->pixelFormat()) {
 
     case IMAGE_RGB: {
       RgbDelegate delegate(sprite->maskColor());
-      ase_parallelogram_map<RgbTraits, RgbDelegate>(bmp, sprite, xs, ys, false, delegate);
+      ase_parallelogram_map<RgbTraits, RgbDelegate>(bmp, sprite, mask, xs, ys, false, delegate);
       break;
     }
 
     case IMAGE_GRAYSCALE: {
       GrayscaleDelegate delegate(sprite->maskColor());
-      ase_parallelogram_map<GrayscaleTraits, GrayscaleDelegate>(bmp, sprite, xs, ys, false, delegate);
+      ase_parallelogram_map<GrayscaleTraits, GrayscaleDelegate>(bmp, sprite, mask, xs, ys, false, delegate);
       break;
     }
 
     case IMAGE_INDEXED: {
       IndexedDelegate delegate(sprite->maskColor());
-      ase_parallelogram_map<IndexedTraits, IndexedDelegate>(bmp, sprite, xs, ys, false, delegate);
+      ase_parallelogram_map<IndexedTraits, IndexedDelegate>(bmp, sprite, mask, xs, ys, false, delegate);
       break;
     }
 
     case IMAGE_BITMAP: {
       BitmapDelegate delegate;
-      ase_parallelogram_map<BitmapTraits, BitmapDelegate>(bmp, sprite, xs, ys, false, delegate);
+      ase_parallelogram_map<BitmapTraits, BitmapDelegate>(bmp, sprite, mask, xs, ys, false, delegate);
       break;
     }
   }

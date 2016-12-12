@@ -1,8 +1,10 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
+
+// #define DEBUG_SCROLL_EVENTS
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -10,13 +12,25 @@
 
 #include "gfx/size.h"
 #include "ui/intern.h"
+#include "ui/manager.h"
 #include "ui/message.h"
-#include "ui/preferred_size_event.h"
+#include "ui/move_region.h"
 #include "ui/resize_event.h"
+#include "ui/scroll_helper.h"
+#include "ui/scroll_region_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
 #include "ui/view.h"
 #include "ui/widget.h"
+
+#ifdef DEBUG_SCROLL_EVENTS
+#include "base/thread.h"
+#include "she/display.h"
+#include "she/surface.h"
+#endif
+
+#include <queue>
 
 #define HBAR_SIZE (m_scrollbar_h.getBarWidth())
 #define VBAR_SIZE (m_scrollbar_v.getBarWidth())
@@ -27,12 +41,12 @@ using namespace gfx;
 
 View::View()
   : Widget(kViewWidget)
-  , m_scrollbar_h(JI_HORIZONTAL)
-  , m_scrollbar_v(JI_VERTICAL)
+  , m_scrollbar_h(HORIZONTAL, this)
+  , m_scrollbar_v(VERTICAL, this)
 {
   m_hasBars = true;
 
-  this->setFocusStop(true);
+  setFocusStop(true);
   addChild(&m_viewport);
   setScrollableSize(Size(0, 0));
 
@@ -51,26 +65,22 @@ void View::attachToView(Widget* viewable_widget)
 
 Widget* View::attachedWidget()
 {
-  return UI_FIRST_WIDGET(m_viewport.getChildren());
+  return UI_FIRST_WIDGET(m_viewport.children());
 }
 
 void View::makeVisibleAllScrollableArea()
 {
   Size reqSize = m_viewport.calculateNeededSize();
 
-  this->min_w =
-    + this->border_width.l
-    + m_viewport.border_width.l
-    + reqSize.w
-    + m_viewport.border_width.r
-    + this->border_width.r;
+  setMinSize(
+    gfx::Size(
+      + reqSize.w
+      + m_viewport.border().width()
+      + border().width(),
 
-  this->min_h =
-    + this->border_width.t
-    + m_viewport.border_width.t
-    + reqSize.h
-    + m_viewport.border_width.b
-    + this->border_width.b;
+      + reqSize.h
+      + m_viewport.border().height()
+      + border().height()));
 }
 
 void View::hideScrollBars()
@@ -87,87 +97,43 @@ void View::showScrollBars()
 
 Size View::getScrollableSize()
 {
-  return Size(m_scrollbar_h.getSize(),
-              m_scrollbar_v.getSize());
+  return Size(m_scrollbar_h.size(),
+              m_scrollbar_v.size());
 }
 
 void View::setScrollableSize(const Size& sz)
 {
-#define CHECK(w, h, l, t, r, b)                                 \
-  ((sz.w > (m_viewport.getBounds().w                            \
-            - m_viewport.border_width.l                         \
-            - m_viewport.border_width.r)) &&                    \
-   (VBAR_SIZE < pos.w) && (HBAR_SIZE < pos.h))
-
-  m_scrollbar_h.setSize(sz.w);
-  m_scrollbar_v.setSize(sz.h);
-
-  gfx::Rect pos = getChildrenBounds();
-
-  // Setup scroll-bars
-  removeChild(&m_scrollbar_h);
-  removeChild(&m_scrollbar_v);
+  gfx::Rect viewportArea = childrenBounds();
 
   if (m_hasBars) {
-    if (CHECK(w, h, l, t, r, b)) {
-      pos.h -= HBAR_SIZE;
-      addChild(&m_scrollbar_h);
-
-      if (CHECK(h, w, t, l, b, r)) {
-        pos.w -= VBAR_SIZE;
-        if (CHECK(w, h, l, t, r, b))
-          addChild(&m_scrollbar_v);
-        else {
-          pos.w += VBAR_SIZE;
-          pos.h += HBAR_SIZE;
-          removeChild(&m_scrollbar_h);
-        }
-      }
-    }
-    else if (CHECK(h, w, t, l, b, r)) {
-      pos.w -= VBAR_SIZE;
-      addChild(&m_scrollbar_v);
-
-      if (CHECK(w, h, l, t, r, b)) {
-        pos.h -= HBAR_SIZE;
-        if (CHECK(h, w, t, l, b, r))
-          addChild(&m_scrollbar_h);
-        else {
-          pos.w += VBAR_SIZE;
-          pos.h += HBAR_SIZE;
-          removeChild(&m_scrollbar_v);
-        }
-      }
-    }
-
-    if (hasChild(&m_scrollbar_h)) {
-      m_scrollbar_h.setBounds(gfx::Rect(pos.x, pos.y2(), pos.w, HBAR_SIZE));
-      m_scrollbar_h.setVisible(true);
-    }
-    else
-      m_scrollbar_h.setVisible(false);
-
-    if (hasChild(&m_scrollbar_v)) {
-      m_scrollbar_v.setBounds(gfx::Rect(pos.x2(), pos.y, VBAR_SIZE, pos.h));
-      m_scrollbar_v.setVisible(true);
-    }
-    else
-      m_scrollbar_v.setVisible(false);
+    setup_scrollbars(sz,
+                     viewportArea,
+                     *this,
+                     m_scrollbar_h,
+                     m_scrollbar_v);
+  }
+  else {
+    if (m_scrollbar_h.parent()) removeChild(&m_scrollbar_h);
+    if (m_scrollbar_v.parent()) removeChild(&m_scrollbar_v);
+    m_scrollbar_h.setVisible(false);
+    m_scrollbar_v.setVisible(false);
+    m_scrollbar_h.setSize(sz.w);
+    m_scrollbar_v.setSize(sz.h);
   }
 
   // Setup viewport
   invalidate();
-  m_viewport.setBounds(pos);
-  setViewScroll(getViewScroll()); // Setup the same scroll-point
+  m_viewport.setBounds(viewportArea);
+  setViewScroll(viewScroll()); // Setup the same scroll-point
 }
 
-Size View::getVisibleSize()
+Size View::visibleSize() const
 {
-  return Size(m_viewport.getBounds().w - m_viewport.border_width.l - m_viewport.border_width.r,
-              m_viewport.getBounds().h - m_viewport.border_width.t - m_viewport.border_width.b);
+  return Size(m_viewport.bounds().w - m_viewport.border().width(),
+              m_viewport.bounds().h - m_viewport.border().height());
 }
 
-Point View::getViewScroll()
+Point View::viewScroll() const
 {
   return Point(m_scrollbar_h.getPos(),
                m_scrollbar_v.getPos());
@@ -175,27 +141,13 @@ Point View::getViewScroll()
 
 void View::setViewScroll(const Point& pt)
 {
-  Point oldScroll = getViewScroll();
-  Size maxsize = getScrollableSize();
-  Size visible = getVisibleSize();
-  Point newScroll(MID(0, pt.x, MAX(0, maxsize.w - visible.w)),
-                  MID(0, pt.y, MAX(0, maxsize.h - visible.h)));
-
-  if (newScroll == oldScroll)
-    return;
-
-  m_scrollbar_h.setPos(newScroll.x);
-  m_scrollbar_v.setPos(newScroll.y);
-
-  m_viewport.layout();
-
-  onScrollChange();
+  onSetViewScroll(pt);
 }
 
 void View::updateView()
 {
-  Widget* vw = UI_FIRST_WIDGET(m_viewport.getChildren());
-  Point scroll = getViewScroll();
+  Widget* vw = UI_FIRST_WIDGET(m_viewport.children());
+  Point scroll = viewScroll();
 
   // Set minimum (remove scroll-bars)
   setScrollableSize(Size(0, 0));
@@ -215,24 +167,24 @@ void View::updateView()
     setViewScroll(Point(0, 0));
 }
 
-Viewport* View::getViewport()
+Viewport* View::viewport()
 {
   return &m_viewport;
 }
 
-Rect View::getViewportBounds()
+Rect View::viewportBounds()
 {
-  return m_viewport.getBounds() - m_viewport.getBorder();
+  return m_viewport.bounds() - m_viewport.border();
 }
 
 // static
 View* View::getView(Widget* widget)
 {
-  if ((widget->getParent()) &&
-      (widget->getParent()->type == kViewViewportWidget) &&
-      (widget->getParent()->getParent()) &&
-      (widget->getParent()->getParent()->type == kViewWidget))
-    return static_cast<View*>(widget->getParent()->getParent());
+  if ((widget->parent()) &&
+      (widget->parent()->type() == kViewViewportWidget) &&
+      (widget->parent()->parent()) &&
+      (widget->parent()->parent()->type() == kViewWidget))
+    return static_cast<View*>(widget->parent()->parent());
   else
     return 0;
 }
@@ -258,21 +210,146 @@ bool View::onProcessMessage(Message* msg)
 
 void View::onResize(ResizeEvent& ev)
 {
-  setBoundsQuietly(ev.getBounds());
+  setBoundsQuietly(ev.bounds());
   updateView();
 }
 
-void View::onPreferredSize(PreferredSizeEvent& ev)
+void View::onSizeHint(SizeHintEvent& ev)
 {
-  Size viewSize = m_viewport.getPreferredSize();
-  viewSize.w += this->border_width.l + this->border_width.r;
-  viewSize.h += this->border_width.t + this->border_width.b;
-  ev.setPreferredSize(viewSize);
+  Size viewSize = m_viewport.sizeHint();
+  viewSize.w += border().width();
+  viewSize.h += border().height();
+  ev.setSizeHint(viewSize);
 }
 
 void View::onPaint(PaintEvent& ev)
 {
-  getTheme()->paintView(ev);
+  theme()->paintView(ev);
+}
+
+void View::onSetViewScroll(const gfx::Point& pt)
+{
+  Point oldScroll = viewScroll();
+  Size maxsize = getScrollableSize();
+  Size visible = visibleSize();
+  Point newScroll(MID(0, pt.x, MAX(0, maxsize.w - visible.w)),
+                  MID(0, pt.y, MAX(0, maxsize.h - visible.h)));
+
+  if (newScroll == oldScroll)
+    return;
+
+  // This is the movement for the scrolled region (which is inverse to
+  // the scroll position delta/movement).
+  Point delta = oldScroll - newScroll;
+
+  // Visible viewport region that is not overlapped by windows
+  Region drawableRegion;
+  m_viewport.getDrawableRegion(
+    drawableRegion, DrawableRegionFlags(kCutTopWindows | kUseChildArea));
+
+  // Start the region to scroll equal to the drawable viewport region.
+  Rect cpos = m_viewport.childrenBounds();
+  Region validRegion(cpos);
+  validRegion &= drawableRegion;
+
+  // Remove all children invalid regions from this "validRegion"
+  {
+    std::queue<Widget*> items;
+    items.push(&m_viewport);
+    while (!items.empty()) {
+      Widget* item = items.front();
+      items.pop();
+      for (Widget* child : item->children())
+        items.push(child);
+
+      if (item->isVisible())
+        validRegion -= item->getUpdateRegion();
+    }
+  }
+
+  // Remove invalid region in the screen (areas that weren't
+  // re-painted yet)
+  Manager* manager = this->manager();
+  if (manager)
+    validRegion -= manager->getInvalidRegion();
+
+  // Add extra regions that cannot be scrolled (this can be customized
+  // by subclassing ui::View). We use two ScrollRegionEvent, this
+  // first one with the old scroll position. And the next one with the
+  // new scroll position.
+  {
+    ScrollRegionEvent ev(this, validRegion);
+    onScrollRegion(ev);
+  }
+
+  // Move viewport children
+  cpos.offset(-newScroll);
+  for (auto child : m_viewport.children()) {
+    Size reqSize = child->sizeHint();
+    cpos.w = MAX(reqSize.w, cpos.w);
+    cpos.h = MAX(reqSize.h, cpos.h);
+    if (cpos.w != child->bounds().w ||
+        cpos.h != child->bounds().h)
+      child->setBounds(cpos);
+    else
+      child->offsetWidgets(cpos.x - child->bounds().x,
+                           cpos.y - child->bounds().y);
+  }
+
+  // Change scroll bar positions
+  m_scrollbar_h.setPos(newScroll.x);
+  m_scrollbar_v.setPos(newScroll.y);
+
+  // Region to invalidate (new visible children/child parts)
+  Region invalidRegion(cpos);
+  invalidRegion &= drawableRegion;
+
+  // Move the valid screen region.
+  {
+    // The movable region includes the given "validRegion"
+    // intersecting itself when it's in the new position, so we don't
+    // overlap regions outside the "validRegion".
+    Region movable = validRegion;
+    movable.offset(delta);
+    movable &= validRegion;
+    invalidRegion -= movable;   // Remove the moved region as invalid
+    movable.offset(-delta);
+
+    ui::move_region(manager, movable, delta.x, delta.y);
+  }
+
+#ifdef DEBUG_SCROLL_EVENTS
+  // Paint invalid region with red fill
+  {
+    auto display = manager->getDisplay();
+    if (display)
+      display->flip(gfx::Rect(0, 0, display_w(), display_h()));
+    base::this_thread::sleep_for(0.002);
+    {
+      she::Surface* surface = display->getSurface();
+      she::SurfaceLock lock(surface);
+      for (const auto& rc : invalidRegion)
+        surface->fillRect(gfx::rgba(255, 0, 0), rc);
+    }
+    if (display)
+      display->flip(gfx::Rect(0, 0, display_w(), display_h()));
+    base::this_thread::sleep_for(0.002);
+  }
+#endif
+
+  // Invalidate viewport's children regions
+  m_viewport.invalidateRegion(invalidRegion);
+
+  // Notify about the new scroll position
+  onScrollChange();
+
+  // Generate PaintMessages right now.
+  flushRedraw();
+}
+
+void View::onScrollRegion(ScrollRegionEvent& ev)
+{
+  // Do nothing
 }
 
 void View::onScrollChange()

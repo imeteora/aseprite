@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2013, 2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -12,8 +12,7 @@
 
 namespace ui {
 
-  class Splitter : public Widget
-  {
+  class Splitter : public Widget {
   public:
     enum Type { ByPercentage, ByPixel };
 
@@ -27,11 +26,15 @@ namespace ui {
     bool onProcessMessage(Message* msg) override;
     void onResize(ResizeEvent& ev) override;
     void onPaint(PaintEvent& ev) override;
-    void onPreferredSize(PreferredSizeEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     void onLoadLayout(LoadLayoutEvent& ev) override;
     void onSaveLayout(SaveLayoutEvent& ev) override;
 
   private:
+    Widget* panel1() const;
+    Widget* panel2() const;
+    void limitPos();
+
     Type m_type;
     double m_pos;
   };

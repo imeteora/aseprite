@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_APP_MENUS_H_INCLUDED
 #define APP_APP_MENUS_H_INCLUDED
@@ -22,6 +10,7 @@
 
 #include "base/disable_copying.h"
 #include "base/unique_ptr.h"
+#include "obs/connection.h"
 #include "ui/base.h"
 #include "ui/menu.h"
 
@@ -50,28 +39,37 @@ namespace app {
 
     Menu* getRootMenu() { return m_rootMenu; }
     MenuItem* getRecentListMenuitem() { return m_recentListMenuitem; }
+    Menu* getTabPopupMenu() { return m_tabPopupMenu; }
     Menu* getDocumentTabPopupMenu() { return m_documentTabPopupMenu; }
     Menu* getLayerPopupMenu() { return m_layerPopupMenu; }
     Menu* getFramePopupMenu() { return m_framePopupMenu; }
     Menu* getCelPopupMenu() { return m_celPopupMenu; }
     Menu* getCelMovementPopupMenu() { return m_celMovementPopupMenu; }
+    Menu* getFrameTagPopupMenu() { return m_frameTagPopupMenu; }
+    Menu* getPalettePopupMenu() { return m_palettePopupMenu; }
+    Menu* getInkPopupMenu() { return m_inkPopupMenu; }
 
-    void applyShortcutToMenuitemsWithCommand(Command* command, Params* params, Key* key);
+    void applyShortcutToMenuitemsWithCommand(Command* command, const Params& params, Key* key);
 
   private:
     Menu* loadMenuById(TiXmlHandle& handle, const char *id);
     Menu* convertXmlelemToMenu(TiXmlElement* elem);
     Widget* convertXmlelemToMenuitem(TiXmlElement* elem);
     Widget* createInvalidVersionMenuitem();
-    void applyShortcutToMenuitemsWithCommand(Menu* menu, Command* command, Params* params, Key* key);
+    void applyShortcutToMenuitemsWithCommand(Menu* menu, Command* command, const Params& params, Key* key);
 
     base::UniquePtr<Menu> m_rootMenu;
     MenuItem* m_recentListMenuitem;
+    base::UniquePtr<Menu> m_tabPopupMenu;
     base::UniquePtr<Menu> m_documentTabPopupMenu;
     base::UniquePtr<Menu> m_layerPopupMenu;
     base::UniquePtr<Menu> m_framePopupMenu;
     base::UniquePtr<Menu> m_celPopupMenu;
     base::UniquePtr<Menu> m_celMovementPopupMenu;
+    base::UniquePtr<Menu> m_frameTagPopupMenu;
+    base::UniquePtr<Menu> m_palettePopupMenu;
+    base::UniquePtr<Menu> m_inkPopupMenu;
+    obs::scoped_connection m_recentFilesConn;
   };
 
 } // namespace app

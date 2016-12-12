@@ -1,102 +1,120 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
+#include "app/app.h"
 #include "app/commands/command.h"
 #include "app/commands/params.h"
 #include "app/modules/editors.h"
+#include "app/pref/preferences.h"
 #include "app/ui/editor/editor.h"
 #include "base/convert_to.h"
 #include "render/zoom.h"
+#include "ui/manager.h"
+#include "ui/system.h"
 
 namespace app {
 
 class ZoomCommand : public Command {
 public:
-  enum Action { In, Out, Set };
+  enum class Action { In, Out, Set };
+  enum class Focus { Default, Mouse, Center };
 
   ZoomCommand();
   Command* clone() const override { return new ZoomCommand(*this); }
 
 protected:
-  void onLoadParams(Params* params);
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
-  std::string onGetFriendlyName() const;
+  void onLoadParams(const Params& params) override;
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
+  std::string onGetFriendlyName() const override;
 
 private:
   Action m_action;
-  int m_percentage;
+  render::Zoom m_zoom;
+  Focus m_focus;
 };
 
 ZoomCommand::ZoomCommand()
   : Command("Zoom",
             "Zoom",
             CmdUIOnlyFlag)
+  , m_action(Action::In)
+  , m_zoom(1, 1)
+  , m_focus(Focus::Default)
 {
 }
 
-void ZoomCommand::onLoadParams(Params* params)
+void ZoomCommand::onLoadParams(const Params& params)
 {
-  std::string action = params->get("action");
-  if (action == "in") m_action = In;
-  else if (action == "out") m_action = Out;
-  else if (action == "set") m_action = Set;
+  std::string action = params.get("action");
+  if (action == "in") m_action = Action::In;
+  else if (action == "out") m_action = Action::Out;
+  else if (action == "set") m_action = Action::Set;
 
-  std::string percentage = params->get("percentage");
+  std::string percentage = params.get("percentage");
   if (!percentage.empty()) {
-    m_percentage = std::strtol(percentage.c_str(), NULL, 10);
-    m_action = Set;
+    m_zoom = render::Zoom::fromScale(
+      std::strtod(percentage.c_str(), NULL) / 100.0);
+    m_action = Action::Set;
   }
+
+  m_focus = Focus::Default;
+  std::string focus = params.get("focus");
+  if (focus == "center") m_focus = Focus::Center;
+  else if (focus == "mouse") m_focus = Focus::Mouse;
 }
 
 bool ZoomCommand::onEnabled(Context* context)
 {
-  return current_editor != NULL;
+  return (current_editor != NULL);
 }
 
 void ZoomCommand::onExecute(Context* context)
 {
-  render::Zoom zoom = current_editor->zoom();
+  // Use the current editor by default.
+  Editor* editor = current_editor;
+  gfx::Point mousePos = ui::get_mouse_position();
+
+  // Try to use the editor above the mouse.
+  ui::Widget* pick = ui::Manager::getDefault()->pick(mousePos);
+  if (pick && pick->type() == editor_type())
+    editor = static_cast<Editor*>(pick);
+
+  render::Zoom zoom = editor->zoom();
 
   switch (m_action) {
-    case In:
+    case Action::In:
       zoom.in();
       break;
-    case Out:
+    case Action::Out:
       zoom.out();
       break;
-    case Set:
-      switch (m_percentage) {
-        case 3200: zoom = render::Zoom(32, 1); break;
-        case 1600: zoom = render::Zoom(16, 1); break;
-        case 800: zoom = render::Zoom(8, 1); break;
-        case 400: zoom = render::Zoom(4, 1); break;
-        case 200: zoom = render::Zoom(2, 1); break;
-        default: zoom = render::Zoom(1, 1); break;
-      }
+    case Action::Set:
+      zoom = m_zoom;
       break;
   }
 
-  current_editor->setEditorZoom(zoom);
+  Focus focus = m_focus;
+  if (focus == Focus::Default) {
+    if (Preferences::instance().editor.zoomFromCenterWithKeys()) {
+      focus = Focus::Center;
+    }
+    else {
+      focus = Focus::Mouse;
+    }
+  }
+
+  editor->setZoomAndCenterInMouse(
+    zoom, mousePos,
+    (focus == Focus::Center ? Editor::ZoomBehavior::CENTER:
+                              Editor::ZoomBehavior::MOUSE));
 }
 
 std::string ZoomCommand::onGetFriendlyName() const
@@ -104,14 +122,14 @@ std::string ZoomCommand::onGetFriendlyName() const
   std::string text = "Zoom";
 
   switch (m_action) {
-    case In:
+    case Action::In:
       text += " in";
       break;
-    case Out:
+    case Action::Out:
       text += " out";
       break;
-    case Set:
-      text += " " + base::convert_to<std::string>(m_percentage) + "%";
+    case Action::Set:
+      text += " " + base::convert_to<std::string>(int(100.0*m_zoom.scale())) + "%";
       break;
   }
 

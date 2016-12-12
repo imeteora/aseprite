@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -28,11 +16,12 @@
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
-#include "app/settings/settings.h"
+#include "app/pref/preferences.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/status_bar.h"
 #include "base/thread.h"
 #include "doc/sprite.h"
+#include "ui/manager.h"
 #include "ui/system.h"
 
 namespace app {
@@ -45,8 +34,8 @@ public:
   Command* clone() const override { return new UndoCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 
 private:
   Type m_type;
@@ -66,26 +55,28 @@ bool UndoCommand::onEnabled(Context* context)
   Document* document(writer.document());
   return
     document != NULL &&
-    ((m_type == Undo ? document->getUndo()->canUndo():
-                       document->getUndo()->canRedo()));
+    ((m_type == Undo ? document->undoHistory()->canUndo():
+                       document->undoHistory()->canRedo()));
 }
 
 void UndoCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
   Document* document(writer.document());
-  DocumentUndo* undo = document->getUndo();
+  DocumentUndo* undo = document->undoHistory();
   Sprite* sprite = document->sprite();
+  SpritePosition spritePosition;
+  const bool gotoModified =
+    Preferences::instance().undo.gotoModified();
 
-  if (context->settings()->undoGotoModified()) {
-    SpritePosition spritePosition;
-    SpritePosition currentPosition(writer.location()->layerIndex(),
-                                   writer.location()->frame());
+  if (gotoModified) {
+    SpritePosition currentPosition(writer.site()->layerIndex(),
+                                   writer.site()->frame());
 
     if (m_type == Undo)
-      spritePosition = undo->getNextUndoSpritePosition();
+      spritePosition = undo->nextUndoSpritePosition();
     else
-      spritePosition = undo->getNextRedoSpritePosition();
+      spritePosition = undo->nextRedoSpritePosition();
 
     if (spritePosition != currentPosition) {
       current_editor->setLayer(sprite->indexToLayer(spritePosition.layerIndex()));
@@ -96,27 +87,41 @@ void UndoCommand::onExecute(Context* context)
       current_editor->drawSpriteClipped(
         gfx::Region(gfx::Rect(0, 0, sprite->width(), sprite->height())));
 
-      ui::dirty_display_flag = true;
-      gui_feedback();
-
+      current_editor->manager()->flipDisplay();
       base::this_thread::sleep_for(0.01);
     }
   }
 
-  StatusBar::instance()
-    ->showTip(1000, "%s %s",
-              (m_type == Undo ? "Undid": "Redid"),
-              (m_type == Undo ? undo->getNextUndoLabel():
-                                undo->getNextRedoLabel()));
+  StatusBar* statusbar = StatusBar::instance();
+  if (statusbar)
+    statusbar->showTip(1000, "%s %s",
+      (m_type == Undo ? "Undid": "Redid"),
+      (m_type == Undo ?
+        undo->nextUndoLabel().c_str():
+        undo->nextRedoLabel().c_str()));
 
   // Effectively undo/redo.
   if (m_type == Undo)
-    undo->doUndo();
+    undo->undo();
   else
-    undo->doRedo();
+    undo->redo();
+
+  // After redo/undo, we retry to change the current SpritePosition
+  // (because new frames/layers could be added, positions that we
+  // weren't able to reach before the undo).
+  if (gotoModified) {
+    SpritePosition currentPosition(
+      writer.site()->layerIndex(),
+      writer.site()->frame());
+
+    if (spritePosition != currentPosition) {
+      current_editor->setLayer(sprite->indexToLayer(spritePosition.layerIndex()));
+      current_editor->setFrame(spritePosition.frame());
+    }
+  }
 
   document->generateMaskBoundaries();
-  document->destroyExtraCel(); // Regenerate extras
+  document->setExtraCel(ExtraCelRef(nullptr));
 
   update_screen_for_document(document);
   set_current_palette(writer.palette(), false);

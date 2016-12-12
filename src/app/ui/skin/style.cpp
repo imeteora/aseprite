@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -34,6 +22,7 @@ namespace skin {
 css::State Style::m_hoverState("hover");
 css::State Style::m_activeState("active");
 css::State Style::m_clickedState("clicked");
+css::State Style::m_disabledState("disabled");
 
 Rule::~Rule()
 {
@@ -50,15 +39,34 @@ void BackgroundRule::onPaint(ui::Graphics* g, const gfx::Rect& bounds, const cha
 {
   SkinTheme* theme = static_cast<SkinTheme*>(ui::CurrentTheme::get());
 
-  if (m_part != NULL && m_part->size() > 0) {
-    if (m_part->size() == 1) {
+  if (m_part && m_part->countBitmaps() > 0) {
+    if (m_part->countBitmaps() == 1) {
       if (!gfx::is_transparent(m_color))
         g->fillRect(m_color, bounds);
 
-      g->drawRgbaSurface(m_part->getBitmap(0), bounds.x, bounds.y);
+      she::Surface* bmp = m_part->bitmap(0);
+
+      if (m_repeat == BackgroundRepeat::NO_REPEAT) {
+        g->drawRgbaSurface(bmp, bounds.x, bounds.y);
+      }
+      else {
+        ui::IntersectClip clip(g, bounds);
+        if (!clip)
+          return;
+
+        for (int y=bounds.y; y<bounds.y2(); y+=bmp->height()) {
+          for (int x=bounds.x; x<bounds.x2(); x+=bmp->width()) {
+            g->drawRgbaSurface(bmp, x, y);
+            if (m_repeat == BackgroundRepeat::REPEAT_Y)
+              break;
+          }
+          if (m_repeat == BackgroundRepeat::REPEAT_X)
+            break;
+        }
+      }
     }
-    else if (m_part->size() == 8) {
-      theme->draw_bounds_nw(g, bounds, m_part, m_color);
+    else if (m_part->countBitmaps() == 8) {
+      theme->drawRect(g, bounds, m_part.get(), m_color);
     }
   }
   else if (!gfx::is_transparent(m_color)) {
@@ -73,7 +81,7 @@ void TextRule::onPaint(ui::Graphics* g, const gfx::Rect& bounds, const char* tex
   if (text) {
     g->drawAlignedUIString(text,
       (gfx::is_transparent(m_color) ?
-        theme->getColor(ThemeColor::Text):
+        theme->colors.text():
         m_color),
       gfx::ColorNone,
       gfx::Rect(bounds).shrink(m_padding), m_align);
@@ -82,22 +90,25 @@ void TextRule::onPaint(ui::Graphics* g, const gfx::Rect& bounds, const char* tex
 
 void IconRule::onPaint(ui::Graphics* g, const gfx::Rect& bounds, const char* text)
 {
-  she::Surface* bmp = m_part->getBitmap(0);
+  she::Surface* bmp = m_part->bitmap(0);
   int x, y;
 
-  if (m_align & JI_RIGHT)
+  if (m_align & ui::RIGHT)
     x = bounds.x2() - bmp->width();
-  else if (m_align & JI_CENTER)
+  else if (m_align & ui::CENTER)
     x = bounds.x + bounds.w/2 - bmp->width()/2;
   else
     x = bounds.x;
 
-  if (m_align & JI_BOTTOM)
+  if (m_align & ui::BOTTOM)
     y = bounds.y2() - bmp->height();
-  else if (m_align & JI_MIDDLE)
+  else if (m_align & ui::MIDDLE)
     y = bounds.y + bounds.h/2 - bmp->height()/2;
   else
     y = bounds.y;
+
+  x += m_x;
+  y += m_y;
 
   g->drawRgbaSurface(bmp, x, y);
 }
@@ -109,8 +120,11 @@ Rules::Rules(const css::Query& query) :
 {
   css::Value backgroundColor = query[StyleSheet::backgroundColorRule()];
   css::Value backgroundPart = query[StyleSheet::backgroundPartRule()];
+  css::Value backgroundRepeat = query[StyleSheet::backgroundRepeatRule()];
   css::Value iconAlign = query[StyleSheet::iconAlignRule()];
   css::Value iconPart = query[StyleSheet::iconPartRule()];
+  css::Value iconX = query[StyleSheet::iconXRule()];
+  css::Value iconY = query[StyleSheet::iconYRule()];
   css::Value textAlign = query[StyleSheet::textAlignRule()];
   css::Value textColor = query[StyleSheet::textColorRule()];
   css::Value paddingLeft = query[StyleSheet::paddingLeftRule()];
@@ -120,17 +134,23 @@ Rules::Rules(const css::Query& query) :
   css::Value none;
 
   if (backgroundColor != none
-    || backgroundPart != none) {
+    || backgroundPart != none
+    || backgroundRepeat != none) {
     m_background = new BackgroundRule();
     m_background->setColor(StyleSheet::convertColor(backgroundColor));
     m_background->setPart(StyleSheet::convertPart(backgroundPart));
+    m_background->setRepeat(StyleSheet::convertRepeat(backgroundRepeat));
   }
 
   if (iconAlign != none
-    || iconPart != none) {
+    || iconPart != none
+    || iconX != none
+    || iconY != none) {
     m_icon = new IconRule();
     m_icon->setAlign((int)iconAlign.number());
     m_icon->setPart(StyleSheet::convertPart(iconPart));
+    m_icon->setX((int)iconX.number()*ui::guiscale());
+    m_icon->setY((int)iconY.number()*ui::guiscale());
   }
 
   if (textAlign != none
@@ -143,8 +163,10 @@ Rules::Rules(const css::Query& query) :
     m_text->setAlign((int)textAlign.number());
     m_text->setColor(StyleSheet::convertColor(textColor));
     m_text->setPadding(gfx::Border(
-        paddingLeft.number(), paddingTop.number(),
-        paddingRight.number(), paddingBottom.number())*ui::guiscale());
+        int(paddingLeft.number()),
+        int(paddingTop.number()),
+        int(paddingRight.number()),
+        int(paddingBottom.number()))*ui::guiscale());
   }
 }
 
@@ -164,19 +186,22 @@ void Rules::paint(ui::Graphics* g,
   if (m_text) m_text->paint(g, bounds, text);
 }
 
-gfx::Size Rules::preferredSize(const char* text)
+gfx::Size Rules::sizeHint(const char* text, int maxWidth)
 {
   gfx::Size sz(0, 0);
   if (m_icon) {
-    sz.w += m_icon->getPart()->getBitmap(0)->width();
-    sz.h = m_icon->getPart()->getBitmap(0)->height();
+    sz.w += m_icon->getPart()->bitmap(0)->width();
+    sz.h = m_icon->getPart()->bitmap(0)->height();
   }
   if (m_text && text) {
     ui::ScreenGraphics g;
-    gfx::Size textSize = g.measureUIString(text);
-    //if (sz.w > 0) sz.w += 2;    // TODO text separation
+    gfx::Size textSize = g.fitString(text, maxWidth, m_text->align());
+    if (sz.w > 0) sz.w += 2*ui::guiscale();    // TODO text separation
     sz.w += textSize.w;
     sz.h = MAX(sz.h, textSize.h);
+
+    sz.w += m_text->padding().left() + m_text->padding().right();
+    sz.h += m_text->padding().top() + m_text->padding().bottom();
   }
   return sz;
 }
@@ -219,11 +244,12 @@ void Style::paint(ui::Graphics* g,
   getRulesFromState(state)->paint(g, bounds, text);
 }
 
-gfx::Size Style::preferredSize(
+gfx::Size Style::sizeHint(
   const char* text,
-  const State& state)
+  const State& state,
+  int maxWidth)
 {
-  return getRulesFromState(state)->preferredSize(text);
+  return getRulesFromState(state)->sizeHint(text, maxWidth);
 }
 
 } // namespace skin

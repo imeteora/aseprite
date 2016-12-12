@@ -1,25 +1,14 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UTIL_EXPAND_CEL_CANVAS_H_INCLUDED
 #define APP_UTIL_EXPAND_CEL_CANVAS_H_INCLUDED
 #pragma once
 
+#include "doc/frame.h"
 #include "doc/image_ref.h"
 #include "filters/tiled_mode.h"
 #include "gfx/point.h"
@@ -31,13 +20,13 @@ namespace doc {
   class Cel;
   class Image;
   class Layer;
+  class Site;
   class Sprite;
 }
 
 namespace app {
-  class Context;
   class Document;
-  class UndoTransaction;
+  class Transaction;
 
   using namespace filters;
   using namespace doc;
@@ -56,7 +45,8 @@ namespace app {
       UseModifiedRegionAsUndoInfo = 2,
     };
 
-    ExpandCelCanvas(Context* context, TiledMode tiledMode, UndoTransaction& undo, Flags flags);
+    ExpandCelCanvas(Site site, Layer* layer,
+      TiledMode tiledMode, Transaction& undo, Flags flags);
     ~ExpandCelCanvas();
 
     // Commit changes made in getDestCanvas() in the cel's image. Adds
@@ -80,25 +70,31 @@ namespace app {
     const Cel* getCel() const { return m_cel; }
 
   private:
-    void copyValidDestToOriginalCel();
+    gfx::Rect getTrimDstImageBounds() const;
+    ImageRef trimDstImage(const gfx::Rect& bounds) const;
 
     Document* m_document;
     Sprite* m_sprite;
     Layer* m_layer;
+    frame_t m_frame;
     Cel* m_cel;
     ImageRef m_celImage;
     bool m_celCreated;
     gfx::Point m_origCelPos;
-    gfx::Point m_celPos;
     Flags m_flags;
     gfx::Rect m_bounds;
-    Image* m_srcImage;
-    Image* m_dstImage;
+    ImageRef m_srcImage;
+    ImageRef m_dstImage;
     bool m_closed;
     bool m_committed;
-    UndoTransaction& m_undo;
+    Transaction& m_transaction;
     gfx::Region m_validSrcRegion;
     gfx::Region m_validDstRegion;
+
+    // True if we can compare src image with dst image to patch the
+    // cel. This is false when dst is copied to the src, so we cannot
+    // reduce the patched region because both images will be the same.
+    bool m_canCompareSrcVsDst;
   };
 
 } // namespace app

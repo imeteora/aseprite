@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,8 +10,8 @@
 
 #include "doc/documents.h"
 
+#include "base/fs.h"
 #include "base/mutex.h"
-#include "base/path.h"
 #include "doc/document.h"
 
 #include <algorithm>
@@ -34,7 +34,7 @@ Document* Documents::add(int width, int height, ColorMode mode, int ncolors)
   // Ask to observers to create the document (maybe a doc::Document or
   // a derived class).
   CreateDocumentArgs args;
-  notifyObservers(&DocumentsObserver::onCreateDocument, &args);
+  notify_observers(&DocumentsObserver::onCreateDocument, &args);
   if (!args.document())
     args.setDocument(new Document());
 
@@ -59,7 +59,7 @@ Document* Documents::add(Document* doc)
 
   m_docs.insert(begin(), doc);
 
-  notifyObservers(&DocumentsObserver::onAddDocument, doc);
+  notify_observers(&DocumentsObserver::onAddDocument, doc);
   return doc;
 }
 
@@ -71,7 +71,7 @@ void Documents::remove(Document* doc)
 
   m_docs.erase(it);
 
-  notifyObservers(&DocumentsObserver::onRemoveDocument, doc);
+  notify_observers(&DocumentsObserver::onRemoveDocument, doc);
 
   doc->setContext(NULL);
 }
@@ -106,9 +106,9 @@ Document* Documents::getByName(const std::string& name) const
 
 Document* Documents::getByFileName(const std::string& filename) const
 {
-  std::string fixfn = base::fix_path_separators(filename);
+  std::string fn = base::normalize_path(filename);
   for (const auto& doc : *this) {
-    if (base::fix_path_separators(doc->filename()) == fixfn)
+    if (doc->filename() == fn)
       return doc;
   }
   return NULL;

@@ -106,6 +106,31 @@ GFX_DRIVER gfx_quartz_window =
 
 
 
+static bool get_qv_view_size(int* view_width, int* view_height, int* titlebar_height)
+{
+   CGrafPtr port = [qd_view qdPort];
+   if (port) {
+      *titlebar_height = ((int)([osx_window frame].size.height) - gfx_quartz_window.h);
+      *titlebar_height = MAX(0, *titlebar_height);
+
+      Rect bounds;
+      GetPortBounds(port, &bounds);
+      *view_width = (bounds.right - bounds.left);
+      *view_height = (bounds.bottom - bounds.top);
+      *view_width = MIN(*view_width, gfx_quartz_window.w);
+      *view_height = MID(0, (*view_height), gfx_quartz_window.h);
+      return (*view_width > 0 && *view_height > 0);
+   }
+   else {
+      *titlebar_height = 0;
+      *view_width = 0;
+      *view_height = 0;
+      return false;
+   }
+}
+
+
+
 /* prepare_window_for_animation:
  *  Prepares the window for a (de)miniaturization animation.
  *  Called by the window display method when the window is about to be
@@ -116,33 +141,47 @@ GFX_DRIVER gfx_quartz_window =
  */
 static void prepare_window_for_animation(int refresh_view)
 {
-   struct GRAPHICS_RECT src_gfx_rect, dest_gfx_rect;
-   unsigned int *addr;
-   int pitch, y, x;
-
    _unix_lock_mutex(osx_window_mutex);
-   while (![qd_view lockFocusIfCanDraw]);
-   while (!QDDone([qd_view qdPort]));
-   LockPortBits([qd_view qdPort]);
-   pitch = GetPixRowBytes(GetPortPixMap([qd_view qdPort])) / 4;
-   addr = (unsigned int *)GetPixBaseAddr(GetPortPixMap([qd_view qdPort])) +
-      ((int)([osx_window frame].size.height) - gfx_quartz_window.h) * pitch;
-   if (refresh_view && colorconv_blitter) {
-      src_gfx_rect.width  = gfx_quartz_window.w;
-      src_gfx_rect.height = gfx_quartz_window.h;
-      src_gfx_rect.pitch  = pseudo_screen_pitch;
-      src_gfx_rect.data   = pseudo_screen_addr;
-      dest_gfx_rect.pitch = pitch * 4;
-      dest_gfx_rect.data  = addr;
-      colorconv_blitter(&src_gfx_rect, &dest_gfx_rect);
+
+   if ([qd_view lockFocusIfCanDraw] == YES) {
+      struct GRAPHICS_RECT src_gfx_rect, dest_gfx_rect;
+      unsigned char* addr;
+      int pitch, y, x;
+      int view_width;
+      int view_height;
+      int titlebar_height;
+
+      while (!QDDone([qd_view qdPort]));
+      LockPortBits([qd_view qdPort]);
+
+      if (get_qv_view_size(&view_width, &view_height, &titlebar_height)) {
+         pitch = GetPixRowBytes(GetPortPixMap([qd_view qdPort]));
+         addr = GetPixBaseAddr(GetPortPixMap([qd_view qdPort])) +
+            titlebar_height * pitch;
+
+         if (refresh_view && colorconv_blitter) {
+            src_gfx_rect.width  = view_width;
+            src_gfx_rect.height = view_height;
+            src_gfx_rect.pitch  = pseudo_screen_pitch;
+            src_gfx_rect.data   = pseudo_screen_addr;
+            dest_gfx_rect.pitch = pitch;
+            dest_gfx_rect.data  = addr;
+            colorconv_blitter(&src_gfx_rect, &dest_gfx_rect);
+         }
+
+         for (y = view_height; y; y--) {
+            for (x = 0; x < view_width; x++)
+               *(addr + x) |= 0xff000000;
+            addr += pitch;
+         }
+      }
+
+      QDFlushPortBuffer([qd_view qdPort], update_region);
+
+      UnlockPortBits([qd_view qdPort]);
+      [qd_view unlockFocus];
    }
-   for (y = gfx_quartz_window.h; y; y--) {
-      for (x = 0; x < gfx_quartz_window.w; x++)
-         *(addr + x) |= 0xff000000;
-      addr += pitch;
-   }
-   UnlockPortBits([qd_view qdPort]);
-   [qd_view unlockFocus];
+
    _unix_unlock_mutex(osx_window_mutex);
 }
 
@@ -239,6 +278,9 @@ static void prepare_window_for_animation(int refresh_view)
    _unix_lock_mutex(osx_skip_events_processing_mutex);
    osx_skip_events_processing = FALSE;
    _unix_unlock_mutex(osx_skip_events_processing_mutex);
+
+   if (_keyboard_installed)
+      osx_keyboard_focused(TRUE, 0);
 }
 
 
@@ -252,6 +294,11 @@ static void prepare_window_for_animation(int refresh_view)
    _unix_lock_mutex(osx_skip_events_processing_mutex);
    osx_skip_events_processing = TRUE;
    _unix_unlock_mutex(osx_skip_events_processing_mutex);
+
+   if (_keyboard_installed) {
+      osx_keyboard_focused(FALSE, 0);
+      osx_keyboard_modifiers(0);
+   }
 }
 
 @end
@@ -347,17 +394,21 @@ void osx_update_dirty_lines(void)
 {
    struct GRAPHICS_RECT src_gfx_rect, dest_gfx_rect;
    Rect rect;
-   CGrafPtr qd_view_port;
    int qd_view_pitch;
    char *qd_view_addr = NULL;
+   int view_width;
+   int view_height;
+   int titlebar_height;
 
    if (![osx_window isVisible])
       return;
 
-   /* Skip everything if there are no dirty lines */
    _unix_lock_mutex(osx_window_mutex);
+
+   /* Skip everything if there are no dirty lines */
    for (rect.top = 0; (rect.top < gfx_quartz_window.h) && (!dirty_lines[rect.top]); rect.top++)
       ;
+
    if (rect.top >= gfx_quartz_window.h) {
       _unix_unlock_mutex(osx_window_mutex);
       osx_signal_vsync();
@@ -366,28 +417,29 @@ void osx_update_dirty_lines(void)
 
    /* Dirty lines need to be updated */
    if ([qd_view lockFocusIfCanDraw] == YES) {
-      while (!QDDone([qd_view qdPort]));
-      LockPortBits([qd_view qdPort]);
+      CGrafPtr qd_view_port = [qd_view qdPort];
 
-      qd_view_port = [qd_view qdPort];
-      if (qd_view_port) {
+      while (!QDDone(qd_view_port));
+      LockPortBits(qd_view_port);
+
+      if (get_qv_view_size(&view_width, &view_height, &titlebar_height)) {
          qd_view_pitch = GetPixRowBytes(GetPortPixMap(qd_view_port));
          qd_view_addr = GetPixBaseAddr(GetPortPixMap(qd_view_port)) +
-            ((int)([osx_window frame].size.height) - gfx_quartz_window.h) * qd_view_pitch;
+            titlebar_height * qd_view_pitch;
 
          if (colorconv_blitter || (osx_setup_colorconv_blitter() == 0)) {
             SetEmptyRgn(update_region);
 
             rect.left = 0;
-            rect.right = gfx_quartz_window.w;
+            rect.right = view_width;
 
-            while (rect.top < gfx_quartz_window.h) {
-               while ((!dirty_lines[rect.top]) && (rect.top < gfx_quartz_window.h))
+            while (rect.top < view_height) {
+               while ((!dirty_lines[rect.top]) && (rect.top < view_height))
                   rect.top++;
-               if (rect.top >= gfx_quartz_window.h)
+               if (rect.top >= view_height)
                   break;
                rect.bottom = rect.top;
-               while ((dirty_lines[rect.bottom]) && (rect.bottom < gfx_quartz_window.h)) {
+               while ((dirty_lines[rect.bottom]) && (rect.bottom < view_height)) {
                   dirty_lines[rect.bottom] = 0;
                   rect.bottom++;
                }
@@ -413,9 +465,9 @@ void osx_update_dirty_lines(void)
                rect.top = rect.bottom;
             }
          }
-         QDFlushPortBuffer(qd_view_port, update_region);
       }
-      UnlockPortBits([qd_view qdPort]);
+      QDFlushPortBuffer(qd_view_port, update_region);
+      UnlockPortBits(qd_view_port);
       [qd_view unlockFocus];
    }
    _unix_unlock_mutex(osx_window_mutex);

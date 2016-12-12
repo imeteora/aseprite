@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -23,14 +11,21 @@
 #include "app/ini_file.h"
 
 #include "app/resource_finder.h"
+#include "base/fs.h"
 #include "base/split_string.h"
 #include "base/string.h"
 #include "cfg/cfg.h"
 
-#ifndef WIN32
-#include "base/fs.h"
+#ifdef __APPLE__
+#include "she/logger.h"
+#include "she/system.h"
 #endif
 
+#ifndef _WIN32
+  #include "base/fs.h"
+#endif
+
+#include <cstdlib>
 #include <vector>
 
 namespace app {
@@ -44,9 +39,48 @@ ConfigModule::ConfigModule()
 {
   ResourceFinder rf;
   rf.includeUserDir("aseprite.ini");
+
+  // getFirstOrCreateDefault() will create the Aseprite directory
+  // inside the OS configuration folder (~/.config/aseprite/, etc.).
   std::string fn = rf.getFirstOrCreateDefault();
 
-#ifndef WIN32 // Migrate the configuration file to the new location in Unix-like systems
+#ifdef __APPLE__
+
+  // On OS X we migrate from ~/.config/aseprite/* -> "~/Library/Application Support/Aseprite/*"
+  if (!base::is_file(fn)) {
+    try {
+      std::string new_dir = base::get_file_path(fn);
+
+      // Now we try to move all old configuration files into the new
+      // directory.
+      ResourceFinder old_rf;
+      old_rf.includeHomeDir(".config/aseprite/aseprite.ini");
+      std::string old_config_fn = old_rf.defaultFilename();
+      if (base::is_file(old_config_fn)) {
+        std::string old_dir = base::get_file_path(old_config_fn);
+        for (std::string old_fn : base::list_files(old_dir)) {
+          std::string from = base::join_path(old_dir, old_fn);
+          std::string to = base::join_path(new_dir, old_fn);
+          base::move_file(from, to);
+        }
+        base::remove_directory(old_dir);
+      }
+    }
+    // Something failed
+    catch (const std::exception& ex) {
+      std::string err = "Error in configuration migration: ";
+      err += ex.what();
+
+      auto system = she::instance();
+      if (system && system->logger())
+        system->logger()->logError(err.c_str());
+    }
+  }
+
+#elif !defined(_WIN32)
+
+  // On Linux we migrate the old configuration file name
+  // (.asepriterc -> ~/.config/aseprite/aseprite.ini)
   {
     ResourceFinder old_rf;
     old_rf.includeHomeDir(".asepriterc");
@@ -54,6 +88,7 @@ ConfigModule::ConfigModule()
     if (base::is_file(old_fn))
       base::move_file(old_fn, fn);
   }
+
 #endif
 
   set_config_file(fn.c_str());
@@ -127,10 +162,20 @@ void set_config_int(const char* section, const char* name, int value)
 
 float get_config_float(const char* section, const char* name, float value)
 {
-  return g_configs.back()->getDoubleValue(section, name, value);
+  return (float)g_configs.back()->getDoubleValue(section, name, (float)value);
 }
 
 void set_config_float(const char* section, const char* name, float value)
+{
+  g_configs.back()->setDoubleValue(section, name, (float)value);
+}
+
+double get_config_double(const char* section, const char* name, double value)
+{
+  return g_configs.back()->getDoubleValue(section, name, value);
+}
+
+void set_config_double(const char* section, const char* name, double value)
 {
   g_configs.back()->setDoubleValue(section, name, value);
 }
@@ -143,6 +188,28 @@ bool get_config_bool(const char* section, const char* name, bool value)
 void set_config_bool(const char* section, const char* name, bool value)
 {
   g_configs.back()->setBoolValue(section, name, value);
+}
+
+Point get_config_point(const char* section, const char* name, const Point& point)
+{
+  Point point2(point);
+  const char* value = get_config_string(section, name, "");
+  if (value) {
+    std::vector<std::string> parts;
+    base::split_string(value, parts, " ");
+    if (parts.size() == 2) {
+      point2.x = strtol(parts[0].c_str(), NULL, 10);
+      point2.y = strtol(parts[1].c_str(), NULL, 10);
+    }
+  }
+  return point2;
+}
+
+void set_config_point(const char* section, const char* name, const Point& point)
+{
+  char buf[128];
+  sprintf(buf, "%d %d", point.x, point.y);
+  set_config_string(section, name, buf);
 }
 
 Rect get_config_rect(const char* section, const char* name, const Rect& rect)

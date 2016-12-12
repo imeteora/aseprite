@@ -1,5 +1,5 @@
 // Aseprite Gfx Library
-// Copyright (C) 2001-2013 David Capello
+// Copyright (C) 2001-2013, 2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -43,12 +43,15 @@ public:
   T right() const { return m_right; };
   T bottom() const { return m_bottom; };
 
+  T width() const { return m_left + m_right; };
+  T height() const { return m_top + m_bottom; };
+
   void left(const T& left) { m_left = left; }
   void top(const T& top) { m_top = top; }
   void right(const T& right) { m_right = right; }
   void bottom(const T& bottom) { m_bottom = bottom; }
 
-  SizeT<T> getSize() const {
+  SizeT<T> size() const {
     return SizeT<T>(m_left + m_right, m_top + m_bottom);
   }
 

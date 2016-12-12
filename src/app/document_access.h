@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_DOCUMENT_ACCESS_H_INCLUDED
 #define APP_DOCUMENT_ACCESS_H_INCLUDED
@@ -28,12 +16,27 @@
 
 namespace app {
 
+  // TODO remove exceptions and use "DocumentAccess::operator bool()"
   class LockedDocumentException : public base::Exception {
   public:
-    LockedDocumentException() throw()
-    : base::Exception("Cannot read or write the active document.\n"
-                      "It is locked by a background task.\n"
-                      "Try again later.") { }
+    LockedDocumentException(const char* msg) throw()
+    : base::Exception(msg) { }
+  };
+
+  class CannotReadDocumentException : public LockedDocumentException {
+  public:
+    CannotReadDocumentException() throw()
+    : LockedDocumentException("Cannot read the sprite.\n"
+                              "It is being modified by another command.\n"
+                              "Try again.") { }
+  };
+
+  class CannotWriteDocumentException : public LockedDocumentException {
+  public:
+    CannotWriteDocumentException() throw()
+    : LockedDocumentException("Cannot modify the sprite.\n"
+                              "It is being used by another command.\n"
+                              "Try again.") { }
   };
 
   // This class acts like a wrapper for the given document.  It's
@@ -76,46 +79,36 @@ namespace app {
   // the lock cannot be obtained.
   class DocumentReader : public DocumentAccess {
   public:
-    DocumentReader()
-    {
+    DocumentReader() {
     }
 
-    explicit DocumentReader(Document* document)
-      : DocumentAccess(document)
-    {
-      if (m_document && !m_document->lock(Document::ReadLock))
-        throw LockedDocumentException();
+    explicit DocumentReader(Document* document, int timeout)
+      : DocumentAccess(document) {
+      if (m_document && !m_document->lock(Document::ReadLock, timeout))
+        throw CannotReadDocumentException();
     }
 
-    explicit DocumentReader(const DocumentReader& copy)
-      : DocumentAccess(copy)
-    {
-      if (m_document && !m_document->lock(Document::ReadLock))
-        throw LockedDocumentException();
+    explicit DocumentReader(const DocumentReader& copy, int timeout)
+      : DocumentAccess(copy) {
+      if (m_document && !m_document->lock(Document::ReadLock, timeout))
+        throw CannotReadDocumentException();
     }
 
-    DocumentReader& operator=(const DocumentReader& copy)
-    {
-      // unlock old document
-      if (m_document)
+    ~DocumentReader() {
+      unlock();
+    }
+
+  protected:
+    void unlock() {
+      if (m_document) {
         m_document->unlock();
-
-      DocumentAccess::operator=(copy);
-
-      // relock the document
-      if (m_document && !m_document->lock(Document::ReadLock))
-        throw LockedDocumentException();
-
-      return *this;
+        m_document = nullptr;
+      }
     }
 
-    ~DocumentReader()
-    {
-      // unlock the document
-      if (m_document)
-        m_document->unlock();
-    }
-
+  private:
+    // Disable operator=
+    DocumentReader& operator=(const DocumentReader&);
   };
 
   // Class to modify the document's state. Its constructor request a
@@ -127,18 +120,16 @@ namespace app {
   public:
     DocumentWriter()
       : m_from_reader(false)
-      , m_locked(false)
-    {
+      , m_locked(false) {
     }
 
-    explicit DocumentWriter(Document* document)
+    explicit DocumentWriter(Document* document, int timeout)
       : DocumentAccess(document)
       , m_from_reader(false)
-      , m_locked(false)
-    {
+      , m_locked(false) {
       if (m_document) {
-        if (!m_document->lock(Document::WriteLock))
-          throw LockedDocumentException();
+        if (!m_document->lock(Document::WriteLock, timeout))
+          throw CannotWriteDocumentException();
 
         m_locked = true;
       }
@@ -146,51 +137,31 @@ namespace app {
 
     // Constructor that can be used to elevate the given reader-lock to
     // writer permission.
-    explicit DocumentWriter(const DocumentReader& document)
+    explicit DocumentWriter(const DocumentReader& document, int timeout)
       : DocumentAccess(document)
       , m_from_reader(true)
-      , m_locked(false)
-    {
+      , m_locked(false) {
       if (m_document) {
-        if (!m_document->lockToWrite())
-          throw LockedDocumentException();
+        if (!m_document->upgradeToWrite(timeout))
+          throw CannotWriteDocumentException();
 
         m_locked = true;
       }
     }
 
-    ~DocumentWriter()
-    {
-      unlockWriter();
-    }
-
-    DocumentWriter& operator=(const DocumentReader& copy)
-    {
-      unlockWriter();
-
-      DocumentAccess::operator=(copy);
-
-      if (m_document) {
-        m_from_reader = true;
-
-        if (!m_document->lockToWrite())
-          throw LockedDocumentException();
-
-        m_locked = true;
-      }
-
-      return *this;
+    ~DocumentWriter() {
+      unlock();
     }
 
   protected:
-
-    void unlockWriter()
-    {
+    void unlock() {
       if (m_document && m_locked) {
         if (m_from_reader)
-          m_document->unlockToRead();
+          m_document->downgradeToRead();
         else
           m_document->unlock();
+
+        m_document = nullptr;
         m_locked = false;
       }
     }
@@ -202,27 +173,63 @@ namespace app {
     // Non-copyable
     DocumentWriter(const DocumentWriter&);
     DocumentWriter& operator=(const DocumentWriter&);
+    DocumentWriter& operator=(const DocumentReader&);
   };
 
   // Used to destroy the active document in the context.
   class DocumentDestroyer : public DocumentWriter {
   public:
-    explicit DocumentDestroyer(Context* context, Document* document)
-      : DocumentWriter(document)
-    {
+    explicit DocumentDestroyer(Context* context, Document* document, int timeout)
+      : DocumentWriter(document, timeout) {
     }
 
-    void destroyDocument()
-    {
+    void destroyDocument() {
       ASSERT(m_document != NULL);
 
       m_document->close();
-      unlockWriter();
+      Document* doc = m_document;
+      unlock();
 
-      delete m_document;
-      m_document = NULL;
+      delete doc;
+      m_document = nullptr;
     }
 
+  };
+
+  class WeakDocumentReader : public DocumentAccess {
+  public:
+    WeakDocumentReader() {
+    }
+
+    explicit WeakDocumentReader(Document* doc)
+      : DocumentAccess(doc)
+      , m_weak_lock(RWLock::WeakUnlocked) {
+      if (m_document)
+        m_document->weakLock(&m_weak_lock);
+    }
+
+    ~WeakDocumentReader() {
+      weakUnlock();
+    }
+
+    bool isLocked() const {
+      return (m_weak_lock == RWLock::WeakLocked);
+    }
+
+  protected:
+    void weakUnlock() {
+      if (m_document && m_weak_lock != RWLock::WeakUnlocked) {
+        m_document->weakUnlock();
+        m_document = nullptr;
+      }
+    }
+
+  private:
+    // Disable operator=
+    WeakDocumentReader(const WeakDocumentReader&);
+    WeakDocumentReader& operator=(const WeakDocumentReader&);
+
+    RWLock::WeakLock m_weak_lock;
   };
 
 } // namespace app

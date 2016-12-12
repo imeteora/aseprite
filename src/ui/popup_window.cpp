@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,7 +11,7 @@
 #include "gfx/size.h"
 #include "ui/graphics.h"
 #include "ui/intern.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/theme.h"
 #include "ui/ui.h"
 
@@ -19,17 +19,23 @@ namespace ui {
 
 using namespace gfx;
 
-PopupWindow::PopupWindow(const std::string& text, ClickBehavior clickBehavior)
-  : Window(WithTitleBar, text)
+PopupWindow::PopupWindow(const std::string& text,
+                         const ClickBehavior clickBehavior,
+                         const EnterBehavior enterBehavior,
+                         const bool withCloseButton)
+  : Window(text.empty() ? WithoutTitleBar: WithTitleBar, text)
   , m_clickBehavior(clickBehavior)
+  , m_enterBehavior(enterBehavior)
   , m_filtering(false)
+  , m_fixed(false)
 {
   setSizeable(false);
   setMoveable(false);
   setWantFocus(false);
-  setAlign(JI_LEFT | JI_TOP);
+  setAlign(LEFT | TOP);
 
-  removeDecorativeWidgets();
+  if (!withCloseButton)
+    removeDecorativeWidgets();
 
   initTheme();
   noBorderNoChildSpacing();
@@ -40,10 +46,6 @@ PopupWindow::~PopupWindow()
   stopFilteringMessages();
 }
 
-/**
- * @param region The new hot-region. This pointer is holded by the @a widget.
- * So you cannot destroy it after calling this routine.
- */
 void PopupWindow::setHotRegion(const gfx::Region& region)
 {
   startFilteringMessages();
@@ -51,67 +53,99 @@ void PopupWindow::setHotRegion(const gfx::Region& region)
   m_hotRegion = region;
 }
 
+void PopupWindow::setClickBehavior(ClickBehavior behavior)
+{
+  m_clickBehavior = behavior;
+}
+
+void PopupWindow::setEnterBehavior(EnterBehavior behavior)
+{
+  m_enterBehavior = behavior;
+}
+
 void PopupWindow::makeFloating()
 {
   stopFilteringMessages();
   setMoveable(true);
+  m_fixed = false;
+
+  onMakeFloating();
 }
 
 void PopupWindow::makeFixed()
 {
   startFilteringMessages();
   setMoveable(false);
+  m_fixed = true;
+
+  onMakeFixed();
 }
 
 bool PopupWindow::onProcessMessage(Message* msg)
 {
   switch (msg->type()) {
 
+    // There are cases where startFilteringMessages() is called when a
+    // kCloseMessage for this same PopupWindow is enqueued. Processing
+    // the kOpenMessage we ensure that the popup will be filtering
+    // messages if it's needed when it's visible (as kCloseMessage and
+    // kOpenMessage must be enqueued in the correct order).
+    case kOpenMessage:
+      if (!isMoveable())
+        startFilteringMessages();
+      break;
+
     case kCloseMessage:
       stopFilteringMessages();
       break;
 
     case kMouseLeaveMessage:
-      if (m_hotRegion.isEmpty() && !isMoveable())
-        closeWindow(NULL);
+      if (m_hotRegion.isEmpty() && m_fixed)
+        closeWindow(nullptr);
       break;
 
     case kKeyDownMessage:
       if (m_filtering) {
         KeyMessage* keymsg = static_cast<KeyMessage*>(msg);
         KeyScancode scancode = keymsg->scancode();
-        
-        if (scancode == kKeyEsc ||
-            scancode == kKeyEnter ||
-            scancode == kKeyEnterPad) {
-          closeWindow(NULL);
+
+        if (scancode == kKeyEsc)
+          closeWindow(nullptr);
+
+        if (m_enterBehavior == EnterBehavior::CloseOnEnter &&
+            (scancode == kKeyEnter ||
+             scancode == kKeyEnterPad)) {
+          closeWindow(this);
+          return true;
         }
 
-        // If we are filtering messages we don't propagate key-events
-        // to other widgets. As we're a popup window and we're
-        // filtering messages, the user shouldn't be able to start
-        // other actions pressing keyboard shortcuts.
-        return false;
+        // If the message came from a filter, we don't send it back to
+        // the default Window processing (which will send the message
+        // to the Manager). In this way, the focused children can
+        // process the kKeyDownMessage.
+        if (msg->fromFilter())
+          return false;
       }
       break;
 
     case kMouseDownMessage:
-      if (m_filtering) {
+      if (m_filtering &&
+          manager()->getTopWindow() == this) {
         gfx::Point mousePos = static_cast<MouseMessage*>(msg)->position();
 
         switch (m_clickBehavior) {
 
           // If the user click outside the window, we have to close
           // the tooltip window.
-          case kCloseOnClickInOtherWindow: {
+          case ClickBehavior::CloseOnClickInOtherWindow: {
             Widget* picked = pick(mousePos);
-            if (!picked || picked->getRoot() != this) {
+            if (!picked || picked->window() != this) {
               closeWindow(NULL);
             }
             break;
           }
 
-          case kCloseOnClickOutsideHotRegion:
+          case ClickBehavior::CloseOnClickOutsideHotRegion:
             if (!m_hotRegion.contains(mousePos)) {
               closeWindow(NULL);
             }
@@ -121,9 +155,9 @@ bool PopupWindow::onProcessMessage(Message* msg)
       break;
 
     case kMouseMoveMessage:
-      if (!isMoveable() &&
+      if (m_fixed &&
           !m_hotRegion.isEmpty() &&
-          getManager()->getCapture() == NULL) {
+          manager()->getCapture() == NULL) {
         gfx::Point mousePos = static_cast<MouseMessage*>(msg)->position();
 
         // If the mouse is outside the hot-region we have to close the
@@ -138,53 +172,80 @@ bool PopupWindow::onProcessMessage(Message* msg)
   return Window::onProcessMessage(msg);
 }
 
-void PopupWindow::onPreferredSize(PreferredSizeEvent& ev)
+void PopupWindow::onSizeHint(SizeHintEvent& ev)
 {
   ScreenGraphics g;
-  g.setFont(getFont());
+  g.setFont(font());
   Size resultSize(0, 0);
 
   if (hasText())
-    resultSize = g.fitString(getText(),
-                             (getClientBounds() - getBorder()).w,
-                             getAlign());
+    resultSize = g.fitString(text(),
+                             (clientBounds() - border()).w,
+                             align());
 
-  resultSize.w += border_width.l + border_width.r;
-  resultSize.h += border_width.t + border_width.b;
+  resultSize.w += border().width();
+  resultSize.h += border().height();
 
-  if (!getChildren().empty()) {
+  if (!children().empty()) {
     Size maxSize(0, 0);
     Size reqSize;
 
-    UI_FOREACH_WIDGET(getChildren(), it) {
-      Widget* child = *it;
-
-      reqSize = child->getPreferredSize();
+    for (auto child : children()) {
+      reqSize = child->sizeHint();
 
       maxSize.w = MAX(maxSize.w, reqSize.w);
       maxSize.h = MAX(maxSize.h, reqSize.h);
     }
 
-    resultSize.w = MAX(resultSize.w, border_width.l + maxSize.w + border_width.r);
+    resultSize.w = MAX(resultSize.w, maxSize.w + border().width());
     resultSize.h += maxSize.h;
   }
 
-  ev.setPreferredSize(resultSize);
+  ev.setSizeHint(resultSize);
 }
 
 void PopupWindow::onPaint(PaintEvent& ev)
 {
-  getTheme()->paintPopupWindow(ev);
+  theme()->paintPopupWindow(ev);
 }
 
 void PopupWindow::onInitTheme(InitThemeEvent& ev)
 {
   Widget::onInitTheme(ev);
 
-  this->border_width.l = 3 * guiscale();
-  this->border_width.t = 3 * guiscale();
-  this->border_width.r = 3 * guiscale();
-  this->border_width.b = 3 * guiscale();
+  setBorder(gfx::Border(3 * guiscale()));
+}
+
+void PopupWindow::onHitTest(HitTestEvent& ev)
+{
+  Window::onHitTest(ev);
+
+  Widget* picked = manager()->pick(ev.point());
+  if (picked) {
+    WidgetType type = picked->type();
+    if (type == kWindowWidget && picked == this) {
+      if (isSizeable() && (ev.hit() == HitTestBorderNW ||
+                           ev.hit() == HitTestBorderN ||
+                           ev.hit() == HitTestBorderNE ||
+                           ev.hit() == HitTestBorderE ||
+                           ev.hit() == HitTestBorderSE ||
+                           ev.hit() == HitTestBorderS ||
+                           ev.hit() == HitTestBorderSW ||
+                           ev.hit() == HitTestBorderW)) {
+        // Use the hit value from Window::onHitTest()
+        return;
+      }
+      else {
+        ev.setHit(isMoveable() ? HitTestCaption: HitTestClient);
+      }
+    }
+    else if (type == kBoxWidget ||
+             type == kLabelWidget ||
+             type == kGridWidget ||
+             type == kSeparatorWidget) {
+      ev.setHit(isMoveable() ? HitTestCaption: HitTestClient);
+    }
+  }
 }
 
 void PopupWindow::startFilteringMessages()
@@ -209,6 +270,16 @@ void PopupWindow::stopFilteringMessages()
     manager->removeMessageFilter(kMouseDownMessage, this);
     manager->removeMessageFilter(kKeyDownMessage, this);
   }
+}
+
+void PopupWindow::onMakeFloating()
+{
+  // Do nothing
+}
+
+void PopupWindow::onMakeFixed()
+{
+  // Do nothing
 }
 
 } // namespace ui

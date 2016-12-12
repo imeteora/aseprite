@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -14,40 +14,48 @@
 #include "ui/graphics.h"
 #include "ui/message.h"
 #include "ui/paint_event.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
 
 namespace ui {
 
-ImageView::ImageView(she::Surface* sur, int align)
+ImageView::ImageView(she::Surface* sur, int align, bool dispose)
  : Widget(kImageViewWidget)
  , m_sur(sur)
+ , m_disposeSurface(dispose)
 {
   setAlign(align);
 }
 
-void ImageView::onPreferredSize(PreferredSizeEvent& ev)
+ImageView::~ImageView()
+{
+  if (m_disposeSurface)
+    delete m_sur;
+}
+
+void ImageView::onSizeHint(SizeHintEvent& ev)
 {
   gfx::Rect box;
   getTextIconInfo(&box, NULL, NULL,
-    getAlign(), m_sur->width(), m_sur->height());
+    align(), m_sur->width(), m_sur->height());
 
-  ev.setPreferredSize(
+  ev.setSizeHint(
     gfx::Size(
-      border_width.l + box.w + border_width.r,
-      border_width.t + box.h + border_width.b));
+      box.w + border().width(),
+      box.h + border().height()));
 }
 
 void ImageView::onPaint(PaintEvent& ev)
 {
-  Graphics* g = ev.getGraphics();
-  gfx::Rect bounds = getClientBounds();
+  Graphics* g = ev.graphics();
+  gfx::Rect bounds = clientBounds();
   gfx::Rect icon;
-  getTextIconInfo(NULL, NULL, &icon, getAlign(),
+  getTextIconInfo(
+    nullptr, nullptr, &icon, align(),
     m_sur->width(), m_sur->height());
 
-  g->fillRect(getBgColor(), bounds);
+  g->fillRect(bgColor(), bounds);
   g->drawRgbaSurface(m_sur, icon.x, icon.y);
 }
 

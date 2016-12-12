@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_EDITOR_DRAWING_STATE_H_INCLUDED
 #define APP_UI_EDITOR_DRAWING_STATE_H_INCLUDED
@@ -35,7 +23,7 @@ namespace app {
     virtual bool onMouseDown(Editor* editor, ui::MouseMessage* msg) override;
     virtual bool onMouseUp(Editor* editor, ui::MouseMessage* msg) override;
     virtual bool onMouseMove(Editor* editor, ui::MouseMessage* msg) override;
-    virtual bool onSetCursor(Editor* editor) override;
+    virtual bool onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos) override;
     virtual bool onKeyDown(Editor* editor, ui::KeyMessage* msg) override;
     virtual bool onKeyUp(Editor* editor, ui::KeyMessage* msg) override;
     virtual bool onUpdateStatusBar(Editor* editor) override;
@@ -46,9 +34,11 @@ namespace app {
     virtual bool requireBrushPreview() override { return false; }
 
     void initToolLoop(Editor* editor, ui::MouseMessage* msg);
+    void notifyToolLoopModifiersChange(Editor* editor);
 
   private:
-    void destroyLoop();
+    void destroyLoopIfCanceled(Editor* editor);
+    void destroyLoop(Editor* editor);
 
     // The tool-loop.
     tools::ToolLoop* m_toolLoop;
@@ -60,6 +50,11 @@ namespace app {
     // cancel selection tool (deselect) when the user click (press and
     // release the mouse button in the same location).
     bool m_mouseMoveReceived;
+
+    // Stores the last drawing position before we start this
+    // DrawingState. It's used to restore the last drawing position in
+    // case this stroke is canceled.
+    gfx::Point m_lastPoint;
   };
 
 } // namespace app

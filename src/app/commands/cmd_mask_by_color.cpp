@@ -1,26 +1,15 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include "app/app.h"
+#include "app/cmd/set_mask.h"
 #include "app/color.h"
 #include "app/color_utils.h"
 #include "app/commands/command.h"
@@ -30,12 +19,12 @@
 #include "app/ini_file.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
+#include "app/transaction.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/color_button.h"
-#include "app/undo_transaction.h"
-#include "app/undoers/set_mask.h"
-#include "app/util/misc.h"
 #include "base/bind.h"
+#include "base/chrono.h"
+#include "base/convert_to.h"
 #include "base/unique_ptr.h"
 #include "doc/image.h"
 #include "doc/mask.h"
@@ -47,6 +36,9 @@
 #include "ui/widget.h"
 #include "ui/window.h"
 
+// Uncomment to see the performance of doc::MaskBoundaries ctor
+//#define SHOW_BOUNDARIES_GEN_PERFORMANCE
+
 namespace app {
 
 using namespace ui;
@@ -57,13 +49,14 @@ public:
   Command* clone() const override { return new MaskByColorCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 
 private:
   Mask* generateMask(const Sprite* sprite, const Image* image, int xpos, int ypos);
   void maskPreview(const ContextReader& reader);
 
+  Window* m_window; // TODO we cannot use a UniquePtr because clone() needs a copy ctor
   ColorButton* m_buttonColor;
   CheckBox* m_checkPreview;
   Slider* m_sliderTolerance;
@@ -79,7 +72,8 @@ MaskByColorCommand::MaskByColorCommand()
 bool MaskByColorCommand::onEnabled(Context* context)
 {
   return context->checkFlags(ContextFlags::ActiveDocumentIsWritable |
-                             ContextFlags::HasActiveSprite);
+                             ContextFlags::HasActiveSprite |
+                             ContextFlags::HasActiveImage);
 }
 
 void MaskByColorCommand::onExecute(Context* context)
@@ -100,16 +94,17 @@ void MaskByColorCommand::onExecute(Context* context)
   if (!image)
     return;
 
-  base::UniquePtr<Window> window(new Window(Window::WithTitleBar, "Mask by Color"));
-  box1 = new Box(JI_VERTICAL);
-  box2 = new Box(JI_HORIZONTAL);
-  box3 = new Box(JI_HORIZONTAL);
-  box4 = new Box(JI_HORIZONTAL | JI_HOMOGENEOUS);
+  m_window = new Window(Window::WithTitleBar, "Mask by Color");
+  box1 = new Box(VERTICAL);
+  box2 = new Box(HORIZONTAL);
+  box3 = new Box(HORIZONTAL);
+  box4 = new Box(HORIZONTAL | HOMOGENEOUS);
   label_color = new Label("Color:");
   m_buttonColor = new ColorButton
    (get_config_color("MaskColor", "Color",
                      ColorBar::instance()->getFgColor()),
-    sprite->pixelFormat());
+    sprite->pixelFormat(),
+    false);
   label_tolerance = new Label("Tolerance:");
   m_sliderTolerance = new Slider(0, 255, get_config_int("MaskColor", "Tolerance", 0));
   m_checkPreview = new CheckBox("&Preview");
@@ -119,19 +114,20 @@ void MaskByColorCommand::onExecute(Context* context)
   if (get_config_bool("MaskColor", "Preview", true))
     m_checkPreview->setSelected(true);
 
-  button_ok->Click.connect(Bind<void>(&Window::closeWindow, window.get(), button_ok));
-  button_cancel->Click.connect(Bind<void>(&Window::closeWindow, window.get(), button_cancel));
+  button_ok->Click.connect(base::Bind<void>(&Window::closeWindow, m_window, button_ok));
+  button_cancel->Click.connect(base::Bind<void>(&Window::closeWindow, m_window, button_cancel));
 
-  m_buttonColor->Change.connect(Bind<void>(&MaskByColorCommand::maskPreview, this, Ref(reader)));
-  m_sliderTolerance->Change.connect(Bind<void>(&MaskByColorCommand::maskPreview, this, Ref(reader)));
-  m_checkPreview->Click.connect(Bind<void>(&MaskByColorCommand::maskPreview, this, Ref(reader)));
+
+  m_buttonColor->Change.connect(base::Bind<void>(&MaskByColorCommand::maskPreview, this, base::Ref(reader)));
+  m_sliderTolerance->Change.connect(base::Bind<void>(&MaskByColorCommand::maskPreview, this, base::Ref(reader)));
+  m_checkPreview->Click.connect(base::Bind<void>(&MaskByColorCommand::maskPreview, this, base::Ref(reader)));
 
   button_ok->setFocusMagnet(true);
   m_buttonColor->setExpansive(true);
   m_sliderTolerance->setExpansive(true);
   box2->setExpansive(true);
 
-  window->addChild(box1);
+  m_window->addChild(box1);
   box1->addChild(box2);
   box1->addChild(box3);
   box1->addChild(m_checkPreview);
@@ -144,36 +140,28 @@ void MaskByColorCommand::onExecute(Context* context)
   box4->addChild(button_cancel);
 
   // Default position
-  window->remapWindow();
-  window->centerWindow();
+  m_window->remapWindow();
+  m_window->centerWindow();
 
   // Mask first preview
   maskPreview(reader);
 
   // Load window configuration
-  load_window_pos(window, "MaskColor");
+  load_window_pos(m_window, "MaskColor");
 
   // Open the window
-  window->openWindowInForeground();
+  m_window->openWindowInForeground();
 
-  bool apply = (window->getKiller() == button_ok);
+  bool apply = (m_window->closer() == button_ok);
 
   ContextWriter writer(reader);
   Document* document(writer.document());
 
   if (apply) {
-    UndoTransaction undo(writer.context(), "Mask by Color", undo::DoesntModifyDocument);
-
-    if (undo.isEnabled())
-      undo.pushUndoer(new undoers::SetMask(undo.getObjects(), document));
-
-    // Change the mask
-    {
-      base::UniquePtr<Mask> mask(generateMask(sprite, image, xpos, ypos));
-      document->setMask(mask);
-    }
-
-    undo.commit();
+    Transaction transaction(writer.context(), "Mask by Color", DoesntModifyDocument);
+    base::UniquePtr<Mask> mask(generateMask(sprite, image, xpos, ypos));
+    transaction.execute(new cmd::SetMask(document, mask));
+    transaction.commit();
 
     set_config_color("MaskColor", "Color", m_buttonColor->getColor());
     set_config_int("MaskColor", "Tolerance", m_sliderTolerance->getValue());
@@ -185,7 +173,8 @@ void MaskByColorCommand::onExecute(Context* context)
   update_screen_for_document(document);
 
   // Save window configuration.
-  save_window_pos(window, "MaskColor");
+  save_window_pos(m_window, "MaskColor");
+  delete m_window;
 }
 
 Mask* MaskByColorCommand::generateMask(const Sprite* sprite, const Image* image, int xpos, int ypos)
@@ -210,7 +199,18 @@ void MaskByColorCommand::maskPreview(const ContextReader& reader)
     base::UniquePtr<Mask> mask(generateMask(reader.sprite(), image, xpos, ypos));
     {
       ContextWriter writer(reader);
+
+#ifdef SHOW_BOUNDARIES_GEN_PERFORMANCE
+      base::Chrono chrono;
+#endif
+
       writer.document()->generateMaskBoundaries(mask);
+
+#ifdef SHOW_BOUNDARIES_GEN_PERFORMANCE
+      double time = chrono.elapsed();
+      m_window->setText("Mask by Color (" + base::convert_to<std::string>(time) + ")");
+#endif
+
       update_screen_for_document(writer.document());
     }
   }

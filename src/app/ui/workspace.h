@@ -1,64 +1,93 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_WORKSPACE_H_INCLUDED
 #define APP_UI_WORKSPACE_H_INCLUDED
 #pragma once
 
-#include "app/ui/workspace_views.h"
-#include "base/signal.h"
-#include "ui/box.h"
-#include <vector>
+#include "app/ui/input_chain_element.h"
+#include "app/ui/tabs.h"
+#include "app/ui/workspace_panel.h"
+#include "obs/signal.h"
+#include "ui/widget.h"
 
 namespace app {
-  class WorkspacePart;
+  class WorkspaceTabs;
 
-  class Workspace : public ui::Box {
+  class Workspace : public ui::Widget
+                  , public app::InputChainElement {
   public:
     typedef WorkspaceViews::iterator iterator;
+
+    static ui::WidgetType Type();
 
     Workspace();
     ~Workspace();
 
+    void setTabsBar(WorkspaceTabs* tabs);
+
     iterator begin() { return m_views.begin(); }
     iterator end() { return m_views.end(); }
 
-    void addView(WorkspaceView* view);
+    void addView(WorkspaceView* view, int pos = -1);
+    void addViewToPanel(WorkspacePanel* panel, WorkspaceView* view, bool from_drop, int pos);
     void removeView(WorkspaceView* view);
+
+    // Closes the given view. Returns false if the user cancels the
+    // operation.
+    bool closeView(WorkspaceView* view, bool quitting);
 
     WorkspaceView* activeView();
     void setActiveView(WorkspaceView* view);
+    void setMainPanelAsActive();
+    bool canSelectOtherTab() const;
+    void selectNextTab();
+    void selectPreviousTab();
+    void duplicateActiveView();
 
-    void splitView(WorkspaceView* view, int orientation);
-    void makeUnique(WorkspaceView* view);
+    void updateTabs();
 
-    Signal0<void> ActiveViewChanged;
+    // Set the preview of what could happen if we drop the given
+    // "view" at the "pos"?
+    DropViewPreviewResult setDropViewPreview(const gfx::Point& pos,
+      WorkspaceView* view, WorkspaceTabs* tabs);
+    void removeDropViewPreview();
+
+    // Returns true if the view was docked inside the workspace.
+    DropViewAtResult dropViewAt(const gfx::Point& pos, WorkspaceView* view, bool clone);
+
+    // InputChainElement impl
+    void onNewInputPriority(InputChainElement* element) override;
+    bool onCanCut(Context* ctx) override;
+    bool onCanCopy(Context* ctx) override;
+    bool onCanPaste(Context* ctx) override;
+    bool onCanClear(Context* ctx) override;
+    bool onCut(Context* ctx) override;
+    bool onCopy(Context* ctx) override;
+    bool onPaste(Context* ctx) override;
+    bool onClear(Context* ctx) override;
+    void onCancel(Context* ctx) override;
+
+    obs::signal<void()> ActiveViewChanged;
+
+  protected:
+    void onPaint(ui::PaintEvent& ev) override;
+    void onResize(ui::ResizeEvent& ev) override;
 
   private:
-    typedef std::vector<WorkspacePart*> WorkspaceParts;
+    WorkspacePanel* getViewPanel(WorkspaceView* view);
+    WorkspacePanel* getPanelAt(const gfx::Point& pos);
+    WorkspaceTabs* getTabsAt(const gfx::Point& pos);
 
-    WorkspacePart* destroyPart(WorkspacePart* part);
-    WorkspacePart* getPartByView(WorkspaceView* view);
-    void enumAllParts(WorkspaceParts& parts);
-
-    // All views of all parts.
+    WorkspacePanel m_mainPanel;
+    WorkspaceTabs* m_tabs;
     WorkspaceViews m_views;
-    WorkspacePart* m_activePart;
+    WorkspacePanel* m_activePanel;
+    WorkspacePanel* m_dropPreviewPanel;
+    WorkspaceTabs* m_dropPreviewTabs;
   };
 
 } // namespace app

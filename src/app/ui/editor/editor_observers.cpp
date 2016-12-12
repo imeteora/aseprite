@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -26,49 +14,45 @@
 #include "base/bind.h"
 
 namespace app {
-  
-EditorObservers::EditorObservers()
-{
-}
 
-void EditorObservers::addObserver(EditorObserver* observer)
+void EditorObservers::notifyDestroyEditor(Editor* editor)
 {
-  m_observers.addObserver(observer);
-}
-
-void EditorObservers::removeObserver(EditorObserver* observer)
-{
-  m_observers.removeObserver(observer);
+  notify_observers(&EditorObserver::onDestroyEditor, editor);
 }
 
 void EditorObservers::notifyStateChanged(Editor* editor)
 {
-  m_observers.notifyObservers(&EditorObserver::onStateChanged, editor);
+  notify_observers(&EditorObserver::onStateChanged, editor);
 }
 
 void EditorObservers::notifyScrollChanged(Editor* editor)
 {
-  m_observers.notifyObservers(&EditorObserver::onScrollChanged, editor);
+  notify_observers(&EditorObserver::onScrollChanged, editor);
+}
+
+void EditorObservers::notifyZoomChanged(Editor* editor)
+{
+  notify_observers(&EditorObserver::onZoomChanged, editor);
 }
 
 void EditorObservers::notifyBeforeFrameChanged(Editor* editor)
 {
-  m_observers.notifyObservers(&EditorObserver::onBeforeFrameChanged, editor);
+  notify_observers(&EditorObserver::onBeforeFrameChanged, editor);
 }
 
 void EditorObservers::notifyAfterFrameChanged(Editor* editor)
 {
-  m_observers.notifyObservers(&EditorObserver::onAfterFrameChanged, editor);
+  notify_observers(&EditorObserver::onAfterFrameChanged, editor);
 }
 
 void EditorObservers::notifyBeforeLayerChanged(Editor* editor)
 {
-  m_observers.notifyObservers(&EditorObserver::onBeforeLayerChanged, editor);
+  notify_observers(&EditorObserver::onBeforeLayerChanged, editor);
 }
 
 void EditorObservers::notifyAfterLayerChanged(Editor* editor)
 {
-  m_observers.notifyObservers(&EditorObserver::onAfterLayerChanged, editor);
+  notify_observers(&EditorObserver::onAfterLayerChanged, editor);
 }
 
 } // namespace app

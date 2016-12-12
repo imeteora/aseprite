@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,24 +8,26 @@
 #include "config.h"
 #endif
 
+#include "base/fstream_path.h"
+#include "base/log.h"
 #include "base/split_string.h"
 #include "base/trim_string.h"
 #include "base/unique_ptr.h"
 #include "doc/image.h"
 #include "doc/palette.h"
 
+#include <cctype>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
-#include <iomanip>
-#include <cctype>
 
 namespace doc {
 namespace file {
 
 Palette* load_gpl_file(const char *filename)
 {
-  std::ifstream f(filename);
+  std::ifstream f(FSTREAM_PATH(filename));
   if (f.bad()) return NULL;
 
   // Read first line, it must be "GIMP Palette"
@@ -35,14 +37,24 @@ Palette* load_gpl_file(const char *filename)
   if (line != "GIMP Palette") return NULL;
 
   base::UniquePtr<Palette> pal(new Palette(frame_t(0), 0));
+  std::string comment;
 
   while (std::getline(f, line)) {
     // Trim line.
     base::trim_string(line, line);
 
-    // Remove comments
-    if (line.empty() || line[0] == '#')
+    // Remove empty lines
+    if (line.empty())
       continue;
+
+    // Concatenate comments
+    if (line[0] == '#') {
+      line = line.substr(1);
+      base::trim_string(line, line);
+      comment += line;
+      comment.push_back('\n');
+      continue;
+    }
 
     // Remove properties (TODO add these properties in the palette)
     if (!std::isdigit(line[0]))
@@ -52,23 +64,25 @@ Palette* load_gpl_file(const char *filename)
     std::istringstream lineIn(line);
     // TODO add support to read the color name
     lineIn >> r >> g >> b;
-    if (lineIn.good()) {
-      pal->addEntry(rgba(r, g, b, 255));
-      if (pal->size() == Palette::MaxColors)
-        break;
-    }
+
+    if (lineIn.fail())
+        continue;
+
+    pal->addEntry(rgba(r, g, b, 255));
   }
 
-  // TODO remove this when Aseprite supports palettes with less than 256 colors
-  if (pal->size() != Palette::MaxColors)
-      pal->resize(Palette::MaxColors);
+  base::trim_string(comment, comment);
+  if (!comment.empty()) {
+    LOG(VERBOSE) << "PAL: " << filename << " comment: " << comment << "\n";
+    pal->setComment(comment);
+  }
 
   return pal.release();
 }
 
 bool save_gpl_file(const Palette *pal, const char *filename)
 {
-  std::ofstream f(filename);
+  std::ofstream f(FSTREAM_PATH(filename));
   if (f.bad()) return false;
 
   f << "GIMP Palette\n"

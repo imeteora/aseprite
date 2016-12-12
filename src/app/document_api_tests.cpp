@@ -1,29 +1,20 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #include "tests/test.h"
 
+#include "app/context.h"
+#include "app/document.h"
 #include "app/document_api.h"
-#include "app/test_context.h"
+#include "app/transaction.h"
 #include "base/unique_ptr.h"
 #include "doc/cel.h"
 #include "doc/image.h"
 #include "doc/primitives.h"
+#include "doc/test_context.h"
 
 using namespace app;
 using namespace doc;
@@ -31,7 +22,7 @@ using namespace doc;
 typedef base::UniquePtr<app::Document> DocumentPtr;
 
 TEST(DocumentApi, MoveCel) {
-  TestContext ctx;
+  TestContextT<app::Context> ctx;
   DocumentPtr doc(static_cast<app::Document*>(ctx.documents().add(32, 16)));
   Sprite* sprite = doc->sprite();
   LayerImage* layer1 = dynamic_cast<LayerImage*>(sprite->folder()->getFirstLayer());
@@ -51,9 +42,11 @@ TEST(DocumentApi, MoveCel) {
   // Create a copy for later comparison.
   base::UniquePtr<Image> expectedImage(Image::createCopy(image1));
 
-  doc->getApi().moveCel(
+  Transaction transaction(&ctx, "");
+  doc->getApi(transaction).moveCel(
     layer1, frame_t(0),
     layer2, frame_t(1));
+  transaction.commit();
 
   EXPECT_EQ(NULL, layer1->cel(frame_t(0)));
 

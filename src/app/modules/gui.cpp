@@ -1,38 +1,25 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include "app/app.h"
+#include "app/commands/cmd_open_file.h"
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
 #include "app/commands/params.h"
 #include "app/console.h"
 #include "app/document.h"
-#include "app/document_location.h"
 #include "app/ini_file.h"
-#include "app/modules/editors.h"
 #include "app/modules/gfx.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
-#include "app/settings/settings.h"
+#include "app/pref/preferences.h"
 #include "app/tools/ink.h"
 #include "app/tools/tool_box.h"
 #include "app/ui/editor/editor.h"
@@ -40,7 +27,6 @@
 #include "app/ui/main_menu_bar.h"
 #include "app/ui/main_menu_bar.h"
 #include "app/ui/main_window.h"
-#include "app/ui/skin/button_icon_impl.h"
 #include "app/ui/skin/skin_property.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
@@ -50,7 +36,6 @@
 #include "base/shared_ptr.h"
 #include "base/unique_ptr.h"
 #include "doc/sprite.h"
-#include "she/clipboard.h"
 #include "she/display.h"
 #include "she/error.h"
 #include "she/surface.h"
@@ -62,8 +47,9 @@
 #include <list>
 #include <vector>
 
-#ifdef WIN32
-  #include <windows.h>
+#if defined(_DEBUG) && defined(ENABLE_DATA_RECOVERY)
+#include "app/crash/data_recovery.h"
+#include "app/modules/editors.h"
 #endif
 
 namespace app {
@@ -91,6 +77,7 @@ class CustomizedGuiManager : public Manager
 protected:
   bool onProcessMessage(Message* msg) override;
   LayoutIO* onGetLayoutIO() override { return this; }
+  void onNewDisplayConfiguration() override;
 
   // LayoutIO implementation
   std::string loadLayout(Widget* widget) override;
@@ -98,70 +85,110 @@ protected:
 };
 
 static she::Display* main_display = NULL;
-static she::Clipboard* main_clipboard = NULL;
 static CustomizedGuiManager* manager = NULL;
-static Theme* ase_theme = NULL;
+static Theme* gui_theme = NULL;
 
-// Default GUI screen configuration
-static int screen_scaling;
-
-static void reload_default_font();
+static ui::Timer* defered_invalid_timer = nullptr;
+static gfx::Region defered_invalid_region;
 
 // Load & save graphics configuration
-static void load_gui_config(int& w, int& h, bool& maximized);
+static void load_gui_config(int& w, int& h, bool& maximized,
+                            std::string& windowLayout);
 static void save_gui_config();
 
-// Initializes GUI.
-int init_module_gui()
+static bool create_main_display(bool gpuAccel,
+                                bool& maximized,
+                                std::string& lastError)
 {
   int w, h;
-  bool maximized;
-  load_gui_config(w, h, maximized);
+  std::string windowLayout;
+  load_gui_config(w, h, maximized, windowLayout);
+
+  // Scale is equal to 0 when it's the first time the program is
+  // executed.
+  int scale = Preferences::instance().general.screenScale();
+
+  she::instance()->setGpuAcceleration(gpuAccel);
 
   try {
-    if (w > 0 && h > 0)
-      main_display = she::instance()->createDisplay(w, h, screen_scaling);
+    if (w > 0 && h > 0) {
+      main_display = she::instance()->createDisplay(
+        w, h, (scale == 0 ? 2: MID(1, scale, 4)));
+    }
   }
-  catch (const she::DisplayCreationException&) {
-    // Do nothing, the display wasn't created.
+  catch (const she::DisplayCreationException& e) {
+    lastError = e.what();
   }
 
   if (!main_display) {
     for (int c=0; try_resolutions[c].width; ++c) {
       try {
         main_display =
-          she::instance()->createDisplay(try_resolutions[c].width,
-                                         try_resolutions[c].height,
-                                         try_resolutions[c].scale);
-
-        screen_scaling = try_resolutions[c].scale;
+          she::instance()->createDisplay(
+            try_resolutions[c].width,
+            try_resolutions[c].height,
+            (scale == 0 ? try_resolutions[c].scale: scale));
         break;
       }
-      catch (const she::DisplayCreationException&) {
-        // Ignore
+      catch (const she::DisplayCreationException& e) {
+        lastError = e.what();
+      }
+    }
+  }
+
+  if (main_display) {
+    // Change the scale value only in the first run (this will be
+    // saved when the program is closed).
+    if (scale == 0)
+      Preferences::instance().general.screenScale(main_display->scale());
+
+    if (!windowLayout.empty()) {
+      main_display->setLayout(windowLayout);
+      if (main_display->isMinimized())
+        main_display->maximize();
+    }
+  }
+
+  return (main_display != nullptr);
+}
+
+// Initializes GUI.
+int init_module_gui()
+{
+  bool maximized = false;
+  std::string lastError = "Unknown error";
+  bool gpuAccel = Preferences::instance().general.gpuAcceleration();
+
+  if (!create_main_display(gpuAccel, maximized, lastError)) {
+    // If we've created the display with hardware acceleration,
+    // now we try to do it without hardware acceleration.
+    if (gpuAccel &&
+        (int(she::instance()->capabilities()) &
+         int(she::Capabilities::GpuAccelerationSwitch)) == int(she::Capabilities::GpuAccelerationSwitch)) {
+      if (create_main_display(false, maximized, lastError)) {
+        // Disable hardware acceleration
+        Preferences::instance().general.gpuAcceleration(false);
       }
     }
   }
 
   if (!main_display) {
-    she::error_message("Unable to create a user-interface display.\n");
+    she::error_message(
+      ("Unable to create a user-interface display.\nDetails: "+lastError+"\n").c_str());
     return -1;
   }
-
-  main_clipboard = she::instance()->createClipboard();
 
   // Create the default-manager
   manager = new CustomizedGuiManager();
   manager->setDisplay(main_display);
-  manager->setClipboard(main_clipboard);
 
   // Setup the GUI theme for all widgets
-  CurrentTheme::set(ase_theme = new SkinTheme());
+  gui_theme = new SkinTheme();
+  gui_theme->setScale(Preferences::instance().general.uiScale());
+  CurrentTheme::set(gui_theme);
 
   if (maximized)
     main_display->maximize();
-
-  gui_setup_screen(true);
 
   // Set graphics options for next time
   save_gui_config();
@@ -173,156 +200,65 @@ void exit_module_gui()
 {
   save_gui_config();
 
+  delete defered_invalid_timer;
   delete manager;
 
   // Now we can destroy theme
   CurrentTheme::set(NULL);
-  delete ase_theme;
+  delete gui_theme;
 
-  main_clipboard->dispose();
   main_display->dispose();
 }
 
-static void load_gui_config(int& w, int& h, bool& maximized)
+static void load_gui_config(int& w, int& h, bool& maximized,
+                            std::string& windowLayout)
 {
-  w = get_config_int("GfxMode", "Width", 0);
-  h = get_config_int("GfxMode", "Height", 0);
-  screen_scaling = get_config_int("GfxMode", "ScreenScale", 2);
-  screen_scaling = MID(1, screen_scaling, 4);
+  gfx::Size defSize = she::instance()->defaultNewDisplaySize();
+
+  w = get_config_int("GfxMode", "Width", defSize.w);
+  h = get_config_int("GfxMode", "Height", defSize.h);
   maximized = get_config_bool("GfxMode", "Maximized", false);
+  windowLayout = get_config_string("GfxMode", "WindowLayout", "");
 }
 
 static void save_gui_config()
 {
-  she::Display* display = Manager::getDefault()->getDisplay();
+  she::Display* display = manager->getDisplay();
   if (display) {
     set_config_bool("GfxMode", "Maximized", display->isMaximized());
     set_config_int("GfxMode", "Width", display->originalWidth());
     set_config_int("GfxMode", "Height", display->originalHeight());
+
+    std::string windowLayout = display->getLayout();
+    if (!windowLayout.empty())
+      set_config_string("GfxMode", "WindowLayout", windowLayout.c_str());
   }
-  set_config_int("GfxMode", "ScreenScale", screen_scaling);
 }
 
-int get_screen_scaling()
-{
-  return screen_scaling;
-}
-
-void set_screen_scaling(int scaling)
-{
-  screen_scaling = scaling;
-}
-
-void update_screen_for_document(Document* document)
+void update_screen_for_document(const Document* document)
 {
   // Without document.
   if (!document) {
     // Well, change to the default palette.
     if (set_current_palette(NULL, false)) {
       // If the palette changes, refresh the whole screen.
-      if (Manager::getDefault())
-        Manager::getDefault()->invalidate();
+      if (manager)
+        manager->invalidate();
     }
   }
   // With a document.
   else {
-    document->notifyGeneralUpdate();
+    const_cast<Document*>(document)->notifyGeneralUpdate();
 
     // Update the tabs (maybe the modified status has been changed).
     app_rebuild_documents_tabs();
   }
 }
 
-void gui_run()
-{
-  manager->run();
-}
-
-void gui_feedback()
-{
-  Manager* manager = Manager::getDefault();
-  OverlayManager* overlays = OverlayManager::instance();
-
-  ui::update_cursor_overlay();
-
-  // Avoid updating a non-dirty screen over and over again.
-#if 0                           // TODO It doesn't work yet
-  if (!dirty_display_flag)
-    return;
-#endif
-
-  // Draw overlays.
-  overlays->captureOverlappedAreas();
-  overlays->drawOverlays();
-
-  if (!manager->getDisplay()->flip()) {
-    // In case that the display was resized.
-    gui_setup_screen(false);
-    App::instance()->getMainWindow()->remapWindow();
-    manager->invalidate();
-  }
-  else
-    overlays->restoreOverlappedAreas();
-
-  dirty_display_flag = false;
-}
-
-// Refresh the UI display, font, etc.
-void gui_setup_screen(bool reload_font)
-{
-  bool regen = false;
-  bool reinit = false;
-
-  main_display->setScale(screen_scaling);
-  ui::set_display(main_display);
-
-  // Update guiscale factor
-  int old_guiscale = guiscale();
-  CurrentTheme::get()->setScale(
-    (screen_scaling == 1 &&
-      ui::display_w() > 512 &&
-      ui::display_h() > 256) ? 2: 1);
-
-  // If the guiscale have changed
-  if (old_guiscale != guiscale()) {
-    reload_font = true;
-    regen = true;
-  }
-
-  if (reload_font) {
-    reload_default_font();
-    reinit = true;
-  }
-
-  // Regenerate the theme
-  if (regen) {
-    CurrentTheme::get()->regenerate();
-    reinit = true;
-  }
-
-  if (reinit)
-    reinitThemeForAllWidgets();
-
-  // Set the configuration
-  save_gui_config();
-}
-
-static void reload_default_font()
-{
-  Theme* theme = CurrentTheme::get();
-  SkinTheme* skin_theme = static_cast<SkinTheme*>(theme);
-
-  // Reload theme fonts
-  skin_theme->reload_fonts();
-
-  // Set all widgets fonts
-  setFontOfAllWidgets(theme->default_font);
-}
-
 void load_window_pos(Widget* window, const char *section)
 {
   // Default position
-  Rect orig_pos = window->getBounds();
+  Rect orig_pos = window->bounds();
   Rect pos = orig_pos;
 
   // Load configurated position
@@ -339,12 +275,13 @@ void load_window_pos(Widget* window, const char *section)
 
 void save_window_pos(Widget* window, const char *section)
 {
-  set_config_rect(section, "WindowPos", window->getBounds());
+  set_config_rect(section, "WindowPos", window->bounds());
 }
 
 Widget* setup_mini_font(Widget* widget)
 {
-  widget->setFont(((SkinTheme*)widget->getTheme())->getMiniFont());
+  SkinPropertyPtr skinProp = get_skin_property(widget);
+  skinProp->setMiniFont();
   return widget;
 }
 
@@ -369,23 +306,6 @@ void setup_bevels(Widget* widget, int b1, int b2, int b3, int b4)
   skinProp->setLowerRight(b4);
 }
 
-// Sets the IconInterface pointer interface of the button to show the
-// specified set of icons. Each icon is a part of the SkinTheme.
-void set_gfxicon_to_button(ButtonBase* button,
-                           int normal_part_id,
-                           int selected_part_id,
-                           int disabled_part_id, int icon_align)
-{
-  ButtonIconImpl* buttonIcon =
-    new ButtonIconImpl(static_cast<SkinTheme*>(button->getTheme()),
-                       normal_part_id,
-                       selected_part_id,
-                       disabled_part_id,
-                       icon_align);
-
-  button->setIconInterface(buttonIcon);
-}
-
 //////////////////////////////////////////////////////////////////////
 // Button style (convert radio or check buttons and draw it like
 // normal buttons)
@@ -394,11 +314,21 @@ CheckBox* check_button_new(const char *text, int b1, int b2, int b3, int b4)
 {
   CheckBox* widget = new CheckBox(text, kButtonWidget);
 
-  widget->setAlign(JI_CENTER | JI_MIDDLE);
+  widget->setAlign(CENTER | MIDDLE);
 
   setup_mini_look(widget);
   setup_bevels(widget, b1, b2, b3, b4);
   return widget;
+}
+
+void defer_invalid_rect(const gfx::Rect& rc)
+{
+  if (!defered_invalid_timer)
+    defered_invalid_timer = new ui::Timer(250, manager);
+
+  defered_invalid_timer->stop();
+  defered_invalid_timer->start();
+  defered_invalid_region.createUnion(defered_invalid_region, gfx::Region(rc));
 }
 
 // Manager event handler.
@@ -406,7 +336,7 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
 {
   switch (msg->type()) {
 
-    case kCloseAppMessage:
+    case kCloseDisplayMessage:
       {
         // Execute the "Exit" command.
         Command* command = CommandsModule::instance()->getCommandByName(CommandId::Exit);
@@ -416,21 +346,14 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
 
     case kDropFilesMessage:
       {
-        // If the main window is not the current foreground one. We
-        // discard the drop-files event.
-        if (getForegroundWindow() != App::instance()->getMainWindow())
-          break;
-
-        const DropFilesMessage::Files& files = static_cast<DropFilesMessage*>(msg)->files();
-
-        // Open all files
-        Command* cmd_open_file =
-          CommandsModule::instance()->getCommandByName(CommandId::OpenFile);
-        Params params;
-
+        DropFilesMessage::Files files = static_cast<DropFilesMessage*>(msg)->files();
         UIContext* ctx = UIContext::instance();
+        OpenFileCommand cmd;
 
-        for (const auto& fn : files) {
+        while (!files.empty()) {
+          auto fn = files.front();
+          files.erase(files.begin());
+
           // If the document is already open, select it.
           Document* doc = static_cast<Document*>(ctx->documents().getByFileName(fn));
           if (doc) {
@@ -443,39 +366,68 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
           }
           // Load the file
           else {
+            Params params;
             params.set("filename", fn.c_str());
-            ctx->executeCommand(cmd_open_file, &params);
+            params.set("repeat_checkbox", "true");
+            ctx->executeCommand(&cmd, params);
+
+            // Remove all used file names from the "dropped files"
+            for (const auto& usedFn : cmd.usedFiles()) {
+              auto it = std::find(files.begin(), files.end(), usedFn);
+              if (it != files.end())
+                files.erase(it);
+            }
           }
         }
       }
       break;
 
-    case kQueueProcessingMessage:
-      gui_feedback();
-      break;
-
     case kKeyDownMessage: {
-      Window* toplevel_window = getTopWindow();
+#ifdef _DEBUG
+      auto keymsg = static_cast<KeyMessage*>(msg);
 
-      // If there is a foreground window as top level...
-      if (toplevel_window &&
-          toplevel_window != App::instance()->getMainWindow() &&
-          toplevel_window->isForeground()) {
-        // We just do not process keyboard shortcuts for menus and tools
-        break;
+      // Ctrl+Shift+Q generates a crash (useful to test the anticrash feature)
+      if (msg->ctrlPressed() &&
+          msg->shiftPressed() &&
+          keymsg->scancode() == kKeyQ) {
+        int* p = nullptr;
+        *p = 0;
       }
+
+#ifdef ENABLE_DATA_RECOVERY
+      // Ctrl+Shift+R recover active sprite from the backup store
+      if (msg->ctrlPressed() &&
+          msg->shiftPressed() &&
+          keymsg->scancode() == kKeyR &&
+          App::instance()->dataRecovery() &&
+          App::instance()->dataRecovery()->activeSession() &&
+          current_editor &&
+          current_editor->document()) {
+        App::instance()
+          ->dataRecovery()
+          ->activeSession()
+          ->restoreBackupById(current_editor->document()->id());
+      }
+#endif  // ENABLE_DATA_RECOVERY
+#endif  // _DEBUG
+
+      // Call base impl to check if there is a foreground window as
+      // top level that needs keys. (In this way we just do not
+      // process keyboard shortcuts for menus and tools).
+      if (Manager::onProcessMessage(msg))
+        return true;
 
       for (const Key* key : *KeyboardShortcuts::instance()) {
         if (key->isPressed(msg)) {
           // Cancel menu-bar loops (to close any popup menu)
-          App::instance()->getMainWindow()->getMenuBar()->cancelMenuLoop();
+          App::instance()->mainWindow()->getMenuBar()->cancelMenuLoop();
 
           switch (key->type()) {
 
             case KeyType::Tool: {
-              tools::Tool* current_tool = UIContext::instance()->settings()->getCurrentTool();
+              tools::Tool* current_tool = App::instance()->activeTool();
               tools::Tool* select_this_tool = key->tool();
-              tools::ToolBox* toolbox = App::instance()->getToolBox();
+              tools::ToolBox* toolbox = App::instance()->toolBox();
               std::vector<tools::Tool*> possibles;
 
               // Collect all tools with the pressed keyboard-shortcut
@@ -518,15 +470,15 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
 
               // Commands are executed only when the main window is
               // the current window running at foreground.
-              UI_FOREACH_WIDGET(getChildren(), it) {
-                Window* child = static_cast<Window*>(*it);
+              for (auto childWidget : children()) {
+                Window* child = static_cast<Window*>(childWidget);
 
                 // There are a foreground window executing?
                 if (child->isForeground()) {
                   break;
                 }
                 // Is it the desktop and the top-window=
-                else if (child->isDesktop() && child == App::instance()->getMainWindow()) {
+                else if (child->isDesktop() && child == App::instance()->mainWindow()) {
                   // OK, so we can execute the command represented
                   // by the pressed-key in the message...
                   UIContext::instance()->executeCommand(
@@ -550,31 +502,47 @@ bool CustomizedGuiManager::onProcessMessage(Message* msg)
       break;
     }
 
+    case kTimerMessage:
+      if (static_cast<TimerMessage*>(msg)->timer() == defered_invalid_timer) {
+        invalidateDisplayRegion(defered_invalid_region);
+        defered_invalid_region.clear();
+        defered_invalid_timer->stop();
+      }
+      break;
+
   }
 
   return Manager::onProcessMessage(msg);
 }
 
+void CustomizedGuiManager::onNewDisplayConfiguration()
+{
+  Manager::onNewDisplayConfiguration();
+  save_gui_config();
+}
+
 std::string CustomizedGuiManager::loadLayout(Widget* widget)
 {
-  if (widget->getRoot() == NULL)
+  if (widget->window() == nullptr)
     return "";
 
-  std::string rootId = widget->getRoot()->getId();
-  std::string widgetId = widget->getId();
+  std::string windowId = widget->window()->id();
+  std::string widgetId = widget->id();
 
-  return get_config_string(("layout:"+rootId).c_str(), widgetId.c_str(), "");
+  return get_config_string(("layout:"+windowId).c_str(), widgetId.c_str(), "");
 }
 
 void CustomizedGuiManager::saveLayout(Widget* widget, const std::string& str)
 {
-  if (widget->getRoot() == NULL)
+  if (widget->window() == NULL)
     return;
 
-  std::string rootId = widget->getRoot()->getId();
-  std::string widgetId = widget->getId();
+  std::string windowId = widget->window()->id();
+  std::string widgetId = widget->id();
 
-  set_config_string(("layout:"+rootId).c_str(), widgetId.c_str(), str.c_str());
+  set_config_string(("layout:"+windowId).c_str(),
+                    widgetId.c_str(),
+                    str.c_str());
 }
 
 } // namespace app

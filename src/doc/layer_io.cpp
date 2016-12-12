@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -13,9 +13,16 @@
 #include "base/serialization.h"
 #include "base/unique_ptr.h"
 #include "doc/cel.h"
+#include "doc/cel_data.h"
+#include "doc/cel_data_io.h"
+#include "doc/cel_io.h"
+#include "doc/image_io.h"
 #include "doc/layer.h"
+#include "doc/layer_io.h"
 #include "doc/sprite.h"
+#include "doc/string_io.h"
 #include "doc/subobjects_io.h"
+#include "doc/user_data_io.h"
 
 #include <iostream>
 #include <vector>
@@ -27,13 +34,10 @@ using namespace base::serialization::little_endian;
 
 // Serialized Layer data:
 
-void write_layer(std::ostream& os, SubObjectsIO* subObjects, Layer* layer)
+void write_layer(std::ostream& os, const Layer* layer)
 {
-  std::string name = layer->name();
-
-  write16(os, name.size());                            // Name length
-  if (!name.empty())
-    os.write(name.c_str(), name.size());               // Name
+  write32(os, layer->id());
+  write_string(os, layer->name());
 
   write32(os, static_cast<int>(layer->flags())); // Flags
   write16(os, static_cast<int>(layer->type()));  // Type
@@ -41,76 +45,119 @@ void write_layer(std::ostream& os, SubObjectsIO* subObjects, Layer* layer)
   switch (layer->type()) {
 
     case ObjectType::LayerImage: {
-      // Number of cels
-      write16(os, static_cast<LayerImage*>(layer)->getCelsCount());
+      const LayerImage* imgLayer = static_cast<const LayerImage*>(layer);
+      CelConstIterator it, begin = imgLayer->getCelBegin();
+      CelConstIterator end = imgLayer->getCelEnd();
 
-      CelIterator it = static_cast<LayerImage*>(layer)->getCelBegin();
-      CelIterator end = static_cast<LayerImage*>(layer)->getCelEnd();
+      // Blend mode & opacity
+      write16(os, (int)imgLayer->blendMode());
+      write8(os, imgLayer->opacity());
 
-      for (; it != end; ++it) {
+      // Images
+      int images = 0;
+      int celdatas = 0;
+      for (it=begin; it != end; ++it) {
         Cel* cel = *it;
-        subObjects->write_cel(os, cel);
+        if (!cel->link()) {
+          ++images;
+          ++celdatas;
+        }
+      }
+
+      write16(os, images);
+      for (it=begin; it != end; ++it) {
+        Cel* cel = *it;
+        if (!cel->link())
+          write_image(os, cel->image());
+      }
+
+      write16(os, celdatas);
+      for (it=begin; it != end; ++it) {
+        Cel* cel = *it;
+        if (!cel->link())
+          write_celdata(os, cel->dataRef().get());
+      }
+
+      // Cels
+      write16(os, imgLayer->getCelsCount());
+      for (it=begin; it != end; ++it) {
+        const Cel* cel = *it;
+        write_cel(os, cel);
       }
       break;
     }
 
     case ObjectType::LayerFolder: {
-      LayerIterator it = static_cast<LayerFolder*>(layer)->getLayerBegin();
-      LayerIterator end = static_cast<LayerFolder*>(layer)->getLayerEnd();
+      LayerConstIterator it = static_cast<const LayerFolder*>(layer)->getLayerBegin();
+      LayerConstIterator end = static_cast<const LayerFolder*>(layer)->getLayerEnd();
 
       // Number of sub-layers
-      write16(os, static_cast<LayerFolder*>(layer)->getLayersCount());
+      write16(os, static_cast<const LayerFolder*>(layer)->getLayersCount());
 
       for (; it != end; ++it)
-        subObjects->write_layer(os, *it);
+        write_layer(os, *it);
       break;
     }
 
   }
+
+  write_user_data(os, layer->userData());
 }
 
-Layer* read_layer(std::istream& is, SubObjectsIO* subObjects, Sprite* sprite)
+Layer* read_layer(std::istream& is, SubObjectsFromSprite* subObjects)
 {
-  uint16_t name_length = read16(is);                // Name length
-  std::vector<char> name(name_length+1);
-  if (name_length > 0) {
-    is.read(&name[0], name_length);                 // Name
-    name[name_length] = 0;
-  }
-  else
-    name[0] = 0;
-
+  ObjectId id = read32(is);
+  std::string name = read_string(is);
   uint32_t flags = read32(is);                     // Flags
   uint16_t layer_type = read16(is);                // Type
-
   base::UniquePtr<Layer> layer;
 
   switch (static_cast<ObjectType>(layer_type)) {
 
     case ObjectType::LayerImage: {
+      LayerImage* imgLayer = new LayerImage(subObjects->sprite());
+
       // Create layer
-      layer.reset(new LayerImage(sprite));
+      layer.reset(imgLayer);
+
+      // Blend mode & opacity
+      imgLayer->setBlendMode((BlendMode)read16(is));
+      imgLayer->setOpacity(read8(is));
+
+      // Read images
+      int images = read16(is);  // Number of images
+      for (int c=0; c<images; ++c) {
+        ImageRef image(read_image(is));
+        subObjects->addImageRef(image);
+      }
+
+      // Read celdatas
+      int celdatas = read16(is);
+      for (int c=0; c<celdatas; ++c) {
+        CelDataRef celdata(read_celdata(is, subObjects));
+        subObjects->addCelDataRef(celdata);
+      }
 
       // Read cels
       int cels = read16(is);                      // Number of cels
       for (int c=0; c<cels; ++c) {
         // Read the cel
-        Cel* cel = subObjects->read_cel(is);
+        Cel* cel = read_cel(is, subObjects);
 
         // Add the cel in the layer
-        static_cast<LayerImage*>(layer.get())->addCel(cel);
+        imgLayer->addCel(cel);
       }
       break;
     }
 
     case ObjectType::LayerFolder: {
       // Create the layer set
-      layer.reset(new LayerFolder(sprite));
+      layer.reset(new LayerFolder(subObjects->sprite()));
 
       // Number of sub-layers
       int layers = read16(is);
       for (int c=0; c<layers; c++) {
-        Layer* child = subObjects->read_layer(is);
+        Layer* child = read_layer(is, subObjects);
         if (child)
           static_cast<LayerFolder*>(layer.get())->addLayer(child);
         else
@@ -124,9 +171,13 @@ Layer* read_layer(std::istream& is, SubObjectsIO* subObjects, Sprite* sprite)
 
   }
 
-  if (layer != NULL) {
-    layer->setName(&name[0]);
+  UserData userData = read_user_data(is);
+
+  if (layer) {
+    layer->setName(name);
     layer->setFlags(static_cast<LayerFlags>(flags));
+    layer->setId(id);
+    layer->setUserData(userData);
   }
 
   return layer.release();

@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,9 +10,32 @@
 
 #include "app/document_range.h"
 
+#include "doc/cel.h"
+#include "doc/image.h"
+#include "doc/layer.h"
+#include "doc/sprite.h"
+
 namespace app {
 
 using namespace doc;
+
+DocumentRange::DocumentRange()
+  : m_type(kNone)
+  , m_layerBegin(0)
+  , m_layerEnd(-1)
+  , m_frameBegin(0)
+  , m_frameEnd(-1)
+{
+}
+
+DocumentRange::DocumentRange(Cel* cel)
+  : m_type(kCels)
+  , m_layerBegin(cel->sprite()->layerToIndex(cel->layer()))
+  , m_layerEnd(m_layerBegin)
+  , m_frameBegin(cel->frame())
+  , m_frameEnd(m_frameBegin)
+{
+}
 
 void DocumentRange::startRange(LayerIndex layer, frame_t frame, Type type)
 {
@@ -86,6 +97,27 @@ void DocumentRange::displace(int layerDelta, int frameDelta)
   m_layerEnd   += LayerIndex(layerDelta);
   m_frameBegin += frame_t(frameDelta);
   m_frameEnd   += frame_t(frameDelta);
+}
+
+bool DocumentRange::convertToCels(Sprite* sprite)
+{
+  switch (m_type) {
+    case DocumentRange::kNone:
+      return false;
+    case DocumentRange::kCels:
+      break;
+    case DocumentRange::kFrames:
+      m_layerBegin = sprite->firstLayer();
+      m_layerEnd = sprite->lastLayer();
+      m_type = DocumentRange::kCels;
+      break;
+    case DocumentRange::kLayers:
+      m_frameBegin = frame_t(0);
+      m_frameEnd = sprite->lastFrame();
+      m_type = DocumentRange::kCels;
+      break;
+  }
+  return true;
 }
 
 } // namespace app

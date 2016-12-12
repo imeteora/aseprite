@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,6 +12,8 @@
 
 #include "base/bind.h"
 #include "base/convert_to.h"
+#include "base/debug.h"
+#include "base/unique_ptr.h"
 #include "net/http_headers.h"
 #include "net/http_request.h"
 #include "net/http_response.h"
@@ -37,7 +27,7 @@ namespace updater {
 
 CheckUpdateResponse::CheckUpdateResponse()
   : m_type(Unknown)
-  , m_waitDays(0)
+  , m_waitDays(0.0)
 {
 }
 
@@ -45,13 +35,13 @@ CheckUpdateResponse::CheckUpdateResponse(const CheckUpdateResponse& other)
   : m_type(other.m_type)
   , m_version(other.m_version)
   , m_url(other.m_url)
-  , m_waitDays(0)
+  , m_waitDays(0.0)
 {
 }
 
 CheckUpdateResponse::CheckUpdateResponse(const std::string& responseBody)
   : m_type(Unknown)
-  , m_waitDays(0)
+  , m_waitDays(0.0)
 {
   TiXmlDocument doc;
   doc.Parse(responseBody.c_str());
@@ -81,7 +71,7 @@ CheckUpdateResponse::CheckUpdateResponse(const std::string& responseBody)
   }
 
   if (version_attr)
-    m_version = base::convert_to<base::Version>(std::string(version_attr));
+    m_version = version_attr;
 
   if (url_attr)
     m_url = url_attr;
@@ -90,7 +80,7 @@ CheckUpdateResponse::CheckUpdateResponse(const std::string& responseBody)
     m_uuid = uuid_attr;
 
   if (waitdays_attr)
-    m_waitDays = base::convert_to<int>(std::string(waitdays_attr));
+    m_waitDays = base::convert_to<double>(std::string(waitdays_attr));
 }
 
 class CheckUpdate::CheckUpdateImpl
@@ -101,13 +91,16 @@ public:
 
   void abort()
   {
-    // TODO impl
+    if (m_request)
+      m_request->abort();
   }
 
-  void checkNewVersion(const Uuid& uuid, const std::string& extraParams, CheckUpdateDelegate* delegate)
+  bool checkNewVersion(const Uuid& uuid, const std::string& extraParams, CheckUpdateDelegate* delegate)
   {
-    using namespace base;
-    using namespace net;
+#ifndef UPDATE_URL
+#define UPDATE_URL ""
+#pragma message("warning: Define UPDATE_URL macro")
+#endif
 
     std::string url = UPDATE_URL;
     if (!uuid.empty()) {
@@ -119,24 +112,27 @@ public:
       url += extraParams;
     }
 
-    HttpRequest request(url);
-    HttpHeaders headers;
+    m_request.reset(new net::HttpRequest(url));
+    net::HttpHeaders headers;
     headers.setHeader("User-Agent", getUserAgent());
-    request.setHeaders(headers);
+    m_request->setHeaders(headers);
 
     std::stringstream body;
-    HttpResponse response(&body);
-    request.send(response);
+    net::HttpResponse response(&body);
+    if (m_request->send(response)) {
+      TRACE("Checking updates: %s (User-Agent: %s)\n", url.c_str(), getUserAgent().c_str());
+      TRACE("Response:\n--\n%s--\n", body.str().c_str());
 
-#ifdef _DEBUG
-    PRINTF("Checking updates: %s (User-Agent: %s)\n", url.c_str(), getUserAgent().c_str());
-    PRINTF("Response:\n--\n%s--\n", body.str().c_str());
-#endif
-
-    CheckUpdateResponse data(body.str());
-    delegate->onResponse(data);
+      CheckUpdateResponse data(body.str());
+      delegate->onResponse(data);
+      return true;
+    }
+    else
+      return false;
   }
 
+private:
+  base::UniquePtr<net::HttpRequest> m_request;
 };
 
 CheckUpdate::CheckUpdate()
@@ -154,9 +150,9 @@ void CheckUpdate::abort()
   m_impl->abort();
 }
 
-void CheckUpdate::checkNewVersion(const Uuid& uuid, const std::string& extraParams, CheckUpdateDelegate* delegate)
+bool CheckUpdate::checkNewVersion(const Uuid& uuid, const std::string& extraParams, CheckUpdateDelegate* delegate)
 {
-  m_impl->checkNewVersion(uuid, extraParams, delegate);
+  return m_impl->checkNewVersion(uuid, extraParams, delegate);
 }
 
 } // namespace updater

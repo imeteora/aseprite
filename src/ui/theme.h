@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2013, 2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -27,10 +27,6 @@ namespace ui {
 
   class Theme {
   public:
-    const char* name;
-    she::Font* default_font;
-    int scrollbar_size;
-
     Theme();
     virtual ~Theme();
 
@@ -39,10 +35,14 @@ namespace ui {
     int guiscale() const { return m_guiscale; }
     void setScale(int value) { m_guiscale = value; }
 
+    virtual she::Font* getDefaultFont() const = 0;
+    virtual she::Font* getWidgetFont(const Widget* widget) const = 0;
+
     virtual Cursor* getCursor(CursorType type) = 0;
     virtual void initWidget(Widget* widget) = 0;
     virtual void getWindowMask(Widget* widget, gfx::Region& region) = 0;
     virtual void setDecorativeWidgetBounds(Widget* widget) = 0;
+    virtual int getScrollbarSize() = 0;
 
     virtual void paintDesktop(PaintEvent& ev) = 0;
     virtual void paintBox(PaintEvent& ev) = 0;

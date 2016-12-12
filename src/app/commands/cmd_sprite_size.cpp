@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -23,25 +11,27 @@
 #include "app/commands/cmd_sprite_size.h"
 #include "app/commands/command.h"
 #include "app/commands/params.h"
+#include "app/context.h"
 #include "app/context_access.h"
 #include "app/document_api.h"
-#include "app/find_widget.h"
 #include "app/ini_file.h"
 #include "app/job.h"
-#include "app/load_widget.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
-#include "app/ui_context.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "base/bind.h"
 #include "base/unique_ptr.h"
 #include "doc/algorithm/resize_image.h"
 #include "doc/cel.h"
+#include "doc/cels_range.h"
 #include "doc/image.h"
+#include "doc/layer.h"
 #include "doc/mask.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
+
+#include "sprite_size.xml.h"
 
 #define PERC_FORMAT     "%.1f"
 
@@ -58,8 +48,8 @@ class SpriteSizeJob : public Job {
   int m_new_height;
   ResizeMethod m_resize_method;
 
-  inline int scale_x(int x) const { return x * m_new_width / m_sprite->width(); }
-  inline int scale_y(int y) const { return y * m_new_height / m_sprite->height(); }
+  int scale_x(int x) const { return x * m_new_width / m_sprite->width(); }
+  int scale_y(int y) const { return y * m_new_height / m_sprite->height(); }
 
 public:
 
@@ -81,44 +71,47 @@ protected:
    */
   virtual void onJob()
   {
-    UndoTransaction undoTransaction(m_writer.context(), "Sprite Size");
-    DocumentApi api = m_writer.document()->getApi();
+    Transaction transaction(m_writer.context(), "Sprite Size");
+    DocumentApi api = m_writer.document()->getApi(transaction);
 
-    // Get all sprite cels
-    CelList cels;
-    m_sprite->getCels(cels);
+    int cels_count = 0;
+    for (Cel* cel : m_sprite->uniqueCels()) { // TODO add size() member function to CelsRange
+      (void)cel;
+      ++cels_count;
+    }
 
     // For each cel...
     int progress = 0;
-    for (CelIterator it = cels.begin(); it != cels.end(); ++it, ++progress) {
-      Cel* cel = *it;
-
+    for (Cel* cel : m_sprite->uniqueCels()) {
       // Change its location
       api.setCelPosition(m_sprite, cel, scale_x(cel->x()), scale_y(cel->y()));
 
       // Get cel's image
       Image* image = cel->image();
-      if (!image)
-        continue;
+      if (image && !cel->link()) {
+        // Resize the image
+        int w = scale_x(image->width());
+        int h = scale_y(image->height());
+        ImageRef new_image(Image::create(image->pixelFormat(), MAX(1, w), MAX(1, h)));
+        new_image->setMaskColor(image->maskColor());
 
-      // Resize the image
-      int w = scale_x(image->width());
-      int h = scale_y(image->height());
-      ImageRef new_image(Image::create(image->pixelFormat(), MAX(1, w), MAX(1, h)));
-
-      doc::algorithm::fixup_image_transparent_colors(image);
-      doc::algorithm::resize_image(image, new_image,
+        doc::algorithm::fixup_image_transparent_colors(image);
+        doc::algorithm::resize_image(
+          image, new_image.get(),
           m_resize_method,
           m_sprite->palette(cel->frame()),
-          m_sprite->rgbMap(cel->frame()));
+          m_sprite->rgbMap(cel->frame()),
+          (cel->layer()->isBackground() ? -1: m_sprite->transparentColor()));
 
-      api.replaceImage(m_sprite, cel->imageRef(), new_image);
+        api.replaceImage(m_sprite, cel->imageRef(), new_image);
+      }
 
-      jobProgress((float)progress / cels.size());
+      jobProgress((float)progress / cels_count);
+      ++progress;
 
       // cancel all the operation?
       if (isCanceled())
-        return;        // UndoTransaction destructor will undo all operations
+        return;        // Transaction destructor will undo all operations
     }
 
     // Resize mask
@@ -135,10 +128,12 @@ protected:
         gfx::Rect(
           scale_x(m_document->mask()->bounds().x-1),
           scale_y(m_document->mask()->bounds().y-1), MAX(1, w), MAX(1, h)));
-      algorithm::resize_image(old_bitmap, new_mask->bitmap(),
-          m_resize_method,
-          m_sprite->palette(0), // Ignored
-          m_sprite->rgbMap(0)); // Ignored
+      algorithm::resize_image(
+        old_bitmap.get(), new_mask->bitmap(),
+        m_resize_method,
+        m_sprite->palette(0), // Ignored
+        m_sprite->rgbMap(0),  // Ignored
+        -1);                  // Ignored
 
       // Reshrink
       new_mask->intersect(new_mask->bounds());
@@ -155,9 +150,97 @@ protected:
     api.setSpriteSize(m_sprite, m_new_width, m_new_height);
 
     // commit changes
-    undoTransaction.commit();
+    transaction.commit();
   }
 
+};
+
+class SpriteSizeWindow : public app::gen::SpriteSize {
+public:
+  SpriteSizeWindow(Context* ctx, int new_width, int new_height) : m_ctx(ctx) {
+    lockRatio()->Click.connect(base::Bind<void>(&SpriteSizeWindow::onLockRatioClick, this));
+    widthPx()->Change.connect(base::Bind<void>(&SpriteSizeWindow::onWidthPxChange, this));
+    heightPx()->Change.connect(base::Bind<void>(&SpriteSizeWindow::onHeightPxChange, this));
+    widthPerc()->Change.connect(base::Bind<void>(&SpriteSizeWindow::onWidthPercChange, this));
+    heightPerc()->Change.connect(base::Bind<void>(&SpriteSizeWindow::onHeightPercChange, this));
+
+    widthPx()->setTextf("%d", new_width);
+    heightPx()->setTextf("%d", new_height);
+
+    static_assert(doc::algorithm::RESIZE_METHOD_NEAREST_NEIGHBOR == 0 &&
+                  doc::algorithm::RESIZE_METHOD_BILINEAR == 1 &&
+                  doc::algorithm::RESIZE_METHOD_ROTSPRITE == 2,
+                  "ResizeMethod enum has changed");
+    method()->addItem("Nearest-neighbor");
+    method()->addItem("Bilinear");
+    method()->addItem("RotSprite");
+    method()->setSelectedItemIndex(
+      get_config_int("SpriteSize", "Method",
+                     doc::algorithm::RESIZE_METHOD_NEAREST_NEIGHBOR));
+  }
+
+private:
+
+  void onLockRatioClick() {
+    const ContextReader reader(m_ctx);
+    onWidthPxChange();
+  }
+
+  void onWidthPxChange() {
+    const ContextReader reader(m_ctx);
+    const Sprite* sprite(reader.sprite());
+    int width = widthPx()->textInt();
+    double perc = 100.0 * width / sprite->width();
+
+    widthPerc()->setTextf(PERC_FORMAT, perc);
+
+    if (lockRatio()->isSelected()) {
+      heightPerc()->setTextf(PERC_FORMAT, perc);
+      heightPx()->setTextf("%d", sprite->height() * width / sprite->width());
+    }
+  }
+
+  void onHeightPxChange() {
+    const ContextReader reader(m_ctx);
+    const Sprite* sprite(reader.sprite());
+    int height = heightPx()->textInt();
+    double perc = 100.0 * height / sprite->height();
+
+    heightPerc()->setTextf(PERC_FORMAT, perc);
+
+    if (lockRatio()->isSelected()) {
+      widthPerc()->setTextf(PERC_FORMAT, perc);
+      widthPx()->setTextf("%d", sprite->width() * height / sprite->height());
+    }
+  }
+
+  void onWidthPercChange() {
+    const ContextReader reader(m_ctx);
+    const Sprite* sprite(reader.sprite());
+    double width = widthPerc()->textDouble();
+
+    widthPx()->setTextf("%d", (int)(sprite->width() * width / 100));
+
+    if (lockRatio()->isSelected()) {
+      heightPx()->setTextf("%d", (int)(sprite->height() * width / 100));
+      heightPerc()->setText(widthPerc()->text());
+    }
+  }
+
+  void onHeightPercChange() {
+    const ContextReader reader(m_ctx);
+    const Sprite* sprite(reader.sprite());
+    double height = heightPerc()->textDouble();
+
+    heightPx()->setTextf("%d", (int)(sprite->height() * height / 100));
+
+    if (lockRatio()->isSelected()) {
+      widthPx()->setTextf("%d", (int)(sprite->width() * height / 100));
+      widthPerc()->setText(heightPerc()->text());
+    }
+  }
+
+  Context* m_ctx;
 };
 
 SpriteSizeCommand::SpriteSizeCommand()
@@ -165,6 +248,7 @@ SpriteSizeCommand::SpriteSizeCommand()
             "Sprite Size",
             CmdRecordableFlag)
 {
+  m_useUI = true;
   m_width = 0;
   m_height = 0;
   m_scaleX = 1.0;
@@ -177,26 +261,31 @@ Command* SpriteSizeCommand::clone() const
   return new SpriteSizeCommand(*this);
 }
 
-void SpriteSizeCommand::onLoadParams(Params* params)
+void SpriteSizeCommand::onLoadParams(const Params& params)
 {
-  std::string width = params->get("width");
+  std::string useUI = params.get("use-ui");
+  m_useUI = (useUI.empty() || (useUI == "true"));
+
+  std::string width = params.get("width");
   if (!width.empty()) {
     m_width = std::strtol(width.c_str(), NULL, 10);
   }
   else
     m_width = 0;
 
-  std::string height = params->get("height");
+  std::string height = params.get("height");
   if (!height.empty()) {
     m_height = std::strtol(height.c_str(), NULL, 10);
   }
   else
     m_height = 0;
 
-  std::string resize_method = params->get("resize-method");
+  std::string resize_method = params.get("resize-method");
   if (!resize_method.empty()) {
     if (resize_method == "bilinear")
       m_resizeMethod = doc::algorithm::RESIZE_METHOD_BILINEAR;
+    else if (resize_method == "rotsprite")
+      m_resizeMethod = doc::algorithm::RESIZE_METHOD_ROTSPRITE;
     else
       m_resizeMethod = doc::algorithm::RESIZE_METHOD_NEAREST_NEIGHBOR;
   }
@@ -214,49 +303,26 @@ void SpriteSizeCommand::onExecute(Context* context)
 {
   const ContextReader reader(context);
   const Sprite* sprite(reader.sprite());
-  int new_width = (m_width ? m_width: sprite->width()*m_scaleX);
-  int new_height = (m_height ? m_height: sprite->height()*m_scaleY);
+  int new_width = (m_width ? m_width: int(sprite->width()*m_scaleX));
+  int new_height = (m_height ? m_height: int(sprite->height()*m_scaleY));
   ResizeMethod resize_method = m_resizeMethod;
 
-  if (context->isUiAvailable()) {
-    // load the window widget
-    base::UniquePtr<Window> window(app::load_widget<Window>("sprite_size.xml", "sprite_size"));
-    m_widthPx = app::find_widget<Entry>(window, "width_px");
-    m_heightPx = app::find_widget<Entry>(window, "height_px");
-    m_widthPerc = app::find_widget<Entry>(window, "width_perc");
-    m_heightPerc = app::find_widget<Entry>(window, "height_perc");
-    m_lockRatio = app::find_widget<CheckBox>(window, "lock_ratio");
-    ComboBox* method = app::find_widget<ComboBox>(window, "method");
-    Widget* ok = app::find_widget<Widget>(window, "ok");
+  if (m_useUI && context->isUIAvailable()) {
+    SpriteSizeWindow window(context, new_width, new_height);
+    window.remapWindow();
+    window.centerWindow();
 
-    m_widthPx->setTextf("%d", new_width);
-    m_heightPx->setTextf("%d", new_height);
+    load_window_pos(&window, "SpriteSize");
+    window.setVisible(true);
+    window.openWindowInForeground();
+    save_window_pos(&window, "SpriteSize");
 
-    m_lockRatio->Click.connect(Bind<void>(&SpriteSizeCommand::onLockRatioClick, this));
-    m_widthPx->EntryChange.connect(Bind<void>(&SpriteSizeCommand::onWidthPxChange, this));
-    m_heightPx->EntryChange.connect(Bind<void>(&SpriteSizeCommand::onHeightPxChange, this));
-    m_widthPerc->EntryChange.connect(Bind<void>(&SpriteSizeCommand::onWidthPercChange, this));
-    m_heightPerc->EntryChange.connect(Bind<void>(&SpriteSizeCommand::onHeightPercChange, this));
-
-    method->addItem("Nearest-neighbor");
-    method->addItem("Bilinear");
-    method->setSelectedItemIndex(get_config_int("SpriteSize", "Method",
-        doc::algorithm::RESIZE_METHOD_NEAREST_NEIGHBOR));
-
-    window->remapWindow();
-    window->centerWindow();
-
-    load_window_pos(window, "SpriteSize");
-    window->setVisible(true);
-    window->openWindowInForeground();
-    save_window_pos(window, "SpriteSize");
-
-    if (window->getKiller() != ok)
+    if (window.closer() != window.ok())
       return;
 
-    new_width = m_widthPx->getTextInt();
-    new_height = m_heightPx->getTextInt();
-    resize_method = (ResizeMethod)method->getSelectedItemIndex();
+    new_width = window.widthPx()->textInt();
+    new_height = window.heightPx()->textInt();
+    resize_method = (ResizeMethod)window.method()->getSelectedItemIndex();
 
     set_config_int("SpriteSize", "Method", resize_method);
   }
@@ -267,73 +333,7 @@ void SpriteSizeCommand::onExecute(Context* context)
     job.waitJob();
   }
 
-  ContextWriter writer(reader);
-  update_screen_for_document(writer.document());
-}
-
-void SpriteSizeCommand::onLockRatioClick()
-{
-  const ContextReader reader(UIContext::instance()); // TODO use the context in sprite size command
-
-  onWidthPxChange();
-}
-
-void SpriteSizeCommand::onWidthPxChange()
-{
-  const ContextReader reader(UIContext::instance()); // TODO use the context in sprite size command
-  const Sprite* sprite(reader.sprite());
-  int width = m_widthPx->getTextInt();
-  double perc = 100.0 * width / sprite->width();
-
-  m_widthPerc->setTextf(PERC_FORMAT, perc);
-
-  if (m_lockRatio->isSelected()) {
-    m_heightPerc->setTextf(PERC_FORMAT, perc);
-    m_heightPx->setTextf("%d", sprite->height() * width / sprite->width());
-  }
-}
-
-void SpriteSizeCommand::onHeightPxChange()
-{
-  const ContextReader reader(UIContext::instance()); // TODO use the context in sprite size command
-  const Sprite* sprite(reader.sprite());
-  int height = m_heightPx->getTextInt();
-  double perc = 100.0 * height / sprite->height();
-
-  m_heightPerc->setTextf(PERC_FORMAT, perc);
-
-  if (m_lockRatio->isSelected()) {
-    m_widthPerc->setTextf(PERC_FORMAT, perc);
-    m_widthPx->setTextf("%d", sprite->width() * height / sprite->height());
-  }
-}
-
-void SpriteSizeCommand::onWidthPercChange()
-{
-  const ContextReader reader(UIContext::instance()); // TODO use the context in sprite size command
-  const Sprite* sprite(reader.sprite());
-  double width = m_widthPerc->getTextDouble();
-
-  m_widthPx->setTextf("%d", (int)(sprite->width() * width / 100));
-
-  if (m_lockRatio->isSelected()) {
-    m_heightPx->setTextf("%d", (int)(sprite->height() * width / 100));
-    m_heightPerc->setText(m_widthPerc->getText());
-  }
-}
-
-void SpriteSizeCommand::onHeightPercChange()
-{
-  const ContextReader reader(UIContext::instance()); // TODO use the context in sprite size command
-  const Sprite* sprite(reader.sprite());
-  double height = m_heightPerc->getTextDouble();
-
-  m_heightPx->setTextf("%d", (int)(sprite->height() * height / 100));
-
-  if (m_lockRatio->isSelected()) {
-    m_widthPx->setTextf("%d", (int)(sprite->width() * height / 100));
-    m_widthPerc->setText(m_heightPerc->getText());
-  }
+  update_screen_for_document(reader.document());
 }
 
 Command* CommandFactory::createSpriteSizeCommand()

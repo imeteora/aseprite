@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,9 +8,10 @@
 #define UI_MENU_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
 #include "base/unique_ptr.h"
+#include "obs/signal.h"
 #include "ui/register_message.h"
+#include "ui/separator.h"
 #include "ui/widget.h"
 
 namespace ui {
@@ -19,8 +20,7 @@ namespace ui {
   class Timer;
   struct MenuBaseData;
 
-  class Menu : public Widget
-  {
+  class Menu : public Widget {
   public:
     Menu();
     ~Menu();
@@ -35,7 +35,7 @@ namespace ui {
   protected:
     virtual void onPaint(PaintEvent& ev) override;
     virtual void onResize(ResizeEvent& ev) override;
-    virtual void onPreferredSize(PreferredSizeEvent& ev) override;
+    virtual void onSizeHint(SizeHintEvent& ev) override;
 
   private:
     void setOwnerMenuItem(MenuItem* ownerMenuItem) {
@@ -73,7 +73,7 @@ namespace ui {
   protected:
     virtual bool onProcessMessage(Message* msg) override;
     virtual void onResize(ResizeEvent& ev) override;
-    virtual void onPreferredSize(PreferredSizeEvent& ev) override;
+    virtual void onSizeHint(SizeHintEvent& ev) override;
     MenuBaseData* createBase();
 
   private:
@@ -121,12 +121,12 @@ namespace ui {
     }
 
     // Fired when the menu item is clicked.
-    Signal0<void> Click;
+    obs::signal<void()> Click;
 
   protected:
     virtual bool onProcessMessage(Message* msg) override;
     virtual void onPaint(PaintEvent& ev) override;
-    virtual void onPreferredSize(PreferredSizeEvent& ev) override;
+    virtual void onSizeHint(SizeHintEvent& ev) override;
     virtual void onClick();
 
     bool inBar();
@@ -145,6 +145,12 @@ namespace ui {
 
     friend class Menu;
     friend class MenuBox;
+  };
+
+  class MenuSeparator : public Separator {
+  public:
+    MenuSeparator() : Separator("", HORIZONTAL) {
+    }
   };
 
   extern RegisterMessage kOpenMenuItemMessage;

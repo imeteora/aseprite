@@ -1,22 +1,10 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * pcx.c - Based on the code of Shawn Hargreaves.
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+//
+// pcx.c - Based on the code of Shawn Hargreaves.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -34,9 +22,10 @@ namespace app {
 using namespace base;
 
 class PcxFormat : public FileFormat {
-  const char* onGetName() const { return "pcx"; }
-  const char* onGetExtensions() const { return "pcx"; }
-  int onGetFlags() const {
+  const char* onGetName() const override { return "pcx"; }
+  const char* onGetExtensions() const override { return "pcx,pcc"; }
+  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::PCX_IMAGE; }
+  int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
       FILE_SUPPORT_SAVE |
@@ -66,14 +55,15 @@ bool PcxFormat::onLoad(FileOp* fop)
   int x, y;
   char ch = 0;
 
-  FileHandle f(open_file_with_exception(fop->filename, "rb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "rb"));
+  FILE* f = handle.get();
 
   fgetc(f);                    /* skip manufacturer ID */
   fgetc(f);                    /* skip version flag */
   fgetc(f);                    /* skip encoding flag */
 
   if (fgetc(f) != 8) {         /* we like 8 bit color planes */
-    fop_error(fop, "This PCX doesn't have 8 bit color planes.\n");
+    fop->setError("This PCX doesn't have 8 bit color planes.\n");
     return false;
   }
 
@@ -88,7 +78,7 @@ bool PcxFormat::onLoad(FileOp* fop)
     r = fgetc(f);
     g = fgetc(f);
     b = fgetc(f);
-    fop_sequence_set_color(fop, c, r, g, b);
+    fop->sequenceSetColor(c, r, g, b);
   }
 
   fgetc(f);
@@ -103,9 +93,9 @@ bool PcxFormat::onLoad(FileOp* fop)
   for (c=0; c<60; c++)             /* skip some more junk */
     fgetc(f);
 
-  Image* image = fop_sequence_image(fop, bpp == 8 ?
-                                         IMAGE_INDEXED:
-                                         IMAGE_RGB,
+  Image* image = fop->sequenceImage(bpp == 8 ?
+                                    IMAGE_INDEXED:
+                                    IMAGE_RGB,
                                     width, height);
   if (!image) {
     return false;
@@ -156,12 +146,12 @@ bool PcxFormat::onLoad(FileOp* fop)
       }
     }
 
-    fop_progress(fop, (float)(y+1) / (float)(height));
-    if (fop_is_stop(fop))
+    fop->setProgress((float)(y+1) / (float)(height));
+    if (fop->isStop())
       break;
   }
 
-  if (!fop_is_stop(fop)) {
+  if (!fop->isStop()) {
     if (bpp == 8) {                  /* look for a 256 color palette */
       while ((c = fgetc(f)) != EOF) {
         if (c == 12) {
@@ -169,7 +159,7 @@ bool PcxFormat::onLoad(FileOp* fop)
             r = fgetc(f);
             g = fgetc(f);
             b = fgetc(f);
-            fop_sequence_set_color(fop, c, r, g, b);
+            fop->sequenceSetColor(c, r, g, b);
           }
           break;
         }
@@ -178,7 +168,7 @@ bool PcxFormat::onLoad(FileOp* fop)
   }
 
   if (ferror(f)) {
-    fop_error(fop, "Error reading file.\n");
+    fop->setError("Error reading file.\n");
     return false;
   }
   else {
@@ -189,7 +179,7 @@ bool PcxFormat::onLoad(FileOp* fop)
 #ifdef ENABLE_SAVE
 bool PcxFormat::onSave(FileOp* fop)
 {
-  Image *image = fop->seq.image;
+  const Image* image = fop->sequenceImage();
   int c, r, g, b;
   int x, y;
   int runcount;
@@ -197,7 +187,8 @@ bool PcxFormat::onSave(FileOp* fop)
   char runchar;
   char ch = 0;
 
-  FileHandle f(open_file_with_exception(fop->filename, "wb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FILE* f = handle.get();
 
   if (image->pixelFormat() == IMAGE_RGB) {
     depth = 24;
@@ -220,7 +211,7 @@ bool PcxFormat::onSave(FileOp* fop)
   fputw(200, f);                     /* VDpi */
 
   for (c=0; c<16; c++) {
-    fop_sequence_get_color(fop, c, &r, &g, &b);
+    fop->sequenceGetColor(c, &r, &g, &b);
     fputc(r, f);
     fputc(g, f);
     fputc(b, f);
@@ -283,14 +274,14 @@ bool PcxFormat::onSave(FileOp* fop)
 
     fputc(runchar, f);
 
-    fop_progress(fop, (float)(y+1) / (float)(image->height()));
+    fop->setProgress((float)(y+1) / (float)(image->height()));
   }
 
   if (depth == 8) {                      /* 256 color palette */
     fputc(12, f);
 
     for (c=0; c<256; c++) {
-      fop_sequence_get_color(fop, c, &r, &g, &b);
+      fop->sequenceGetColor(c, &r, &g, &b);
       fputc(r, f);
       fputc(g, f);
       fputc(b, f);
@@ -298,7 +289,7 @@ bool PcxFormat::onSave(FileOp* fop)
   }
 
   if (ferror(f)) {
-    fop_error(fop, "Error writing file.\n");
+    fop->setError("Error writing file.\n");
     return false;
   }
   else {

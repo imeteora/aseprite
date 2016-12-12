@@ -1,22 +1,10 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * ico.c - Based on the code of Elias Pschernig.
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+//
+// ico.c - Based on the code of Elias Pschernig.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -34,11 +22,12 @@
 namespace app {
 
 using namespace base;
-  
+
 class IcoFormat : public FileFormat {
-  const char* onGetName() const { return "ico"; }
-  const char* onGetExtensions() const { return "ico"; }
-  int onGetFlags() const {
+  const char* onGetName() const override { return "ico"; }
+  const char* onGetExtensions() const override { return "ico"; }
+  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::ICO_IMAGES; }
+  int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
       FILE_SUPPORT_SAVE |
@@ -91,7 +80,8 @@ struct BITMAPINFOHEADER {
 
 bool IcoFormat::onLoad(FileOp* fop)
 {
-  FileHandle f(open_file_with_exception(fop->filename, "rb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "rb"));
+  FILE* f = handle.get();
 
   // Read the icon header
   ICONDIR header;
@@ -100,12 +90,12 @@ bool IcoFormat::onLoad(FileOp* fop)
   header.entries  = fgetw(f);                   // Number of icons
 
   if (header.type != 1) {
-    fop_error(fop, "Invalid ICO file type.\n");
+    fop->setError("Invalid ICO file type.\n");
     return false;
   }
 
   if (header.entries < 1) {
-    fop_error(fop, "This ICO files does not contain images.\n");
+    fop->setError("This ICO files does not contain images.\n");
     return false;
   }
 
@@ -143,7 +133,7 @@ bool IcoFormat::onLoad(FileOp* fop)
   ImageRef image(Image::create(pixelFormat, width, height));
   Cel* cel = new Cel(frame_t(0), image);
   layer->addCel(cel);
-  clear_image(image, 0);
+  clear_image(image.get(), 0);
 
   // Go to the entry start in the file
   fseek(f, entry.image_offset, SEEK_SET);
@@ -189,16 +179,16 @@ bool IcoFormat::onLoad(FileOp* fop)
           c = fgetc(f);
           ASSERT(c >= 0 && c < numcolors);
           if (c >= 0 && c < numcolors)
-            put_pixel(image, x, y, c);
+            put_pixel(image.get(), x, y, c);
           else
-            put_pixel(image, x, y, 0);
+            put_pixel(image.get(), x, y, 0);
           break;
 
         case 24:
           b = fgetc(f);
           g = fgetc(f);
           r = fgetc(f);
-          put_pixel(image, x, y, rgba(r, g, b, 255));
+          put_pixel(image.get(), x, y, rgba(r, g, b, 255));
           break;
       }
     }
@@ -218,7 +208,7 @@ bool IcoFormat::onLoad(FileOp* fop)
       v = 128;
       for (b=0; b<8; b++) {
         if ((m & v) == v)
-          put_pixel(image, x*8+b, y, 0); // TODO mask color
+          put_pixel(image.get(), x*8+b, y, 0); // TODO mask color
         v >>= 1;
       }
     }
@@ -237,13 +227,14 @@ bool IcoFormat::onLoad(FileOp* fop)
 #ifdef ENABLE_SAVE
 bool IcoFormat::onSave(FileOp* fop)
 {
-  Sprite* sprite = fop->document->sprite();
+  const Sprite* sprite = fop->document()->sprite();
   int bpp, bw, bitsw;
   int size, offset, i;
   int c, x, y, b, m, v;
   frame_t n, num = sprite->totalFrames();
 
-  FileHandle f(open_file_with_exception(fop->filename, "wb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FILE* f = handle.get();
 
   offset = 6 + num*16;  // ICONDIR + ICONDIRENTRYs
 

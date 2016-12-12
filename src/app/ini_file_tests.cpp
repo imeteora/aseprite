@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #include "tests/test.h"
 
@@ -30,18 +18,18 @@ TEST(IniFile, Basic)
 
   set_config_file("_test.ini");
 
-  EXPECT_EQ(false, get_config_bool("A", "a", false));
-  EXPECT_EQ(true, get_config_bool("A", "b", true));
-  EXPECT_EQ(0, get_config_bool("B", "a", 0));
-  EXPECT_EQ(1, get_config_bool("B", "b", 1));
+  EXPECT_FALSE(get_config_bool("A", "a", false));
+  EXPECT_TRUE(get_config_bool("A", "b", true));
+  EXPECT_FALSE(get_config_bool("B", "a", 0));
+  EXPECT_TRUE(get_config_bool("B", "b", 1));
 
   set_config_bool("A", "a", true);
   set_config_bool("A", "b", false);
   set_config_int("B", "a", 2);
   set_config_int("B", "b", 3);
 
-  EXPECT_EQ(true, get_config_bool("A", "a", false));
-  EXPECT_EQ(false, get_config_bool("A", "b", true));
+  EXPECT_TRUE(get_config_bool("A", "a", false));
+  EXPECT_FALSE(get_config_bool("A", "b", true));
   EXPECT_EQ(2, get_config_int("B", "a", 0));
   EXPECT_EQ(3, get_config_int("B", "b", 1));
 }
@@ -62,4 +50,3 @@ TEST(IniFile, PushPop)
 
   EXPECT_EQ(32, get_config_int("A", "a", 0));
 }
-

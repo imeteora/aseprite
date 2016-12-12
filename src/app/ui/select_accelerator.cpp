@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,7 +12,7 @@
 
 #include "app/ui/keyboard_shortcuts.h"
 #include "base/bind.h"
-#include "base/signal.h"
+#include "obs/signal.h"
 
 #include <cctype>
 
@@ -35,6 +23,7 @@ using namespace ui;
 class SelectAccelerator::KeyField : public ui::Entry {
 public:
   KeyField(const Accelerator& accel) : ui::Entry(256, "") {
+    setTranslateDeadKeys(false);
     setExpansive(true);
     setFocusMagnet(true);
     setAccel(accel);
@@ -45,15 +34,19 @@ public:
     updateText();
   }
 
-  Signal1<void, const ui::Accelerator*> AccelChange;
+  obs::signal<void(const ui::Accelerator*)> AccelChange;
 
 protected:
   bool onProcessMessage(Message* msg) override {
     switch (msg->type()) {
+
       case kKeyDownMessage:
         if (hasFocus() && !isReadOnly()) {
           KeyMessage* keymsg = static_cast<KeyMessage*>(msg);
-          KeyModifiers modifiers = keymsg->keyModifiers();
+          if (!keymsg->scancode() && keymsg->unicodeChar() < 32)
+            break;
+
+          KeyModifiers modifiers = keymsg->modifiers();
 
           if (keymsg->scancode() == kKeySpace)
             modifiers = (KeyModifiers)(modifiers & ~kKeySpaceModifier);
@@ -101,16 +94,19 @@ SelectAccelerator::SelectAccelerator(const ui::Accelerator& accel, KeyContext ke
 
   keyPlaceholder()->addChild(m_keyField);
 
-  alt()->Click.connect(Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyAltModifier, alt()));
-  cmd()->Click.connect(Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyCmdModifier, cmd()));
-  ctrl()->Click.connect(Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyCtrlModifier, ctrl()));
-  shift()->Click.connect(Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyShiftModifier, shift()));
-  space()->Click.connect(Bind<void>(&SelectAccelerator::onModifierChange, this, kKeySpaceModifier, space()));
+  alt()->Click.connect(base::Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyAltModifier, alt()));
+  cmd()->Click.connect(base::Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyCmdModifier, cmd()));
+  ctrl()->Click.connect(base::Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyCtrlModifier, ctrl()));
+  shift()->Click.connect(base::Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyShiftModifier, shift()));
+  space()->Click.connect(base::Bind<void>(&SelectAccelerator::onModifierChange, this, kKeySpaceModifier, space()));
+  win()->Click.connect(base::Bind<void>(&SelectAccelerator::onModifierChange, this, kKeyWinModifier, win()));
 
   m_keyField->AccelChange.connect(&SelectAccelerator::onAccelChange, this);
-  clearButton()->Click.connect(Bind<void>(&SelectAccelerator::onClear, this));
-  okButton()->Click.connect(Bind<void>(&SelectAccelerator::onOK, this));
-  cancelButton()->Click.connect(Bind<void>(&SelectAccelerator::onCancel, this));
+  clearButton()->Click.connect(base::Bind<void>(&SelectAccelerator::onClear, this));
+  okButton()->Click.connect(base::Bind<void>(&SelectAccelerator::onOK, this));
+  cancelButton()->Click.connect(base::Bind<void>(&SelectAccelerator::onCancel, this));
+
+  addChild(&m_tooltipManager);
 }
 
 void SelectAccelerator::onModifierChange(KeyModifiers modifier, CheckBox* checkbox)
@@ -167,8 +163,14 @@ void SelectAccelerator::updateModifiers()
   shift()->setSelected(m_accel.modifiers() & kKeyShiftModifier ? true: false);
   space()->setSelected(m_accel.modifiers() & kKeySpaceModifier ? true: false);
 #if __APPLE__
+  win()->setVisible(false);
   cmd()->setSelected(m_accel.modifiers() & kKeyCmdModifier ? true: false);
 #else
+  #if __linux__
+    win()->setText(kWinKeyName);
+    m_tooltipManager.addTooltipFor(win(), "Also known as Windows key, logo key,\ncommand key, or system key.", TOP);
+  #endif
+  win()->setSelected(m_accel.modifiers() & kKeyWinModifier ? true: false);
   cmd()->setVisible(false);
 #endif
 }

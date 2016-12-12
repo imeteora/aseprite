@@ -1,22 +1,10 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * bmp.c - Based on the code of Seymour Shlien and Jonas Petersen.
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+//
+// bmp.c - Based on the code of Seymour Shlien and Jonas Petersen.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -32,7 +20,7 @@
 namespace app {
 
 using namespace base;
-  
+
 class BmpFormat : public FileFormat {
   enum {
     BMP_OPTIONS_FORMAT_WINDOWS = 12,
@@ -55,9 +43,10 @@ class BmpFormat : public FileFormat {
     uint32_t blue_mask;         // Mask for blue channel.
   };
 
-  const char* onGetName() const { return "bmp"; }
-  const char* onGetExtensions() const { return "bmp"; }
-  int onGetFlags() const {
+  const char* onGetName() const override { return "bmp"; }
+  const char* onGetExtensions() const override { return "bmp"; }
+  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::BMP_IMAGE; }
+  int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
       FILE_SUPPORT_SAVE |
@@ -193,7 +182,7 @@ static int read_os2_bminfoheader(FILE *f, BITMAPINFOHEADER *infoheader)
 /* read_bmicolors:
  *  Loads the color palette for 1,4,8 bit formats.
  */
-static void read_bmicolors(FileOp *fop, int bytes, FILE *f, bool win_flag)
+static void read_bmicolors(FileOp* fop, int bytes, FILE *f, bool win_flag)
 {
   int i, j, r, g, b;
 
@@ -202,7 +191,7 @@ static void read_bmicolors(FileOp *fop, int bytes, FILE *f, bool win_flag)
     g = fgetc(f);
     r = fgetc(f);
 
-    fop_sequence_set_color(fop, j, r, g, b);
+    fop->sequenceSetColor(j, r, g, b);
 
     j++;
     i += 3;
@@ -354,7 +343,7 @@ static void read_32bit_line(int length, FILE *f, Image *image, int line)
 /* read_image:
  *  For reading the noncompressed BMP image format.
  */
-static void read_image(FILE *f, Image *image, AL_CONST BITMAPINFOHEADER *infoheader, FileOp *fop)
+static void read_image(FILE *f, Image *image, const BITMAPINFOHEADER *infoheader, FileOp *fop)
 {
   int i, line, height, dir;
 
@@ -373,8 +362,8 @@ static void read_image(FILE *f, Image *image, AL_CONST BITMAPINFOHEADER *infohea
       case 32: read_32bit_line(infoheader->biWidth, f, image, line); break;
     }
 
-    fop_progress(fop, (float)(i+1) / (float)(height));
-    if (fop_is_stop(fop))
+    fop->setProgress((float)(i+1) / (float)(height));
+    if (fop->isStop())
       break;
   }
 }
@@ -385,7 +374,7 @@ static void read_image(FILE *f, Image *image, AL_CONST BITMAPINFOHEADER *infohea
  * @note This support compressed top-down bitmaps, the MSDN says that
  *       they can't exist, but Photoshop can create them.
  */
-static void read_rle8_compressed_image(FILE *f, Image *image, AL_CONST BITMAPINFOHEADER *infoheader)
+static void read_rle8_compressed_image(FILE *f, Image *image, const BITMAPINFOHEADER *infoheader)
 {
   unsigned char count, val, val0;
   int j, pos, line, height, dir;
@@ -460,7 +449,7 @@ static void read_rle8_compressed_image(FILE *f, Image *image, AL_CONST BITMAPINF
  * @note This support compressed top-down bitmaps, the MSDN says that
  *       they can't exist, but Photoshop can create them.
  */
-static void read_rle4_compressed_image(FILE *f, Image *image, AL_CONST BITMAPINFOHEADER *infoheader)
+static void read_rle4_compressed_image(FILE *f, Image *image, const BITMAPINFOHEADER *infoheader)
 {
   unsigned char b[8];
   unsigned char count;
@@ -613,7 +602,8 @@ bool BmpFormat::onLoad(FileOp *fop)
   PixelFormat pixelFormat;
   int format;
 
-  FileHandle f(open_file_with_exception(fop->filename, "rb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "rb"));
+  FILE* f = handle.get();
 
   if (read_bmfileheader(f, &fileheader) != 0)
     return false;
@@ -659,7 +649,7 @@ bool BmpFormat::onLoad(FileOp *fop)
   else
     rmask = gmask = bmask = 0;
 
-  Image* image = fop_sequence_image(fop, pixelFormat,
+  Image* image = fop->sequenceImage(pixelFormat,
                                     infoheader.biWidth,
                                     ABS((int)infoheader.biHeight));
   if (!image) {
@@ -687,24 +677,24 @@ bool BmpFormat::onLoad(FileOp *fop)
 
     case BI_BITFIELDS:
       if (read_bitfields_image(f, image, &infoheader, rmask, gmask, bmask) < 0) {
-        fop_error(fop, "Unsupported bitfields in the BMP file.\n");
+        fop->setError("Unsupported bitfields in the BMP file.\n");
         return false;
       }
       break;
 
     default:
-      fop_error(fop, "Unsupported BMP compression.\n");
+      fop->setError("Unsupported BMP compression.\n");
       return false;
   }
 
   if (ferror(f)) {
-    fop_error(fop, "Error reading file.\n");
+    fop->setError("Error reading file.\n");
     return false;
   }
 
   // Setup the file-data.
-  if (fop->seq.format_options == NULL) {
-    SharedPtr<BmpOptions> bmp_options(new BmpOptions());
+  if (!fop->sequenceGetFormatOptions()) {
+    base::SharedPtr<BmpOptions> bmp_options(new BmpOptions());
 
     bmp_options->format = format;
     bmp_options->compression = infoheader.biCompression;
@@ -713,7 +703,7 @@ bool BmpFormat::onLoad(FileOp *fop)
     bmp_options->green_mask = gmask;
     bmp_options->blue_mask = bmask;
 
-    fop_sequence_set_format_options(fop, bmp_options);
+    fop->sequenceSetFormatOptions(bmp_options);
   }
 
   return true;
@@ -722,7 +712,7 @@ bool BmpFormat::onLoad(FileOp *fop)
 #ifdef ENABLE_SAVE
 bool BmpFormat::onSave(FileOp *fop)
 {
-  Image *image = fop->seq.image;
+  const Image* image = fop->sequenceImage();
   int bfSize;
   int biSizeImage;
   int bpp = (image->pixelFormat() == IMAGE_RGB) ? 24 : 8;
@@ -740,7 +730,8 @@ bool BmpFormat::onSave(FileOp *fop)
     bfSize = 54 + biSizeImage;       /* header + image data */
   }
 
-  FileHandle f(open_file_with_exception(fop->filename, "wb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FILE* f = handle.get();
 
   /* file_header */
   fputw(0x4D42, f);              /* bfType ("BM") */
@@ -770,7 +761,7 @@ bool BmpFormat::onSave(FileOp *fop)
 
     /* palette */
     for (i=0; i<256; i++) {
-      fop_sequence_get_color(fop, i, &r, &g, &b);
+      fop->sequenceGetColor(i, &r, &g, &b);
       fputc(b, f);
       fputc(g, f);
       fputc(r, f);
@@ -802,11 +793,11 @@ bool BmpFormat::onSave(FileOp *fop)
     for (j=0; j<filler; j++)
       fputc(0, f);
 
-    fop_progress(fop, (float)(image->height()-i) / (float)image->height());
+    fop->setProgress((float)(image->height()-i) / (float)image->height());
   }
 
   if (ferror(f)) {
-    fop_error(fop, "Error writing file.\n");
+    fop->setError("Error writing file.\n");
     return false;
   }
   else {

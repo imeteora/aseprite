@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2013, 2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -12,7 +12,6 @@
 #include "ui/message.h"
 #include "ui/scroll_bar.h"
 #include "ui/theme.h"
-#include "ui/view.h"
 
 namespace ui {
 
@@ -23,9 +22,10 @@ using namespace gfx;
 int ScrollBar::m_wherepos = 0;
 int ScrollBar::m_whereclick = 0;
 
-ScrollBar::ScrollBar(int align)
+ScrollBar::ScrollBar(int align, ScrollableViewDelegate* delegate)
   : Widget(kViewScrollbarWidget)
-  , m_barWidth(getTheme()->scrollbar_size)
+  , m_delegate(delegate)
+  , m_barWidth(theme()->getScrollbarSize())
   , m_pos(0)
   , m_size(0)
 {
@@ -64,7 +64,6 @@ bool ScrollBar::onProcessMessage(Message* msg)
 
     case kMouseDownMessage: {
       gfx::Point mousePos = static_cast<MouseMessage*>(msg)->position();
-      View* view = static_cast<View*>(getParent());
       int x1, y1, x2, y2;
       int u1, v1, u2, v2;
       bool ret = false;
@@ -73,35 +72,35 @@ bool ScrollBar::onProcessMessage(Message* msg)
       getScrollBarThemeInfo(&pos, &len);
 
       m_wherepos = pos;
-      m_whereclick = getAlign() & JI_HORIZONTAL ?
+      m_whereclick = (align() & HORIZONTAL) ?
         mousePos.x:
         mousePos.y;
 
-      x1 = getBounds().x;
-      y1 = getBounds().y;
-      x2 = getBounds().x2()-1;
-      y2 = getBounds().y2()-1;
+      x1 = bounds().x;
+      y1 = bounds().y;
+      x2 = bounds().x2()-1;
+      y2 = bounds().y2()-1;
 
-      u1 = x1 + this->border_width.l;
-      v1 = y1 + this->border_width.t;
-      u2 = x2 - this->border_width.r;
-      v2 = y2 - this->border_width.b;
+      u1 = x1 + border().left();
+      v1 = y1 + border().top();
+      u2 = x2 - border().right();
+      v2 = y2 - border().bottom();
 
-      Point scroll = view->getViewScroll();
+      Point scroll = m_delegate->viewScroll();
 
-      if (this->getAlign() & JI_HORIZONTAL) {
+      if (align() & HORIZONTAL) {
         // in the bar
         if (MOUSE_IN(u1+pos, v1, u1+pos+len-1, v2)) {
           // capture mouse
         }
         // left
         else if (MOUSE_IN(x1, y1, u1+pos-1, y2)) {
-          scroll.x -= view->getViewport()->getBounds().w/2;
+          scroll.x -= m_delegate->visibleSize().w/2;
           ret = true;
         }
         // right
         else if (MOUSE_IN(u1+pos+len, y1, x2, y2)) {
-          scroll.x += view->getViewport()->getBounds().w/2;
+          scroll.x += m_delegate->visibleSize().w/2;
           ret = true;
         }
       }
@@ -112,18 +111,18 @@ bool ScrollBar::onProcessMessage(Message* msg)
         }
         // left
         else if (MOUSE_IN(x1, y1, x2, v1+pos-1)) {
-          scroll.y -= view->getViewport()->getBounds().h/2;
+          scroll.y -= m_delegate->visibleSize().h/2;
           ret = true;
         }
         // right
         else if (MOUSE_IN(x1, v1+pos+len, x2, y2)) {
-          scroll.y += view->getViewport()->getBounds().h/2;
+          scroll.y += m_delegate->visibleSize().h/2;
           ret = true;
         }
       }
 
       if (ret) {
-        view->setViewScroll(scroll);
+        m_delegate->setViewScroll(scroll);
         return ret;
       }
 
@@ -136,31 +135,29 @@ bool ScrollBar::onProcessMessage(Message* msg)
     case kMouseMoveMessage:
       if (hasCapture()) {
         gfx::Point mousePos = static_cast<MouseMessage*>(msg)->position();
-        View* view = static_cast<View*>(getParent());
         int pos, len, bar_size, viewport_size;
-        int old_pos;
 
         getScrollBarInfo(&pos, &len, &bar_size, &viewport_size);
-        old_pos = pos;
 
         if (bar_size > len) {
-          Point scroll = view->getViewScroll();
+          Point scroll = m_delegate->viewScroll();
 
-          if (this->getAlign() & JI_HORIZONTAL) {
+          if (align() & HORIZONTAL) {
             pos = (m_wherepos + mousePos.x - m_whereclick);
             pos = MID(0, pos, bar_size - len);
 
             scroll.x = (m_size - viewport_size) * pos / (bar_size - len);
-            view->setViewScroll(scroll);
           }
           else {
             pos = (m_wherepos + mousePos.y - m_whereclick);
             pos = MID(0, pos, bar_size - len);
 
             scroll.y = (m_size - viewport_size) * pos / (bar_size - len);
-            view->setViewScroll(scroll);
           }
+
+          m_delegate->setViewScroll(scroll);
         }
+        return true;
       }
       break;
 
@@ -181,36 +178,38 @@ bool ScrollBar::onProcessMessage(Message* msg)
 
 void ScrollBar::onPaint(PaintEvent& ev)
 {
-  getTheme()->paintViewScrollbar(ev);
+  theme()->paintViewScrollbar(ev);
 }
 
 void ScrollBar::getScrollBarInfo(int *_pos, int *_len, int *_bar_size, int *_viewport_size)
 {
-  View* view = static_cast<View*>(getParent());
   int bar_size, viewport_size;
   int pos, len;
   int border_width;
 
-  if (this->getAlign() & JI_HORIZONTAL) {
-    bar_size = getBounds().w;
-    viewport_size = view->getVisibleSize().w;
-    border_width = this->border_width.t + this->border_width.b;
+  if (align() & HORIZONTAL) {
+    bar_size = bounds().w;
+    viewport_size = m_delegate->visibleSize().w;
+    border_width = border().height();
   }
   else {
-    bar_size = getBounds().h;
-    viewport_size = view->getVisibleSize().h;
-    border_width = this->border_width.l + this->border_width.r;
+    bar_size = bounds().h;
+    viewport_size = m_delegate->visibleSize().h;
+    border_width = border().width();
   }
 
   if (m_size <= viewport_size) {
     len = bar_size;
     pos = 0;
   }
-  else {
+  else if (m_size > 0) {
     len = bar_size * viewport_size / m_size;
-    len = MID(getTheme()->scrollbar_size*2-border_width, len, bar_size);
+    len = MID(theme()->getScrollbarSize()*2-border_width, len, bar_size);
     pos = (bar_size-len) * m_pos / (m_size-viewport_size);
     pos = MID(0, pos, bar_size-len);
+  }
+  else {
+    len = pos = 0;
   }
 
   if (_pos) *_pos = pos;

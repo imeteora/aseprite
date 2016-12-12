@@ -1,31 +1,24 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_FILE_LIST_H_INCLUDED
 #define APP_UI_FILE_LIST_H_INCLUDED
 #pragma once
 
 #include "app/file_system.h"
-#include "base/signal.h"
+#include "base/time.h"
+#include "obs/signal.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
 
 #include <string>
+
+namespace she {
+  class Surface;
+}
 
 namespace app {
 
@@ -34,6 +27,7 @@ namespace app {
     FileList();
     virtual ~FileList();
 
+    const std::string& extensions() const { return m_exts; }
     void setExtensions(const char* extensions);
 
     IFileItem* getCurrentFolder() const { return m_currentFolder; }
@@ -44,14 +38,16 @@ namespace app {
 
     void goUp();
 
-    Signal0<void> FileSelected;
-    Signal0<void> FileAccepted;
-    Signal0<void> CurrentFolderChanged;
+    gfx::Rect thumbnailBounds();
+
+    obs::signal<void()> FileSelected;
+    obs::signal<void()> FileAccepted;
+    obs::signal<void()> CurrentFolderChanged;
 
   protected:
     virtual bool onProcessMessage(ui::Message* msg) override;
     virtual void onPaint(ui::PaintEvent& ev) override;
-    virtual void onPreferredSize(ui::PreferredSizeEvent& ev) override;
+    virtual void onSizeHint(ui::SizeHintEvent& ev) override;
     virtual void onFileSelected();
     virtual void onFileAccepted();
     virtual void onCurrentFolderChanged();
@@ -65,6 +61,7 @@ namespace app {
     int getSelectedIndex();
     void selectIndex(int index);
     void generatePreviewOfSelectedItem();
+    int thumbnailY();
 
     IFileItem* m_currentFolder;
     FileItemList m_list;
@@ -75,7 +72,7 @@ namespace app {
 
     // Incremental-search
     std::string m_isearch;
-    int m_isearchClock;
+    base::tick_t m_isearchClock;
 
     // Timer to start generating the thumbnail after an item is
     // selected.
@@ -88,6 +85,7 @@ namespace app {
     // thumbnail to generate when the m_generateThumbnailTimer ticks.
     IFileItem* m_itemToGenerateThumbnail;
 
+    she::Surface* m_thumbnail;
   };
 
 } // namespace app

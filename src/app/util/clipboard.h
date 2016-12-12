@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UTIL_CLIPBOARD_H_INCLUDED
 #define APP_UTIL_CLIPBOARD_H_INCLUDED
@@ -26,10 +14,13 @@
 
 namespace doc {
   class Image;
+  class Mask;
   class Palette;
+  class PalettePicks;
 }
 
 namespace app {
+  class Document;
   class ContextReader;
   class ContextWriter;
   class DocumentRange;
@@ -41,9 +32,18 @@ namespace app {
       ClipboardNone,
       ClipboardImage,
       ClipboardDocumentRange,
+      ClipboardPaletteEntries,
     };
 
-    // TODO Horrible API: refactor it.
+    // TODO Horrible API: refactor it (maybe a merge with she::clipboard).
+
+    class ClipboardManager {
+    public:
+      ClipboardManager();
+      ~ClipboardManager();
+
+      static ClipboardManager* instance();
+    };
 
     ClipboardFormat get_current_format();
     void get_document_range_info(Document** document, DocumentRange* range);
@@ -51,14 +51,19 @@ namespace app {
     void clear_content();
     void cut(ContextWriter& context);
     void copy(const ContextReader& context);
+    void copy_merged(const ContextReader& context);
     void copy_range(const ContextReader& context, const DocumentRange& range);
-    void copy_image(Image* image, Palette* palette, const gfx::Point& point);
+    void copy_image(const Image* image, const Mask* mask, const Palette* palette);
+    void copy_palette(const Palette* palette, const PalettePicks& picks);
     void paste();
 
     // Returns true and fills the specified "size"" with the image's
     // size in the clipboard, or return false in case that the clipboard
     // doesn't contain an image at all.
     bool get_image_size(gfx::Size& size);
+
+    Palette* get_palette();
+    const PalettePicks& get_palette_picks();
 
   } // namespace clipboard
 } // namespace app

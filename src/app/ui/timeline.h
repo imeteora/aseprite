@@ -1,34 +1,25 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_TIMELINE_H_INCLUDED
 #define APP_UI_TIMELINE_H_INCLUDED
 #pragma once
 
 #include "app/document_range.h"
+#include "app/pref/preferences.h"
+#include "app/ui/ani_controls.h"
 #include "app/ui/editor/editor_observer.h"
-#include "app/ui/skin/style.h"
-#include "base/connection.h"
+#include "app/ui/input_chain_element.h"
 #include "doc/document_observer.h"
 #include "doc/documents_observer.h"
 #include "doc/frame.h"
 #include "doc/layer_index.h"
 #include "doc/sprite.h"
+#include "obs/connection.h"
+#include "ui/scroll_bar.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
 
@@ -46,18 +37,26 @@ namespace ui {
 }
 
 namespace app {
+
+  namespace skin {
+    class Style;
+    class SkinTheme;
+  }
+
   using namespace doc;
 
-  class Command;
+  class CommandExecutionEvent;
   class ConfigureTimelinePopup;
   class Context;
   class Document;
   class Editor;
 
   class Timeline : public ui::Widget
+                 , public ui::ScrollableViewDelegate
                  , public doc::DocumentsObserver
                  , public doc::DocumentObserver
-                 , public app::EditorObserver {
+                 , public app::EditorObserver
+                 , public app::InputChainElement {
   public:
     typedef DocumentRange Range;
 
@@ -84,13 +83,13 @@ namespace app {
     Layer* getLayer() { return m_layer; }
     frame_t getFrame() { return m_frame; }
 
-    void setLayer(Layer* layer);
-    void setFrame(frame_t frame);
-
     State getState() const { return m_state; }
     bool isMovingCel() const;
 
     Range range() const { return m_range; }
+
+    void prepareToMoveRange();
+    void moveRange(Range& range);
 
     void activateClipboardRange();
 
@@ -98,29 +97,74 @@ namespace app {
     // called from popup menus.
     void dropRange(DropOp op);
 
+    // ScrollableViewDelegate impl
+    gfx::Size visibleSize() const override;
+    gfx::Point viewScroll() const override;
+    void setViewScroll(const gfx::Point& pt) override;
+
   protected:
     bool onProcessMessage(ui::Message* msg) override;
-    void onPreferredSize(ui::PreferredSizeEvent& ev) override;
+    void onSizeHint(ui::SizeHintEvent& ev) override;
+    void onResize(ui::ResizeEvent& ev) override;
     void onPaint(ui::PaintEvent& ev) override;
 
     // DocumentObserver impl.
+    void onGeneralUpdate(DocumentEvent& ev) override;
     void onAddLayer(doc::DocumentEvent& ev) override;
     void onAfterRemoveLayer(doc::DocumentEvent& ev) override;
     void onAddFrame(doc::DocumentEvent& ev) override;
     void onRemoveFrame(doc::DocumentEvent& ev) override;
     void onSelectionChanged(doc::DocumentEvent& ev) override;
+    void onLayerNameChange(doc::DocumentEvent& ev) override;
 
     // app::Context slots.
-    void onAfterCommandExecution(Command* command);
+    void onAfterCommandExecution(CommandExecutionEvent& ev);
 
     // DocumentsObserver impl.
     void onRemoveDocument(doc::Document* document) override;
 
     // EditorObserver impl.
+    void onStateChanged(Editor* editor) override;
     void onAfterFrameChanged(Editor* editor) override;
     void onAfterLayerChanged(Editor* editor) override;
+    void onDestroyEditor(Editor* editor) override;
+
+    // InputChainElement impl
+    void onNewInputPriority(InputChainElement* element) override;
+    bool onCanCut(Context* ctx) override;
+    bool onCanCopy(Context* ctx) override;
+    bool onCanPaste(Context* ctx) override;
+    bool onCanClear(Context* ctx) override;
+    bool onCut(Context* ctx) override;
+    bool onCopy(Context* ctx) override;
+    bool onPaste(Context* ctx) override;
+    bool onClear(Context* ctx) override;
+    void onCancel(Context* ctx) override;
 
   private:
+    struct DrawCelData;
+
+    struct Hit {
+      int part;
+      LayerIndex layer;
+      frame_t frame;
+      ObjectId frameTag;
+
+      Hit(int part = 0, LayerIndex layer = LayerIndex(0), frame_t frame = 0, ObjectId frameTag = NullId)
+        : part(part), layer(layer), frame(frame), frameTag(frameTag) {
+      }
+
+      bool operator!=(const Hit& other) const {
+        return
+          part != other.part ||
+          layer != other.layer ||
+          frame != other.frame ||
+          frameTag != other.frameTag;
+      }
+
+      FrameTag* getFrameTag() const;
+    };
+
     struct DropTarget {
       enum HHit { HNone, Before, After };
       enum VHit { VNone, Bottom, Top };
@@ -138,22 +182,30 @@ namespace app {
       int xpos, ypos;
     };
 
+    void setLayer(Layer* layer);
+    void setFrame(frame_t frame, bool byUser);
     bool allLayersVisible();
     bool allLayersInvisible();
     bool allLayersLocked();
     bool allLayersUnlocked();
+    bool allLayersContinuous();
+    bool allLayersDiscontinuous();
     void detachDocument();
-    void setCursor(ui::Message* msg, const gfx::Point& mousePos);
+    void setCursor(ui::Message* msg, const Hit& hit);
     void getDrawableLayers(ui::Graphics* g, LayerIndex* first_layer, LayerIndex* last_layer);
     void getDrawableFrames(ui::Graphics* g, frame_t* first_frame, frame_t* last_frame);
     void drawPart(ui::Graphics* g, const gfx::Rect& bounds,
       const char* text, skin::Style* style,
       bool is_active = false, bool is_hover = false, bool is_clicked = false);
+    void drawTop(ui::Graphics* g);
     void drawHeader(ui::Graphics* g);
     void drawHeaderFrame(ui::Graphics* g, frame_t frame);
     void drawLayer(ui::Graphics* g, LayerIndex layerIdx);
-    void drawCel(ui::Graphics* g, LayerIndex layerIdx, frame_t frame, Cel* cel);
-    void drawLoopRange(ui::Graphics* g);
+    void drawCel(ui::Graphics* g, LayerIndex layerIdx, frame_t frame, Cel* cel, DrawCelData* data);
+    void drawCelLinkDecorators(ui::Graphics* g, const gfx::Rect& bounds,
+                               Cel* cel, frame_t frame, bool is_active, bool is_hover,
+                               DrawCelData* data);
+    void drawFrameTags(ui::Graphics* g);
     void drawRangeOutline(ui::Graphics* g);
     void drawPaddings(ui::Graphics* g);
     bool drawPart(ui::Graphics* g, int part, LayerIndex layer, frame_t frame);
@@ -162,18 +214,20 @@ namespace app {
     gfx::Rect getFrameHeadersBounds() const;
     gfx::Rect getOnionskinFramesBounds() const;
     gfx::Rect getCelsBounds() const;
-    gfx::Rect getPartBounds(int part, LayerIndex layer = LayerIndex(0), frame_t frame = frame_t(0)) const;
+    gfx::Rect getPartBounds(const Hit& hit) const;
     gfx::Rect getRangeBounds(const Range& range) const;
-    void invalidatePart(int part, LayerIndex layer, frame_t frame);
+    void invalidateHit(const Hit& hit);
     void regenerateLayers();
-    void updateHotByMousePos(ui::Message* msg, const gfx::Point& mousePos);
-    void updateHot(ui::Message* msg, const gfx::Point& mousePos, int& hot_part, LayerIndex& hot_layer, frame_t& hot_frame);
-    void hotThis(int hot_part, LayerIndex hot_layer, frame_t hot_frame);
-    void centerCel(LayerIndex layer, frame_t frame);
+    void updateScrollBars();
+    void updateByMousePos(ui::Message* msg, const gfx::Point& mousePos);
+    Hit hitTest(ui::Message* msg, const gfx::Point& mousePos);
+    Hit hitTestCel(const gfx::Point& mousePos);
+    void setHot(const Hit& hit);
     void showCel(LayerIndex layer, frame_t frame);
     void showCurrentCel();
     void cleanClk();
-    void setScroll(int x, int y);
+    gfx::Size getScrollableSize() const;
+    gfx::Point getMaxScrollablePos() const;
     LayerIndex getLayerIndex(const Layer* layer) const;
     bool isLayerActive(LayerIndex layerIdx) const;
     bool isFrameActive(frame_t frame) const;
@@ -195,30 +249,14 @@ namespace app {
     bool validLayer(LayerIndex layer) const { return layer >= firstLayer() && layer <= lastLayer(); }
     bool validFrame(frame_t frame) const { return frame >= firstFrame() && frame <= lastFrame(); }
 
-    skin::Style* m_timelineStyle;
-    skin::Style* m_timelineBoxStyle;
-    skin::Style* m_timelineOpenEyeStyle;
-    skin::Style* m_timelineClosedEyeStyle;
-    skin::Style* m_timelineOpenPadlockStyle;
-    skin::Style* m_timelineClosedPadlockStyle;
-    skin::Style* m_timelineLayerStyle;
-    skin::Style* m_timelineEmptyFrameStyle;
-    skin::Style* m_timelineKeyframeStyle;
-    skin::Style* m_timelineFromLeftStyle;
-    skin::Style* m_timelineFromRightStyle;
-    skin::Style* m_timelineFromBothStyle;
-    skin::Style* m_timelineGearStyle;
-    skin::Style* m_timelineOnionskinStyle;
-    skin::Style* m_timelineOnionskinRangeStyle;
-    skin::Style* m_timelinePaddingStyle;
-    skin::Style* m_timelinePaddingTrStyle;
-    skin::Style* m_timelinePaddingBlStyle;
-    skin::Style* m_timelinePaddingBrStyle;
-    skin::Style* m_timelineSelectedCelStyle;
-    skin::Style* m_timelineRangeOutlineStyle;
-    skin::Style* m_timelineDropLayerDecoStyle;
-    skin::Style* m_timelineDropFrameDecoStyle;
-    skin::Style* m_timelineLoopRangeStyle;
+    int topHeight() const;
+
+    DocumentPreferences& docPref() const;
+    skin::SkinTheme* skinTheme() const;
+
+    ui::ScrollBar m_hbar;
+    ui::ScrollBar m_vbar;
+    gfx::Rect m_viewportArea;
     Context* m_context;
     Editor* m_editor;
     Document* m_document;
@@ -229,25 +267,18 @@ namespace app {
     Range m_dropRange;
     State m_state;
     std::vector<Layer*> m_layers;
-    int m_scroll_x;
-    int m_scroll_y;
     int m_separator_x;
     int m_separator_w;
     int m_origFrames;
-    // The 'hot' part is where the mouse is on top of
-    int m_hot_part;
-    LayerIndex m_hot_layer;
-    frame_t m_hot_frame;
+    Hit m_hot;       // The 'hot' part is where the mouse is on top of
     DropTarget m_dropTarget;
-    // The 'clk' part is where the mouse's button was pressed (maybe for a drag & drop operation)
-    int m_clk_part;
-    LayerIndex m_clk_layer;
-    frame_t m_clk_frame;
+    Hit m_clk; // The 'clk' part is where the mouse's button was pressed (maybe for a drag & drop operation)
     // Absolute mouse positions for scrolling.
     gfx::Point m_oldPos;
     // Configure timeline
     ConfigureTimelinePopup* m_confPopup;
-    ScopedConnection m_ctxConn;
+    obs::scoped_connection m_ctxConn;
+    obs::connection m_firstFrameConn;
 
     // Marching ants stuff to show the range in the clipboard.
     // TODO merge this with the marching ants of the sprite editor (ui::Editor)
@@ -256,6 +287,15 @@ namespace app {
 
     bool m_scroll;   // True if the drag-and-drop operation is a scroll operation.
     bool m_copy;     // True if the drag-and-drop operation is a copy.
+    bool m_fromTimeline;
+
+    AniControls m_aniControls;
+
+    // Temporal data used to move the range.
+    struct MoveRange {
+      int activeRelativeLayer;
+      frame_t activeRelativeFrame;
+    } m_moveRangeData;
   };
 
 } // namespace app

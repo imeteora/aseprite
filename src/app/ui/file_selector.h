@@ -1,27 +1,18 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_FILE_SELECTOR_H_INCLUDED
 #define APP_UI_FILE_SELECTOR_H_INCLUDED
 #pragma once
 
+#include "app/file_selector.h"
 #include "base/unique_ptr.h"
 #include "ui/window.h"
+
+#include "file_selector.xml.h"
 
 #include <string>
 
@@ -34,26 +25,27 @@ namespace ui {
 namespace app {
   class CustomFileNameEntry;
   class FileList;
+  class FileListView;
   class IFileItem;
 
-  class FileSelector : public ui::Window {
+  class FileSelector : public app::gen::FileSelector {
   public:
-    FileSelector();
-    ~FileSelector();
+    FileSelector(FileSelectorType type, FileSelectorDelegate* delegate);
+
+    void goBack();
+    void goForward();
+    void goUp();
+    void goInsideFolder();
 
     // Shows the dialog to select a file in the program.
     std::string show(const std::string& title,
-      const std::string& initialPath,
-      const std::string& showExtensions);
-
-  protected:
-    bool onProcessMessage(ui::Message* msg) override;
+                     const std::string& initialPath,
+                     const std::string& showExtensions);
 
   private:
     void updateLocation();
     void updateNavigationButtons();
     void addInNavigationHistory(IFileItem* folder);
-    void selectFileTypeFromFileName();
     void onGoBack();
     void onGoForward();
     void onGoUp();
@@ -63,15 +55,14 @@ namespace app {
     void onFileListFileSelected();
     void onFileListFileAccepted();
     void onFileListCurrentFolderChanged();
+    std::string getSelectedExtension() const;
 
-    ui::Button* m_goBack;
-    ui::Button* m_goForward;
-    ui::Button* m_goUp;
-    ui::Button* m_newFolder;
-    ui::ComboBox* m_location;
-    ui::ComboBox* m_fileType;
+    FileSelectorType m_type;
+    FileSelectorDelegate* m_delegate;
+    std::string m_defExtension;
     CustomFileNameEntry* m_fileName;
     FileList* m_fileList;
+    FileListView* m_fileView;
 
     // If true the navigation_history isn't
     // modified if the current folder changes

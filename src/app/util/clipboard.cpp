@@ -1,75 +1,68 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include "app/app.h"
+#include "app/cmd/clear_mask.h"
+#include "app/cmd/deselect_mask.h"
+#include "app/cmd/trim_cel.h"
 #include "app/console.h"
 #include "app/context_access.h"
 #include "app/document.h"
 #include "app/document_api.h"
-#include "app/document_location.h"
 #include "app/document_range.h"
+#include "app/document_range_ops.h"
 #include "app/modules/editors.h"
 #include "app/modules/gfx.h"
 #include "app/modules/gui.h"
-#include "app/modules/palettes.h"
-#include "app/settings/settings.h"
+#include "app/transaction.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/editor/editor.h"
-#include "app/ui/main_window.h"
-#include "app/ui/skin/skin_parts.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/timeline.h"
 #include "app/ui_context.h"
-#include "app/undo_transaction.h"
-#include "app/undoers/image_area.h"
 #include "app/util/clipboard.h"
-#include "app/util/misc.h"
+#include "app/util/clipboard_native.h"
+#include "app/util/new_image_from_mask.h"
+#include "base/shared_ptr.h"
 #include "doc/doc.h"
 #include "render/quantization.h"
-#include "undo/undo_history.h"
-
-#if defined WIN32
-  #include <windows.h>
-
-  #include "app/util/clipboard_win32.h"
-#endif
 
 #include <stdexcept>
 
 namespace app {
 
-namespace { 
+namespace {
 
-  class ClipboardRange {
+  class ClipboardRange : public doc::DocumentsObserver {
   public:
-    ClipboardRange() : m_doc(NULL) {
+    ClipboardRange() : m_doc(nullptr) {
+    }
+
+    ~ClipboardRange() {
+      ASSERT(!m_doc);
+    }
+
+    void observeUIContext() {
+      UIContext::instance()->documents().add_observer(this);
+    }
+
+    void unobserveUIContext() {
+      UIContext::instance()->documents().remove_observer(this);
     }
 
     bool valid() {
-      return m_doc != NULL;
+      return (m_doc != nullptr);
     }
 
     void invalidate() {
-      m_doc = NULL;
+      m_doc = nullptr;
     }
 
     void setRange(Document* doc, const DocumentRange& range) {
@@ -80,6 +73,12 @@ namespace {
     Document* document() const { return m_doc; }
     DocumentRange range() const { return m_range; }
 
+    // DocumentsObserver impl
+    void onRemoveDocument(doc::Document* doc) override {
+      if (doc == m_doc)
+        invalidate();
+    }
+
   private:
     Document* m_doc;
     DocumentRange m_range;
@@ -87,80 +86,113 @@ namespace {
 
 }
 
+namespace clipboard {
+
 using namespace doc;
 
-static void set_clipboard_image(Image* image, Palette* palette, bool set_system_clipboard);
-static bool copy_from_document(const DocumentLocation& location);
-
-static bool first_time = true;
-
-static Palette* clipboard_palette = NULL;
-static Image* clipboard_image = NULL;
+static base::SharedPtr<Palette> clipboard_palette;
+static PalettePicks clipboard_picks;
+static ImageRef clipboard_image;
+static base::SharedPtr<Mask> clipboard_mask;
 static ClipboardRange clipboard_range;
-static gfx::Point clipboard_pos(0, 0);
 
-static void on_exit_delete_clipboard()
+static ClipboardManager* g_instance = nullptr;
+
+ClipboardManager::ClipboardManager()
 {
-  delete clipboard_palette;
-  delete clipboard_image;
+  ASSERT(!g_instance);
+  g_instance = this;
+
+  register_native_clipboard_formats();
+
+  clipboard_range.observeUIContext();
 }
 
-static void set_clipboard_image(Image* image, Palette* palette, bool set_system_clipboard)
+ClipboardManager::~ClipboardManager()
 {
-  if (first_time) {
-    first_time = false;
-    App::instance()->Exit.connect(&on_exit_delete_clipboard);
+  clipboard_range.invalidate();
+  clipboard_range.unobserveUIContext();
+
+  // Clean the whole clipboard
+  clipboard_palette.reset();
+  clipboard_image.reset();
+  clipboard_mask.reset();
+
+  ASSERT(g_instance == this);
+  g_instance = nullptr;
+}
+
+ClipboardManager* ClipboardManager::instance()
+{
+  return g_instance;
+}
+
+static void set_clipboard_image(Image* image,
+                                Mask* mask,
+                                Palette* palette,
+                                bool set_system_clipboard,
+                                bool image_source_is_transparent)
+{
+  clipboard_palette.reset(palette);
+  clipboard_picks.clear();
+  clipboard_image.reset(image);
+  clipboard_mask.reset(mask);
+
+  // Copy image to the native clipboard
+  if (set_system_clipboard) {
+    color_t oldMask;
+    if (image) {
+      oldMask = image->maskColor();
+      if (!image_source_is_transparent)
+        image->setMaskColor(-1);
+    }
+
+    set_native_clipboard_bitmap(image, mask, palette);
+
+    if (image && !image_source_is_transparent)
+      image->setMaskColor(oldMask);
   }
-
-  delete clipboard_palette;
-  delete clipboard_image;
-
-  clipboard_palette = palette;
-  clipboard_image = image;
-
-  // copy to the Windows clipboard
-#ifdef ALLEGRO_WINDOWS
-  if (set_system_clipboard)
-    set_win32_clipboard_bitmap(image, palette);
-#endif
 
   clipboard_range.invalidate();
 }
 
-static bool copy_from_document(const DocumentLocation& location)
+static bool copy_from_document(const Site& site, bool merged = false)
 {
-  const Document* document = location.document();
+  const app::Document* document = static_cast<const app::Document*>(site.document());
+  ASSERT(document);
 
-  ASSERT(document != NULL);
-  ASSERT(document->isMaskVisible());
-
-  Image* image = NewImageFromMask(location);
+  const Mask* mask = document->mask();
+  Image* image = new_image_from_mask(site, mask, merged);
   if (!image)
     return false;
 
-  clipboard_pos = document->mask()->bounds().getOrigin();
+  const Palette* pal = document->sprite()->palette(site.frame());
+  set_clipboard_image(
+    image,
+    (mask ? new Mask(*mask): nullptr),
+    (pal ? new Palette(*pal): nullptr),
+    true,
+    site.layer() && !site.layer()->isBackground());
 
-  const Palette* pal = document->sprite()->palette(location.frame());
-  set_clipboard_image(image, pal ? new Palette(*pal): NULL, true);
   return true;
 }
 
-clipboard::ClipboardFormat clipboard::get_current_format()
+ClipboardFormat get_current_format()
 {
-#ifdef ALLEGRO_WINDOWS
-  if (win32_clipboard_contains_bitmap())
+  // Check if the native clipboard has an image
+  if (has_native_clipboard_bitmap())
     return ClipboardImage;
-#endif
-
-  if (clipboard_image != NULL)
+  else if (clipboard_image)
     return ClipboardImage;
   else if (clipboard_range.valid())
     return ClipboardDocumentRange;
+  else if (clipboard_palette && clipboard_picks.picks())
+    return ClipboardPaletteEntries;
   else
     return ClipboardNone;
 }
 
-void clipboard::get_document_range_info(Document** document, DocumentRange* range)
+void get_document_range_info(Document** document, DocumentRange* range)
 {
   if (clipboard_range.valid()) {
     *document = clipboard_range.document();
@@ -171,71 +203,93 @@ void clipboard::get_document_range_info(Document** document, DocumentRange* rang
   }
 }
 
-void clipboard::clear_content()
+void clear_content()
 {
-  set_clipboard_image(NULL, NULL, true);
+  set_clipboard_image(nullptr, nullptr, nullptr, true, false);
 }
 
-void clipboard::cut(ContextWriter& writer)
+void cut(ContextWriter& writer)
 {
   ASSERT(writer.document() != NULL);
   ASSERT(writer.sprite() != NULL);
   ASSERT(writer.layer() != NULL);
 
-  if (!copy_from_document(*writer.location())) {
+  if (!copy_from_document(*writer.site())) {
     Console console;
     console.printf("Can't copying an image portion from the current layer\n");
   }
   else {
     {
-      UndoTransaction undoTransaction(writer.context(), "Cut");
-      DocumentApi api(writer.document()->getApi());
+      Transaction transaction(writer.context(), "Cut");
+      transaction.execute(new cmd::ClearMask(writer.cel()));
 
-      api.clearMask(writer.cel());
-      api.deselectMask();
+      ASSERT(writer.cel());
+      if (writer.cel() &&
+          writer.cel()->layer()->isTransparent())
+        transaction.execute(new cmd::TrimCel(writer.cel()));
 
-      undoTransaction.commit();
+      transaction.execute(new cmd::DeselectMask(writer.document()));
+      transaction.commit();
     }
     writer.document()->generateMaskBoundaries();
     update_screen_for_document(writer.document());
   }
 }
 
-void clipboard::copy(const ContextReader& reader)
+void copy(const ContextReader& reader)
 {
   ASSERT(reader.document() != NULL);
 
-  if (!copy_from_document(*reader.location())) {
+  if (!copy_from_document(*reader.site())) {
     Console console;
     console.printf("Can't copying an image portion from the current layer\n");
     return;
   }
 }
 
-void clipboard::copy_range(const ContextReader& reader, const DocumentRange& range)
+void copy_merged(const ContextReader& reader)
+{
+  ASSERT(reader.document() != NULL);
+
+  copy_from_document(*reader.site(), true);
+}
+
+void copy_range(const ContextReader& reader, const DocumentRange& range)
 {
   ASSERT(reader.document() != NULL);
 
   ContextWriter writer(reader);
 
-  set_clipboard_image(NULL, NULL, true);
+  clear_content();
   clipboard_range.setRange(writer.document(), range);
 
   // TODO Replace this with a signal, because here the timeline
-  // depends on the clipboard and the clipboard of the timeline.
-  App::instance()->getMainWindow()
-    ->getTimeline()->activateClipboardRange();
+  // depends on the clipboard and the clipboard on the timeline.
+  App::instance()->timeline()->activateClipboardRange();
 }
 
-void clipboard::copy_image(Image* image, Palette* pal, const gfx::Point& point)
+void copy_image(const Image* image, const Mask* mask, const Palette* pal)
 {
-  set_clipboard_image(Image::createCopy(image),
-    pal ? new Palette(*pal): NULL, true);
-
-  clipboard_pos = point;
+  set_clipboard_image(
+    Image::createCopy(image),
+    (mask ? new Mask(*mask): nullptr),
+    (pal ? new Palette(*pal): nullptr),
+    true, false);
 }
 
-void clipboard::paste()
+void copy_palette(const Palette* palette, const doc::PalettePicks& picks)
+{
+  if (!picks.picks())
+    return;                     // Do nothing case
+
+  set_clipboard_image(nullptr,
+                      nullptr,
+                      new Palette(*palette),
+                      true, false);
+  clipboard_picks = picks;
+}
+
+void paste()
 {
   Editor* editor = current_editor;
   if (editor == NULL)
@@ -247,24 +301,24 @@ void clipboard::paste()
   switch (get_current_format()) {
 
     case clipboard::ClipboardImage: {
-#ifdef ALLEGRO_WINDOWS
       // Get the image from the clipboard.
       {
-        Image* win32_image = NULL;
-        Palette* win32_palette = NULL;
-        get_win32_clipboard_bitmap(win32_image, win32_palette);
-        if (win32_image != NULL)
-          set_clipboard_image(win32_image, win32_palette, false);
+        Image* native_image = nullptr;
+        Mask* native_mask = nullptr;
+        Palette* native_palette = nullptr;
+        get_native_clipboard_bitmap(&native_image, &native_mask, &native_palette);
+        if (native_image)
+          set_clipboard_image(native_image, native_mask, native_palette,
+                              false, false);
       }
-#endif
 
-      if (clipboard_image == NULL)
+      if (!clipboard_image)
         return;
 
       Palette* dst_palette = dstSpr->palette(editor->frame());
 
       // Source image (clipboard or a converted copy to the destination 'imgtype')
-      Image* src_image;
+      ImageRef src_image;
       if (clipboard_image->pixelFormat() == dstSpr->pixelFormat() &&
         // Indexed images can be copied directly only if both images
         // have the same palette.
@@ -275,17 +329,17 @@ void clipboard::paste()
       else {
         RgbMap* dst_rgbmap = dstSpr->rgbMap(editor->frame());
 
-        src_image = render::convert_pixel_format(
-          clipboard_image, NULL, dstSpr->pixelFormat(),
-          DitheringMethod::NONE, dst_rgbmap, clipboard_palette,
-          false);
+        src_image.reset(
+          render::convert_pixel_format(
+            clipboard_image.get(), NULL, dstSpr->pixelFormat(),
+            DitheringMethod::NONE, dst_rgbmap, clipboard_palette.get(),
+            false,
+            0));
       }
 
       // Change to MovingPixelsState
-      editor->pasteImage(src_image, clipboard_pos);
-
-      if (src_image != clipboard_image)
-        delete src_image;
+      editor->pasteImage(src_image.get(),
+                         clipboard_mask.get());
       break;
     }
 
@@ -293,7 +347,6 @@ void clipboard::paste()
       DocumentRange srcRange = clipboard_range.range();
       Document* srcDoc = clipboard_range.document();
       Sprite* srcSpr = srcDoc->sprite();
-      DocumentApi api = dstDoc->getApi();
       std::vector<Layer*> srcLayers;
       std::vector<Layer*> dstLayers;
       srcSpr->getLayersList(srcLayers);
@@ -302,29 +355,85 @@ void clipboard::paste()
       switch (srcRange.type()) {
 
         case DocumentRange::kCels: {
-          // Do nothing case: pasting in the same document.
-          if (srcDoc == dstDoc)
+          // We can use a document range op (copy_range) to copy/paste
+          // cels in the same document.
+          if (srcDoc == dstDoc) {
+            Timeline* timeline = App::instance()->timeline();
+            DocumentRange dstRange = timeline->range();
+            LayerIndex dstLayer = srcSpr->layerToIndex(editor->layer());
+            frame_t dstFrame = editor->frame();
+
+            if (dstRange.enabled()) {
+              dstLayer = dstRange.layerEnd();
+              dstFrame = dstRange.frameBegin();
+            }
+
+            LayerIndex dstLayer2(int(dstLayer)-srcRange.layers()+1);
+            dstRange.startRange(dstLayer, dstFrame, DocumentRange::kCels);
+            dstRange.endRange(dstLayer2, dstFrame+srcRange.frames()-1);
+
+            // This is the app::copy_range (not clipboard::copy_range()).
+            app::copy_range(srcDoc, srcRange, dstRange, kDocumentRangeBefore);
+            editor->invalidate();
             return;
+          }
 
-          UndoTransaction undoTransaction(UIContext::instance(), "Paste Cels");
+          Transaction transaction(UIContext::instance(), "Paste Cels");
+          DocumentApi api = dstDoc->getApi(transaction);
 
-          frame_t dstFrame = editor->frame();
-          for (frame_t frame = srcRange.frameBegin(); frame <= srcRange.frameEnd(); ++frame) {
-            if (dstFrame == dstSpr->totalFrames())
-              api.addFrame(dstSpr, dstFrame);
+          // Add extra frames if needed
+          frame_t dstFrameBegin = editor->frame();
+          while (dstFrameBegin+srcRange.frames() > dstSpr->totalFrames())
+            api.addFrame(dstSpr, dstSpr->totalFrames());
 
-            for (LayerIndex
-                   i = srcRange.layerEnd(),
-                   j = dstSpr->layerToIndex(editor->layer());
-                   i >= srcRange.layerBegin() &&
-                   i >= LayerIndex(0) &&
-                   j >= LayerIndex(0); --i, --j) {
-              Cel* cel = srcLayers[i]->cel(frame);
+          for (LayerIndex
+                 i = srcRange.layerEnd(),
+                 j = dstSpr->layerToIndex(editor->layer());
+               i >= srcRange.layerBegin() &&
+                 i >= LayerIndex(0) &&
+                 j >= LayerIndex(0); --i, --j) {
+            // Maps a linked Cel in the original sprite with its
+            // corresponding copy in the new sprite. In this way
+            // we can.
+            std::map<Cel*, Cel*> relatedCels;
 
-              if (cel && cel->image()) {
-                api.copyCel(
-                  static_cast<LayerImage*>(srcLayers[i]), frame,
-                  static_cast<LayerImage*>(dstLayers[j]), dstFrame);
+            for (frame_t frame = srcRange.frameBegin(),
+                   dstFrame = dstFrameBegin;
+                 frame <= srcRange.frameEnd();
+                 ++frame, ++dstFrame) {
+              Cel* srcCel = srcLayers[i]->cel(frame);
+              Cel* srcLink = nullptr;
+
+              if (srcCel && srcCel->image()) {
+                bool createCopy = true;
+
+                if (dstLayers[j]->isContinuous() &&
+                    srcCel->links()) {
+                  srcLink = srcCel->link();
+                  if (!srcLink)
+                    srcLink = srcCel;
+
+                  if (srcLink) {
+                    Cel* dstRelated = relatedCels[srcLink];
+                    if (dstRelated) {
+                      createCopy = false;
+
+                      // Create a link from dstRelated
+                      api.copyCel(
+                        static_cast<LayerImage*>(dstLayers[j]), dstRelated->frame(),
+                        static_cast<LayerImage*>(dstLayers[j]), dstFrame);
+                    }
+                  }
+                }
+
+                if (createCopy) {
+                  api.copyCel(
+                    static_cast<LayerImage*>(srcLayers[i]), frame,
+                    static_cast<LayerImage*>(dstLayers[j]), dstFrame);
+
+                  if (srcLink)
+                    relatedCels[srcLink] = dstLayers[j]->cel(dstFrame);
+                }
               }
               else {
                 Cel* dstCel = dstLayers[j]->cel(dstFrame);
@@ -333,47 +442,64 @@ void clipboard::paste()
               }
             }
 
-            ++dstFrame;
           }
 
-          undoTransaction.commit();
+          transaction.commit();
           editor->invalidate();
           break;
         }
 
         case DocumentRange::kFrames: {
-          UndoTransaction undoTransaction(UIContext::instance(), "Paste Frames");
-          frame_t dstFrame = frame_t(editor->frame() + 1);
+          Transaction transaction(UIContext::instance(), "Paste Frames");
+          DocumentApi api = dstDoc->getApi(transaction);
+          frame_t dstFrame = editor->frame();
 
+          if (srcSpr == dstSpr) {
+            if (srcRange.inRange(dstFrame))
+              dstFrame = srcRange.frameEnd()+1;
+          }
+
+          frame_t srcFrame = srcRange.frameBegin();
           for (frame_t frame = srcRange.frameBegin(); frame <= srcRange.frameEnd(); ++frame) {
-            api.addFrame(dstSpr, dstFrame);
+            api.addEmptyFrame(dstSpr, dstFrame);
+
+            // If we are copying frames from/to the same sprite, we
+            // have to adjust the source frame.
+            if (srcSpr == dstSpr) {
+              if (dstFrame < srcFrame)
+                ++srcFrame;
+            }
+
+            api.setFrameDuration(dstSpr, dstFrame, srcSpr->frameDuration(srcFrame));
 
             for (LayerIndex
                    i = LayerIndex(srcLayers.size()-1),
                    j = LayerIndex(dstLayers.size()-1);
                    i >= LayerIndex(0) &&
                    j >= LayerIndex(0); --i, --j) {
-              Cel* cel = static_cast<LayerImage*>(srcLayers[i])->cel(frame);
+              Cel* cel = static_cast<LayerImage*>(srcLayers[i])->cel(srcFrame);
               if (cel && cel->image()) {
                 api.copyCel(
-                  static_cast<LayerImage*>(srcLayers[i]), frame,
+                  static_cast<LayerImage*>(srcLayers[i]), srcFrame,
                   static_cast<LayerImage*>(dstLayers[j]), dstFrame);
               }
             }
 
+            ++srcFrame;
             ++dstFrame;
           }
 
-          undoTransaction.commit();
+          transaction.commit();
           editor->invalidate();
           break;
         }
-          
+
         case DocumentRange::kLayers: {
           if (srcDoc->colorMode() != dstDoc->colorMode())
             throw std::runtime_error("You cannot copy layers of document with different color modes");
 
-          UndoTransaction undoTransaction(UIContext::instance(), "Paste Layers");
+          Transaction transaction(UIContext::instance(), "Paste Layers");
+          DocumentApi api = dstDoc->getApi(transaction);
 
           // Expand frames of dstDoc if it's needed.
           frame_t maxFrame(0);
@@ -384,20 +510,26 @@ void clipboard::paste()
             if (lastCel && maxFrame < lastCel->frame())
               maxFrame = lastCel->frame();
           }
-          if (dstSpr->totalFrames() < maxFrame+1)
-            api.setTotalFrames(dstSpr, maxFrame+1);
+          while (dstSpr->totalFrames() < maxFrame+1)
+            api.addEmptyFrame(dstSpr, dstSpr->totalFrames());
 
           for (LayerIndex i = srcRange.layerBegin(); i <= srcRange.layerEnd(); ++i) {
+            Layer* afterThis;
+            if (srcLayers[i]->isBackground() &&
+                !dstDoc->sprite()->backgroundLayer()) {
+              afterThis = nullptr;
+            }
+            else
+              afterThis = dstSpr->folder()->getLastLayer();
+
             LayerImage* newLayer = new LayerImage(dstSpr);
-            api.addLayer(
-              dstSpr->folder(), newLayer,
-              dstSpr->folder()->getLastLayer());
+            api.addLayer(dstSpr->folder(), newLayer, afterThis);
 
             srcDoc->copyLayerContent(
               srcLayers[i], dstDoc, newLayer);
           }
 
-          undoTransaction.commit();
+          transaction.commit();
           editor->invalidate();
           break;
         }
@@ -409,20 +541,37 @@ void clipboard::paste()
   }
 }
 
-bool clipboard::get_image_size(gfx::Size& size)
+bool get_image_size(gfx::Size& size)
 {
-#ifdef ALLEGRO_WINDOWS
-  // Get the image from the clipboard.
-  return get_win32_clipboard_bitmap_size(size);
+#if defined(_WIN32) || defined(__APPLE__)
+  if (get_native_clipboard_bitmap_size(&size))
+    return true;
 #else
-  if (clipboard_image != NULL) {
+  if (clipboard_image) {
     size.w = clipboard_image->width();
     size.h = clipboard_image->height();
     return true;
   }
-  else
-    return false;
 #endif
+
+  return false;
 }
+
+Palette* get_palette()
+{
+  if (clipboard::get_current_format() == ClipboardPaletteEntries) {
+    ASSERT(clipboard_palette);
+    return clipboard_palette.get();
+  }
+  else
+    return nullptr;
+}
+
+const PalettePicks& get_palette_picks()
+{
+  return clipboard_picks;
+}
+
+}  // namespace clipboard
 
 } // namespace app

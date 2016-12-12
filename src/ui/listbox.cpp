@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,13 +10,16 @@
 
 #include "ui/listbox.h"
 
+#include "base/fs.h"
 #include "ui/listitem.h"
 #include "ui/message.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/resize_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
 #include "ui/view.h"
+
+#include <algorithm>
 
 namespace ui {
 
@@ -24,116 +27,171 @@ using namespace gfx;
 
 ListBox::ListBox()
   : Widget(kListBoxWidget)
+  , m_multiselect(false)
+  , m_firstSelectedIndex(-1)
+  , m_lastSelectedIndex(-1)
 {
   setFocusStop(true);
   initTheme();
 }
 
-ListItem* ListBox::getSelectedChild()
+void ListBox::setMultiselect(const bool multiselect)
 {
-  UI_FOREACH_WIDGET(getChildren(), it) {
-    ASSERT(dynamic_cast<ListItem*>(*it) != NULL);
+  m_multiselect = multiselect;
+}
 
-    if (static_cast<ListItem*>(*it)->isSelected())
-      return static_cast<ListItem*>(*it);
-  }
-  return 0;
+Widget* ListBox::getSelectedChild()
+{
+  for (auto child : children())
+    if (child->isSelected())
+      return child;
+
+  return nullptr;
 }
 
 int ListBox::getSelectedIndex()
 {
   int i = 0;
 
-  UI_FOREACH_WIDGET(getChildren(), it) {
-    if (static_cast<ListItem*>(*it)->isSelected())
+  for (auto child : children()) {
+    if (child->isSelected())
       return i;
+
     i++;
   }
 
   return -1;
 }
 
-void ListBox::selectChild(ListItem* item)
+int ListBox::getChildIndex(Widget* item)
 {
-  UI_FOREACH_WIDGET(getChildren(), it) {
-    ListItem* child = static_cast<ListItem*>(*it);
-
-    if (child->isSelected()) {
-      if (item && child == item)
-        return;
-
-      child->setSelected(false);
-    }
-  }
-
-  if (item) {
-    View* view = View::getView(this);
-
-    item->setSelected(true);
-
-    if (view) {
-      gfx::Rect vp = view->getViewportBounds();
-      gfx::Point scroll = view->getViewScroll();
-
-      if (item->getBounds().y < vp.y)
-        scroll.y = item->getBounds().y - getBounds().y;
-      else if (item->getBounds().y > vp.y + vp.h - item->getBounds().h)
-        scroll.y = (item->getBounds().y - getBounds().y
-                    - vp.h + item->getBounds().h);
-
-      view->setViewScroll(scroll);
-    }
-  }
-
-  onChangeSelectedItem();
+  const WidgetsList& children = this->children();
+  auto it = std::find(children.begin(), children.end(), item);
+  if (it != children.end())
+    return it - children.begin();
+  else
+    return -1;
 }
 
-void ListBox::selectIndex(int index)
+Widget* ListBox::getChildByIndex(int index)
 {
-  const WidgetsList& children = getChildren();
-  if (index < 0 || index >= (int)children.size())
+  const WidgetsList& children = this->children();
+  if (index >= 0 && index < int(children.size()))
+    return children[index];
+  else
+    return nullptr;
+}
+
+void ListBox::selectChild(Widget* item, Message* msg)
+{
+  int itemIndex = getChildIndex(item);
+  m_lastSelectedIndex = itemIndex;
+
+  if (m_multiselect) {
+    // Save current state of all children when we start selecting
+    if (msg == nullptr ||
+        msg->type() == kMouseDownMessage ||
+        msg->type() == kKeyDownMessage) {
+      m_firstSelectedIndex = itemIndex;
+      m_states.resize(children().size());
+
+      int i = 0;
+      for (auto child : children()) {
+        bool state = child->isSelected();
+        if (msg && !msg->ctrlPressed() && !msg->cmdPressed())
+          state = false;
+        m_states[i] = state;
+        ++i;
+      }
+    }
+  }
+
+  int i = 0;
+  for (auto child : children()) {
+    bool newState;
+
+    if (m_multiselect) {
+      newState = m_states[i];
+
+      if (i >= MIN(itemIndex, m_firstSelectedIndex) &&
+          i <= MAX(itemIndex, m_firstSelectedIndex)) {
+        newState = !newState;
+      }
+    }
+    else {
+      newState = (child == item);
+    }
+
+    if (child->isSelected() != newState)
+      child->setSelected(newState);
+
+    ++i;
+  }
+
+  if (item)
+    makeChildVisible(item);
+
+  onChange();
+}
+
+void ListBox::selectIndex(int index, Message* msg)
+{
+  Widget* child = getChildByIndex(index);
+  if (child)
+    selectChild(child, msg);
+}
+
+int ListBox::getItemsCount() const
+{
+  return int(children().size());
+}
+
+void ListBox::makeChildVisible(Widget* child)
+{
+  View* view = View::getView(this);
+  if (!view)
     return;
 
-  ListItem* child = static_cast<ListItem*>(children[index]);
-  ASSERT(child);
-  selectChild(child);
-}
+  gfx::Point scroll = view->viewScroll();
+  gfx::Rect vp = view->viewportBounds();
 
-size_t ListBox::getItemsCount() const
-{
-  return getChildren().size();
+  if (child->bounds().y < vp.y)
+    scroll.y = child->bounds().y - bounds().y;
+  else if (child->bounds().y > vp.y + vp.h - child->bounds().h)
+    scroll.y = (child->bounds().y - bounds().y
+                - vp.h + child->bounds().h);
+
+  view->setViewScroll(scroll);
 }
 
 // Setup the scroll to center the selected item in the viewport
 void ListBox::centerScroll()
 {
   View* view = View::getView(this);
-  ListItem* item = getSelectedChild();
+  Widget* item = getSelectedChild();
 
   if (view && item) {
-    gfx::Rect vp = view->getViewportBounds();
-    gfx::Point scroll = view->getViewScroll();
+    gfx::Rect vp = view->viewportBounds();
+    gfx::Point scroll = view->viewScroll();
 
-    scroll.y = ((item->getBounds().y - getBounds().y)
-                - vp.h/2 + item->getBounds().h/2);
+    scroll.y = ((item->bounds().y - bounds().y)
+                - vp.h/2 + item->bounds().h/2);
 
     view->setViewScroll(scroll);
   }
 }
 
 inline bool sort_by_text(Widget* a, Widget* b) {
-  return a->getText() < b->getText();
+  return (base::compare_filenames(a->text(), b->text()) < 0);
 }
 
 void ListBox::sortItems()
 {
-  WidgetsList widgets = getChildren();
+  WidgetsList widgets = children();
   std::sort(widgets.begin(), widgets.end(), &sort_by_text);
 
   // Remove all children and add then again.
-  while (!getChildren().empty())
-    removeChild(getChildren().back());
-
+  removeAllChildren();
   for (Widget* child : widgets)
     addChild(child);
 }
@@ -152,40 +210,37 @@ bool ListBox::onProcessMessage(Message* msg)
     case kMouseMoveMessage:
       if (hasCapture()) {
         gfx::Point mousePos = static_cast<MouseMessage*>(msg)->position();
-        int select = getSelectedIndex();
         View* view = View::getView(this);
         bool pick_item = true;
 
-        if (view) {
-          gfx::Rect vp = view->getViewportBounds();
+        if (view && m_lastSelectedIndex >= 0) {
+          gfx::Rect vp = view->viewportBounds();
 
           if (mousePos.y < vp.y) {
             int num = MAX(1, (vp.y - mousePos.y) / 8);
-            selectIndex(select-num);
+            selectIndex(MID(0, m_lastSelectedIndex-num, getItemsCount()-1), msg);
             pick_item = false;
           }
           else if (mousePos.y >= vp.y + vp.h) {
             int num = MAX(1, (mousePos.y - (vp.y+vp.h-1)) / 8);
-            selectIndex(select+num);
+            selectIndex(MID(0, m_lastSelectedIndex+num, getItemsCount()-1), msg);
             pick_item = false;
           }
         }
 
         if (pick_item) {
-          Widget* picked;
+          Widget* picked = nullptr;
 
           if (view) {
-            picked = view->getViewport()->pick(mousePos);
+            picked = view->viewport()->pick(mousePos);
           }
           else {
             picked = pick(mousePos);
           }
 
-          /* if the picked widget is a child of the list, select it */
-          if (picked && hasChild(picked)) {
-            if (ListItem* pickedItem = dynamic_cast<ListItem*>(picked))
-              selectChild(pickedItem);
-          }
+          // If the picked widget is a child of the list, select it
+          if (picked && hasChild(picked))
+            selectChild(picked, msg);
         }
 
         return true;
@@ -199,23 +254,35 @@ bool ListBox::onProcessMessage(Message* msg)
     case kMouseWheelMessage: {
       View* view = View::getView(this);
       if (view) {
-        gfx::Point scroll = view->getViewScroll();
-        scroll += static_cast<MouseMessage*>(msg)->wheelDelta() * getTextHeight()*3;
+        auto mouseMsg = static_cast<MouseMessage*>(msg);
+        gfx::Point scroll = view->viewScroll();
+
+        if (mouseMsg->preciseWheel())
+          scroll += mouseMsg->wheelDelta();
+        else
+          scroll += mouseMsg->wheelDelta() * textHeight()*3;
+
         view->setViewScroll(scroll);
       }
       break;
     }
 
     case kKeyDownMessage:
-      if (hasFocus() && !getChildren().empty()) {
+      if (hasFocus() && !children().empty()) {
         int select = getSelectedIndex();
         View* view = View::getView(this);
-        int bottom = MAX(0, getChildren().size()-1);
+        int bottom = MAX(0, children().size()-1);
         KeyMessage* keymsg = static_cast<KeyMessage*>(msg);
 
         switch (keymsg->scancode()) {
           case kKeyUp:
-            select--;
+            // Select previous element.
+            if (select >= 0)
+              select--;
+            // Or select the bottom of the list if there is no
+            // selected item.
+            else
+              select = bottom;
             break;
           case kKeyDown:
             select++;
@@ -228,16 +295,16 @@ bool ListBox::onProcessMessage(Message* msg)
             break;
           case kKeyPageUp:
             if (view) {
-              gfx::Rect vp = view->getViewportBounds();
-              select -= vp.h / getTextHeight();
+              gfx::Rect vp = view->viewportBounds();
+              select -= vp.h / textHeight();
             }
             else
               select = 0;
             break;
           case kKeyPageDown:
             if (view) {
-              gfx::Rect vp = view->getViewportBounds();
-              select += vp.h / getTextHeight();
+              gfx::Rect vp = view->viewportBounds();
+              select += vp.h / textHeight();
             }
             else
               select = bottom;
@@ -245,8 +312,8 @@ bool ListBox::onProcessMessage(Message* msg)
           case kKeyLeft:
           case kKeyRight:
             if (view) {
-              gfx::Rect vp = view->getViewportBounds();
-              gfx::Point scroll = view->getViewScroll();
+              gfx::Rect vp = view->viewportBounds();
+              gfx::Point scroll = view->viewScroll();
               int sgn = (keymsg->scancode() == kKeyLeft) ? -1: 1;
 
               scroll.x += vp.w/2*sgn;
@@ -258,7 +325,7 @@ bool ListBox::onProcessMessage(Message* msg)
             return Widget::onProcessMessage(msg);
         }
 
-        selectIndex(MID(0, select, bottom));
+        selectIndex(MID(0, select, bottom), msg);
         return true;
       }
       break;
@@ -273,45 +340,43 @@ bool ListBox::onProcessMessage(Message* msg)
 
 void ListBox::onPaint(PaintEvent& ev)
 {
-  getTheme()->paintListBox(ev);
+  theme()->paintListBox(ev);
 }
 
 void ListBox::onResize(ResizeEvent& ev)
 {
-  setBoundsQuietly(ev.getBounds());
+  setBoundsQuietly(ev.bounds());
 
-  Rect cpos = getChildrenBounds();
+  Rect cpos = childrenBounds();
 
-  UI_FOREACH_WIDGET(getChildren(), it) {
-    Widget* child = *it;
-
-    cpos.h = child->getPreferredSize().h;
+  for (auto child : children()) {
+    cpos.h = child->sizeHint().h;
     child->setBounds(cpos);
 
-    cpos.y += child->getBounds().h + this->child_spacing;
+    cpos.y += child->bounds().h + this->childSpacing();
   }
 }
 
-void ListBox::onPreferredSize(PreferredSizeEvent& ev)
+void ListBox::onSizeHint(SizeHintEvent& ev)
 {
   int w = 0, h = 0;
 
-  UI_FOREACH_WIDGET_WITH_END(getChildren(), it, end) {
-    Size reqSize = static_cast<ListItem*>(*it)->getPreferredSize();
+  UI_FOREACH_WIDGET_WITH_END(children(), it, end) {
+    Size reqSize = (*it)->sizeHint();
 
     w = MAX(w, reqSize.w);
-    h += reqSize.h + (it+1 != end ? this->child_spacing: 0);
+    h += reqSize.h + (it+1 != end ? this->childSpacing(): 0);
   }
 
-  w += this->border_width.l + this->border_width.r;
-  h += this->border_width.t + this->border_width.b;
+  w += border().width();
+  h += border().height();
 
-  ev.setPreferredSize(Size(w, h));
+  ev.setSizeHint(Size(w, h));
 }
 
-void ListBox::onChangeSelectedItem()
+void ListBox::onChange()
 {
-  ChangeSelectedItem();
+  Change();
 }
 
 void ListBox::onDoubleClickItem()

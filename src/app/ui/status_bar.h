@@ -1,31 +1,22 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_STATUS_BAR_H_INCLUDED
 #define APP_UI_STATUS_BAR_H_INCLUDED
 #pragma once
 
 #include "app/color.h"
-#include "base/observers.h"
+#include "app/tools/active_tool_observer.h"
+#include "base/time.h"
+#include "doc/context_observer.h"
+#include "doc/document_observer.h"
+#include "doc/documents_observer.h"
 #include "doc/layer_index.h"
 #include "ui/base.h"
-#include "ui/link_label.h"
-#include "ui/widget.h"
+#include "ui/box.h"
 
 #include <string>
 #include <vector>
@@ -34,99 +25,92 @@ namespace ui {
   class Box;
   class Button;
   class Entry;
-  class Slider;
+  class Label;
   class Window;
 }
 
+namespace render {
+  class Zoom;
+}
+
 namespace app {
-  class StatusBar;
+  class ButtonSet;
+  class Editor;
+  class ZoomEntry;
 
   namespace tools {
     class Tool;
   }
 
-  class Progress {
-    friend class StatusBar;
-
-  public:
-    ~Progress();
-    void setPos(double pos);
-    double getPos() const;
-
-  private:
-    Progress();
-    Progress(StatusBar* statusbar);
-    StatusBar* m_statusbar;
-    double m_pos;
-  };
-
-  class StatusBar : public ui::Widget {
+  class StatusBar : public ui::HBox
+                  , public doc::ContextObserver
+                  , public doc::DocumentsObserver
+                  , public doc::DocumentObserver
+                  , public tools::ActiveToolObserver {
     static StatusBar* m_instance;
   public:
     static StatusBar* instance() { return m_instance; }
+
+    enum BackupIcon { None, Normal, Small };
 
     StatusBar();
     ~StatusBar();
 
     void clearText();
 
-    bool setStatusText(int msecs, const char *format, ...);
-    void showTip(int msecs, const char *format, ...);
-    void showColor(int msecs, const char* text, const Color& color, int alpha);
+    bool setStatusText(int msecs, const char* format, ...);
+    void showTip(int msecs, const char* format, ...);
+    void showColor(int msecs, const char* text, const Color& color);
     void showTool(int msecs, tools::Tool* tool);
+    void showSnapToGridWarning(bool state);
 
-    // Methods to add and remove progress bars
-    Progress* addProgress();
-    void removeProgress(Progress* progress);
+    // Used by AppEditor to update the zoom level in the status bar.
+    void updateFromEditor(Editor* editor);
+
+    void showBackupIcon(BackupIcon icon);
 
   protected:
-    bool onProcessMessage(ui::Message* msg) override;
     void onResize(ui::ResizeEvent& ev) override;
-    void onPreferredSize(ui::PreferredSizeEvent& ev) override;
-    void onPaint(ui::PaintEvent& ev) override;
+
+    // ContextObserver impl
+    void onActiveSiteChange(const doc::Site& site) override;
+
+    // DocumentObservers impl
+    void onRemoveDocument(doc::Document* doc) override;
+
+    // DocumentObserver impl
+    void onPixelFormatChanged(DocumentEvent& ev) override;
+
+    // ActiveToolObserver impl
+    void onSelectedToolChange(tools::Tool* tool) override;
 
   private:
-    void onCurrentToolChange();
-    void updateFromLayer();
-    void updateCurrentFrame();
+    void onCelOpacitySliderChange();
     void newFrame();
-    void updateSubwidgetsVisibility();
+    void onChangeZoom(const render::Zoom& zoom);
 
-    enum State { SHOW_TEXT, SHOW_COLOR, SHOW_TOOL };
+    base::tick_t m_timeout;
 
-    typedef std::vector<Progress*> ProgressList;
-
-    int m_timeout;
-    State m_state;
-
-    // Showing a tool
-    tools::Tool* m_tool;
-
-    // Showing a color
-    Color m_color;
-    int m_alpha;
-
-    // Progress bar
-    ProgressList m_progress;
+    // Indicators
+    class Indicators;
+    class IndicatorsGeneration;
+    Indicators* m_indicators;
 
     // Box of main commands
-    ui::Widget* m_commandsBox;
-    ui::Slider* m_slider;             // Opacity slider
+    ui::Widget* m_docControls;
+    ui::Label* m_frameLabel;
     ui::Entry* m_currentFrame;        // Current frame and go to frame entry
     ui::Button* m_newFrame;           // Button to create a new frame
-    ui::Button* m_b_first;            // Go to first frame
-    ui::Button* m_b_prev;             // Go to previous frame
-    ui::Button* m_b_play;             // Play animation
-    ui::Button* m_b_next;             // Go to next frame
-    ui::Button* m_b_last;             // Go to last frame
-
-    // Box of notifications.
-    ui::Widget* m_notificationsBox;
-    ui::LinkLabel* m_linkLabel;
+    ZoomEntry* m_zoomEntry;
+    doc::Document* m_doc;      // Document used to show the cel slider
 
     // Tip window
     class CustomizedTipWindow;
     CustomizedTipWindow* m_tipwindow;
+
+    // Snap to grid window
+    class SnapToGridWindow;
+    SnapToGridWindow* m_snapToGridWindow;
   };
 
 } // namespace app

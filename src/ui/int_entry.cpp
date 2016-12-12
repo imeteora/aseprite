@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,11 +10,14 @@
 
 #include "ui/int_entry.h"
 
+#include "base/scoped_value.h"
 #include "gfx/rect.h"
 #include "gfx/region.h"
+#include "she/font.h"
 #include "ui/manager.h"
 #include "ui/message.h"
 #include "ui/popup_window.h"
+#include "ui/size_hint_event.h"
 #include "ui/slider.h"
 #include "ui/system.h"
 #include "ui/theme.h"
@@ -25,13 +28,17 @@ namespace ui {
 
 using namespace gfx;
 
-IntEntry::IntEntry(int min, int max)
-  : Entry(std::ceil(std::log10((double)max))+1, "")
+IntEntry::IntEntry(int min, int max, SliderDelegate* sliderDelegate)
+  : Entry(int(std::ceil(std::log10((double)max)))+1, "")
   , m_min(min)
   , m_max(max)
+  , m_slider(m_min, m_max, m_min, sliderDelegate)
   , m_popupWindow(NULL)
-  , m_slider(NULL)
+  , m_changeFromSlider(false)
 {
+  m_slider.setFocusStop(false); // In this way the IntEntry doesn't lost the focus
+  m_slider.setTransparent(true);
+  m_slider.Change.connect(&IntEntry::onChangeSlider, this);
 }
 
 IntEntry::~IntEntry()
@@ -41,7 +48,7 @@ IntEntry::~IntEntry()
 
 int IntEntry::getValue() const
 {
-  int value = getTextInt();
+  int value = m_slider.convertTextToValue(text());
   return MID(m_min, value, m_max);
 }
 
@@ -49,10 +56,10 @@ void IntEntry::setValue(int value)
 {
   value = MID(m_min, value, m_max);
 
-  setTextf("%d", value);
+  setText(m_slider.convertValueToText(value));
 
-  if (m_slider != NULL)
-    m_slider->setValue(value);
+  if (m_popupWindow && !m_changeFromSlider)
+    m_slider.setValue(value);
 
   onValueChange();
 }
@@ -78,14 +85,16 @@ bool IntEntry::onProcessMessage(Message* msg)
     case kMouseMoveMessage:
       if (hasCapture()) {
         MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-        Widget* pick = getManager()->pick(mouseMsg->position());
-        if (pick == m_slider) {
+        Widget* pick = manager()->pick(mouseMsg->position());
+        if (pick == &m_slider) {
           releaseMouse();
 
           MouseMessage mouseMsg2(kMouseDownMessage,
-            mouseMsg->buttons(),
-            mouseMsg->position());
-          m_slider->sendMessage(&mouseMsg2);
+                                 mouseMsg->pointerType(),
+                                 mouseMsg->buttons(),
+                                 mouseMsg->modifiers(),
+                                 mouseMsg->position());
+          m_slider.sendMessage(&mouseMsg2);
         }
       }
       break;
@@ -109,19 +118,36 @@ bool IntEntry::onProcessMessage(Message* msg)
       if (hasFocus() && !isReadOnly()) {
         KeyMessage* keymsg = static_cast<KeyMessage*>(msg);
         int chr = keymsg->unicodeChar();
-        if (chr < '0' || chr > '9') {
-          // By-pass Entry::onProcessMessage()
-          return Widget::onProcessMessage(msg);
+        if (chr >= 32 && (chr < '0' || chr > '9')) {
+          // "Eat" all keys that aren't number
+          return true;
         }
+        // Else we use the default Entry processing function which
+        // will process keys like Left/Right arrows, clipboard
+        // handling, etc.
       }
       break;
   }
   return Entry::onProcessMessage(msg);
 }
 
-void IntEntry::onEntryChange()
+void IntEntry::onSizeHint(SizeHintEvent& ev)
 {
-  Entry::onEntryChange();
+  int min_w = font()->textLength(m_slider.convertValueToText(m_min));
+  int max_w = font()->textLength(m_slider.convertValueToText(m_max));
+
+  int w = MAX(min_w, max_w) + font()->charWidth('%');
+  int h = textHeight();
+
+  w += border().width();
+  h += border().height();
+
+  ev.setSizeHint(w, h);
+}
+
+void IntEntry::onChange()
+{
+  Entry::onChange();
   onValueChange();
 }
 
@@ -132,53 +158,68 @@ void IntEntry::onValueChange()
 
 void IntEntry::openPopup()
 {
-  Rect rc = getBounds();
-  rc.y += rc.h;
-  rc.h += 2*guiscale();
+  m_slider.setValue(getValue());
+
+  Rect rc = bounds();
+  int sliderH = m_slider.sizeHint().h;
+
+  if (rc.y+rc.h+sliderH < ui::display_h())
+    rc.y += rc.h;
+  else
+    rc.y -= sliderH;
+
+  rc.h = sliderH;
   rc.w = 128*guiscale();
   if (rc.x+rc.w > ui::display_w())
-    rc.x = rc.x - rc.w + getBounds().w;
+    rc.x = rc.x - rc.w + bounds().w;
 
-  m_popupWindow = new PopupWindow("", PopupWindow::kCloseOnClickInOtherWindow);
+  m_popupWindow = new PopupWindow("", PopupWindow::ClickBehavior::CloseOnClickInOtherWindow);
   m_popupWindow->setAutoRemap(false);
   m_popupWindow->setTransparent(true);
   m_popupWindow->setBgColor(gfx::ColorNone);
   m_popupWindow->setBounds(rc);
   m_popupWindow->Close.connect(&IntEntry::onPopupClose, this);
 
-  Region rgn(rc.createUnion(getBounds()));
-  rgn.createUnion(rgn, Region(getBounds()));
+  Region rgn(rc.createUnion(bounds()));
+  rgn.createUnion(rgn, Region(bounds()));
   m_popupWindow->setHotRegion(rgn);
 
-  m_slider = new Slider(m_min, m_max, getValue());
-  m_slider->setFocusStop(false); // In this way the IntEntry doesn't lost the focus
-  m_slider->setTransparent(true);
-  m_slider->Change.connect(&IntEntry::onChangeSlider, this);
-  m_popupWindow->addChild(m_slider);
-
+  m_popupWindow->addChild(&m_slider);
   m_popupWindow->openWindow();
 }
 
 void IntEntry::closePopup()
 {
   if (m_popupWindow) {
+    removeSlider();
+
     m_popupWindow->closeWindow(NULL);
     delete m_popupWindow;
     m_popupWindow = NULL;
-    m_slider = NULL;
   }
 }
 
 void IntEntry::onChangeSlider()
 {
-  setValue(m_slider->getValue());
+  base::ScopedValue<bool> lockFlag(m_changeFromSlider, true, false);
+  setValue(m_slider.getValue());
   selectAllText();
 }
 
 void IntEntry::onPopupClose(CloseEvent& ev)
 {
+  removeSlider();
+
   deselectText();
   releaseFocus();
+}
+
+void IntEntry::removeSlider()
+{
+  if (m_popupWindow &&
+      m_slider.parent() == m_popupWindow) {
+    m_popupWindow->removeChild(&m_slider);
+  }
 }
 
 } // namespace ui

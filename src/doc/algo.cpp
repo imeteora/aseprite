@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,8 +10,8 @@
 
 #include <math.h>
 
+#include "base/base.h"
 #include "doc/algo.h"
-#include "doc/dirty.h"
 
 namespace doc {
 
@@ -419,8 +419,8 @@ void algo_spline(double x0, double y0, double x1, double y1,
   x = x0;
   y = y0;
 
-  out_x1 = x0;
-  out_y1 = y0;
+  out_x1 = (int)x0;
+  out_y1 = (int)y0;
 
   x += .5;
   y += .5;
@@ -432,8 +432,8 @@ void algo_spline(double x0, double y0, double x1, double y1,
     x += dx;
     y += dy;
 
-    out_x2 = x;
-    out_y2 = y;
+    out_x2 = (int)x;
+    out_y2 = (int)y;
 
     proc(out_x1, out_y1, out_x2, out_y2, data);
 
@@ -524,9 +524,8 @@ double algo_spline_get_tan(double x0, double y0, double x1, double y1,
                            double x2, double y2, double x3, double y3,
                            double in_x)
 {
+  double out_x, old_x, old_dx, old_dy;
   int npts;
-  double out_x, old_dx, old_x;
-  double out_y, old_dy;
 
   /* Derivatives of x(t) and y(t). */
   double x, dx, ddx, dddx;
@@ -573,7 +572,6 @@ double algo_spline_get_tan(double x0, double y0, double x1, double y1,
   y = y0;
 
   out_x = x0;
-  out_y = y0;
 
   old_x = x0;
   old_dx = dx;
@@ -590,7 +588,6 @@ double algo_spline_get_tan(double x0, double y0, double x1, double y1,
     y += dy;
 
     out_x = x;
-    out_y = y;
     if (out_x > in_x) {
       dx = old_dx + (dx-old_dx) * (in_x-old_x) / (out_x-old_x);
       dy = old_dy + (dy-old_dy) * (in_x-old_x) / (out_x-old_x);

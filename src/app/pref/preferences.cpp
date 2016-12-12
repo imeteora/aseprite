@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -24,13 +12,27 @@
 #include "app/ini_file.h"
 #include "app/pref/preferences.h"
 #include "app/resource_finder.h"
+#include "app/tools/ink.h"
 #include "app/tools/tool.h"
+#include "doc/sprite.h"
 
 namespace app {
+
+static Preferences* singleton = nullptr;
+
+// static
+Preferences& Preferences::instance()
+{
+  ASSERT(singleton);
+  return *singleton;
+}
 
 Preferences::Preferences()
   : app::gen::GlobalPref("")
 {
+  ASSERT(!singleton);
+  singleton = this;
+
   load();
 }
 
@@ -43,6 +45,9 @@ Preferences::~Preferences()
 
   for (auto& pair : m_docs)
     delete pair.second;
+
+  ASSERT(singleton == this);
+  singleton = nullptr;
 }
 
 void Preferences::load()
@@ -58,7 +63,7 @@ void Preferences::save()
     pair.second->save();
 
   for (auto& pair : m_docs)
-    saveDocPref(pair.first, pair.second);
+    serializeDocPref(pair.first, pair.second, true);
 
   flush_config_file();
 }
@@ -72,41 +77,71 @@ ToolPreferences& Preferences::tool(tools::Tool* tool)
     return *it->second;
   }
   else {
-    std::string section = "tool.";
-    section += tool->getId();
-
+    std::string section = std::string("tool.") + tool->getId();
     ToolPreferences* toolPref = new ToolPreferences(section);
+
+    // Default size for eraser, blur, etc.
+    if (tool->getInk(0)->isEraser() ||
+        tool->getInk(0)->isEffect()) {
+      toolPref->brush.size.setDefaultValue(8);
+    }
+
     m_tools[tool->getId()] = toolPref;
+    toolPref->load();
     return *toolPref;
   }
 }
 
-DocumentPreferences& Preferences::document(app::Document* document)
+DocumentPreferences& Preferences::document(const app::Document* doc)
 {
-  auto it = m_docs.find(document);
+  auto it = m_docs.find(doc);
   if (it != m_docs.end()) {
     return *it->second;
   }
   else {
-    DocumentPreferences* docPref = new DocumentPreferences("");
-    m_docs[document] = docPref;
+    DocumentPreferences* docPref;
+    if (doc) {
+      docPref = new DocumentPreferences("");
+
+      // The default preferences for this document are the current
+      // defaults for (document=nullptr).
+      DocumentPreferences& defPref = this->document(nullptr);
+      *docPref = defPref;
+
+      // Default values for symmetry
+      docPref->symmetry.xAxis.setDefaultValue(doc->sprite()->width()/2);
+      docPref->symmetry.yAxis.setDefaultValue(doc->sprite()->height()/2);
+    }
+    else
+      docPref = new DocumentPreferences("");
+
+    m_docs[doc] = docPref;
+
+    // Load document preferences
+    serializeDocPref(doc, docPref, false);
+
     return *docPref;
   }
 }
 
-void Preferences::onRemoveDocument(doc::Document* doc)
+void Preferences::removeDocument(doc::Document* doc)
 {
   ASSERT(dynamic_cast<app::Document*>(doc));
 
   auto it = m_docs.find(static_cast<app::Document*>(doc));
   if (it != m_docs.end()) {
-    saveDocPref(it->first, it->second);
+    serializeDocPref(it->first, it->second, true);
     delete it->second;
     m_docs.erase(it);
   }
 }
 
-std::string Preferences::docConfigFileName(app::Document* doc)
+void Preferences::onRemoveDocument(doc::Document* doc)
+{
+  removeDocument(doc);
+}
+
+std::string Preferences::docConfigFileName(const app::Document* doc)
 {
   if (!doc)
     return "";
@@ -122,17 +157,26 @@ std::string Preferences::docConfigFileName(app::Document* doc)
   return rf.getFirstOrCreateDefault();
 }
 
-void Preferences::saveDocPref(app::Document* doc, app::DocumentPreferences* docPref)
+void Preferences::serializeDocPref(const app::Document* doc, app::DocumentPreferences* docPref, bool save)
 {
   bool specific_file = false;
 
-  if (doc && doc->isAssociatedToFile()) {
-    push_config_state();
-    set_config_file(docConfigFileName(doc).c_str());
-    specific_file = true;
+  if (doc) {
+    if (doc->isAssociatedToFile()) {
+      push_config_state();
+      set_config_file(docConfigFileName(doc).c_str());
+      specific_file = true;
+    }
+    else if (save)
+      return;
   }
 
-  docPref->save();
+  if (save)
+    docPref->save();
+  else {
+    // Load default preferences, or preferences from .ini file.
+    docPref->load();
+  }
 
   if (specific_file) {
     flush_config_file();

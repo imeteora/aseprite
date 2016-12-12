@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2013, 2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -16,16 +16,16 @@
 #include <list>
 
 namespace ui {
+namespace details {
 
 static std::list<Widget*>* widgets;
 
-int _ji_widgets_init()
+void initWidgets()
 {
   widgets = new std::list<Widget*>;
-  return 0;
 }
 
-void _ji_widgets_exit()
+void exitWidgets()
 {
   delete widgets;
 }
@@ -37,40 +37,34 @@ void addWidget(Widget* widget)
 
 void removeWidget(Widget* widget)
 {
-  std::list<Widget*>::iterator it =
-    std::find(widgets->begin(), widgets->end(), widget);
-
+  auto it = std::find(widgets->begin(), widgets->end(), widget);
   if (it != widgets->end())
     widgets->erase(it);
 }
 
-void setFontOfAllWidgets(she::Font* font)
+void resetFontAllWidgets()
 {
-  for (std::list<Widget*>::iterator
-         it=widgets->begin(), end=widgets->end();
-       it != end; ++it) {
-    (*it)->setFont(font);
-  }
+  for (auto widget : *widgets)
+    widget->resetFont();
 }
 
 void reinitThemeForAllWidgets()
 {
   // Reinitialize the theme of each widget
-  for (std::list<Widget*>::iterator it=widgets->begin(), end=widgets->end();
-       it != end; ++it) {
-      (*it)->setTheme(CurrentTheme::get());
-      (*it)->initTheme();
-    }
+  for (auto widget : *widgets) {
+    widget->setTheme(CurrentTheme::get());
+    widget->initTheme();
+  }
 
   // Remap the windows
-  for (std::list<Widget*>::iterator it=widgets->begin(), end=widgets->end();
-       it != end; ++it) {
-    if ((*it)->type == kWindowWidget)
-      static_cast<Window*>(*it)->remapWindow();
+  for (auto widget : *widgets) {
+    if (widget->type() == kWindowWidget)
+      static_cast<Window*>(widget)->remapWindow();
   }
 
   // Redraw the whole screen
   Manager::getDefault()->invalidate();
 }
 
+} // namespace details
 } // namespace ui

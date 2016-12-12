@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,10 +10,15 @@
 
 #include "app/ui/editor/select_box_state.h"
 
+#include "app/app.h"
+#include "app/tools/tool_box.h"
+#include "app/ui/context_bar.h"
 #include "app/ui/editor/editor.h"
-#include "gfx/rect.h"
+#include "app/ui/main_window.h"
+#include "app/ui/skin/skin_theme.h"
 #include "doc/image.h"
 #include "doc/sprite.h"
+#include "gfx/rect.h"
 #include "ui/message.h"
 #include "ui/system.h"
 #include "ui/view.h"
@@ -34,13 +27,25 @@ namespace app {
 
 using namespace ui;
 
-SelectBoxState::SelectBoxState(SelectBoxDelegate* delegate, const gfx::Rect& rc, PaintFlags paintFlags)
+SelectBoxState::SelectBoxState(SelectBoxDelegate* delegate, const gfx::Rect& rc, Flags flags)
   : m_delegate(delegate)
   , m_rulers(4)
   , m_movingRuler(-1)
-  , m_paintFlags(paintFlags)
+  , m_selectingBox(false)
+  , m_flags(flags)
 {
   setBoxBounds(rc);
+}
+
+SelectBoxState::~SelectBoxState()
+{
+  ContextBar* contextBar = App::instance()->contextBar();
+  contextBar->updateForActiveTool();
+}
+
+void SelectBoxState::setFlags(Flags flags)
+{
+  m_flags = flags;
 }
 
 gfx::Rect SelectBoxState::getBoxBounds() const
@@ -60,8 +65,12 @@ void SelectBoxState::setBoxBounds(const gfx::Rect& box)
   m_rulers[V2] = Ruler(Ruler::Vertical, box.x+box.w);
 }
 
-void SelectBoxState::onAfterChangeState(Editor* editor)
+void SelectBoxState::onEnterState(Editor* editor)
 {
+  StandbyState::onEnterState(editor);
+
+  updateContextBar();
+
   editor->setDecorator(this);
   editor->invalidate();
 }
@@ -77,29 +86,53 @@ bool SelectBoxState::onMouseDown(Editor* editor, MouseMessage* msg)
   if (msg->left() || msg->right()) {
     m_movingRuler = -1;
 
-    for (int i=0; i<(int)m_rulers.size(); ++i) {
-      if (touchRuler(editor, m_rulers[i], msg->position().x, msg->position().y)) {
-        m_movingRuler = i;
-        break;
+    if (hasFlag(Flags::Rulers)) {
+      for (int i=0; i<(int)m_rulers.size(); ++i) {
+        if (touchRuler(editor, m_rulers[i], msg->position().x, msg->position().y)) {
+          m_movingRuler = i;
+          break;
+        }
       }
+    }
+
+    if (hasFlag(Flags::QuickBox) && m_movingRuler == -1) {
+      m_selectingBox = true;
+      m_selectingButtons = msg->buttons();
+      m_startingPos = editor->screenToEditor(msg->position());
+      setBoxBounds(gfx::Rect(m_startingPos, gfx::Size(1, 1)));
     }
 
     editor->captureMouse();
     return true;
   }
-
   return StandbyState::onMouseDown(editor, msg);
 }
 
 bool SelectBoxState::onMouseUp(Editor* editor, MouseMessage* msg)
 {
   m_movingRuler = -1;
+
+  if (m_selectingBox) {
+    m_selectingBox = false;
+
+    if (m_delegate) {
+      if (m_selectingButtons == msg->buttons())
+        m_delegate->onQuickboxEnd(editor, getBoxBounds(), msg->buttons());
+      else
+        m_delegate->onQuickboxCancel(editor);
+    }
+  }
+
   return StandbyState::onMouseUp(editor, msg);
 }
 
 bool SelectBoxState::onMouseMove(Editor* editor, MouseMessage* msg)
 {
-  if (m_movingRuler >= 0) {
+  bool used = false;
+
+  updateContextBar();
+
+  if (hasFlag(Flags::Rulers) && m_movingRuler >= 0) {
     gfx::Point pt = editor->screenToEditor(msg->position());
 
     switch (m_rulers[m_movingRuler].getOrientation()) {
@@ -112,48 +145,99 @@ bool SelectBoxState::onMouseMove(Editor* editor, MouseMessage* msg)
         m_rulers[m_movingRuler].setPosition(pt.x);
         break;
     }
+    used = true;
+  }
 
+  if (hasFlag(Flags::QuickBox) && m_selectingBox) {
+    gfx::Point p1 = m_startingPos;
+    gfx::Point p2 = editor->screenToEditor(msg->position());
+
+    if (p2.x < p1.x) std::swap(p1.x, p2.x);
+    if (p2.y < p1.y) std::swap(p1.y, p2.y);
+    ++p2.x;
+    ++p2.y;
+
+    setBoxBounds(gfx::Rect(p1, p2));
+    used = true;
+  }
+
+  if (used) {
     if (m_delegate)
       m_delegate->onChangeRectangle(getBoxBounds());
 
     editor->invalidate();
     return true;
   }
-  return StandbyState::onMouseMove(editor, msg);
+  else
+    return StandbyState::onMouseMove(editor, msg);
 }
 
-bool SelectBoxState::onSetCursor(Editor* editor)
+bool SelectBoxState::onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos)
 {
-  if (m_movingRuler >= 0) {
-    switch (m_rulers[m_movingRuler].getOrientation()) {
-      case Ruler::Horizontal: ui::set_mouse_cursor(kSizeNSCursor); return true;
-      case Ruler::Vertical: ui::set_mouse_cursor(kSizeWECursor); return true;
-    }
-  }
+  if (hasFlag(Flags::Rulers)) {
+    if (m_movingRuler >= 0) {
+      switch (m_rulers[m_movingRuler].getOrientation()) {
 
-  int x = ui::get_mouse_position().x;
-  int y = ui::get_mouse_position().y;
-
-  for (Rulers::iterator it = m_rulers.begin(), end = m_rulers.end(); it != end; ++it) {
-    if (touchRuler(editor, *it, x, y)) {
-      switch (it->getOrientation()) {
         case Ruler::Horizontal:
-          ui::set_mouse_cursor(kSizeNSCursor);
+          editor->showMouseCursor(kSizeNSCursor);
           return true;
+
         case Ruler::Vertical:
-          ui::set_mouse_cursor(kSizeWECursor);
+          editor->showMouseCursor(kSizeWECursor);
           return true;
+      }
+    }
+
+    for (Rulers::iterator it = m_rulers.begin(), end = m_rulers.end(); it != end; ++it) {
+      if (touchRuler(editor, *it, mouseScreenPos.x, mouseScreenPos.y)) {
+        switch (it->getOrientation()) {
+          case Ruler::Horizontal:
+            editor->showMouseCursor(kSizeNSCursor);
+            return true;
+          case Ruler::Vertical:
+            editor->showMouseCursor(kSizeWECursor);
+            return true;
+        }
       }
     }
   }
 
+  if (!requireBrushPreview()) {
+    editor->showMouseCursor(kArrowCursor);
+    return true;
+  }
+
+  return StandbyState::onSetCursor(editor, mouseScreenPos);
+}
+
+bool SelectBoxState::acceptQuickTool(tools::Tool* tool)
+{
   return false;
+}
+
+bool SelectBoxState::requireBrushPreview()
+{
+  if (hasFlag(Flags::QuickBox))
+    return true;
+
+  // Returns false as it overrides default standby state behavior &
+  // look. This state uses normal arrow cursors.
+  return false;
+}
+
+tools::Ink* SelectBoxState::getStateInk()
+{
+  if (hasFlag(Flags::QuickBox))
+    return App::instance()->toolBox()->getInkById(
+      tools::WellKnownInks::Selection);
+  else
+    return nullptr;
 }
 
 void SelectBoxState::preRenderDecorator(EditorPreRender* render)
 {
   // Without black shadow?
-  if (!hasPaintFlag(PaintDarkOutside))
+  if (!hasFlag(Flags::DarkOutside))
     return;
 
   gfx::Rect rc = getBoxBounds();
@@ -182,29 +266,43 @@ void SelectBoxState::postRenderDecorator(EditorPostRender* render)
 {
   Editor* editor = render->getEditor();
   render::Zoom zoom = editor->zoom();
-  gfx::Rect vp = View::getView(editor)->getViewportBounds();
+  gfx::Rect sp = editor->sprite()->bounds();
+  gfx::Rect vp = View::getView(editor)->viewportBounds();
   vp.w += zoom.apply(1);
   vp.h += zoom.apply(1);
   vp = editor->screenToEditor(vp);
 
   // Paint a grid generated by the box
-  if (hasPaintFlag(PaintGrid)) {
-    gfx::Color gridColor = gfx::rgba(100, 200, 100);
-    gfx::Rect boxBounds = getBoxBounds();
+  gfx::Color rulerColor = skin::SkinTheme::instance()->colors.selectBoxRuler();
+  gfx::Color gridColor = skin::SkinTheme::instance()->colors.selectBoxGrid();
+  gfx::Rect boxBounds = getBoxBounds();
 
-    if (boxBounds.w > 0)
-      for (int x=boxBounds.x+boxBounds.w*2; x<vp.x+vp.w; x+=boxBounds.w)
-        render->drawLine(x, boxBounds.y, x, vp.y+vp.h-1, gridColor);
+  if (hasFlag(Flags::Grid)) {
+    if (boxBounds.w > 0) {
+      for (int x=boxBounds.x+boxBounds.w*2; x<=sp.x+sp.w; x+=boxBounds.w)
+        render->drawLine(x, boxBounds.y, x, sp.y+sp.h, gridColor);
+    }
 
-    if (boxBounds.h > 0)
-      for (int y=boxBounds.y+boxBounds.h*2; y<vp.y+vp.h; y+=boxBounds.h)
-        render->drawLine(boxBounds.x, y, vp.x+vp.w-1, y, gridColor);
+    if (boxBounds.h > 0) {
+      for (int y=boxBounds.y+boxBounds.h*2; y<=sp.y+sp.h; y+=boxBounds.h)
+        render->drawLine(boxBounds.x, y, sp.x+sp.w, y, gridColor);
+    }
+  }
+  else if (hasFlag(Flags::HGrid)) {
+    if (boxBounds.w > 0) {
+      for (int x=boxBounds.x+boxBounds.w*2; x<=sp.x+sp.w; x+=boxBounds.w)
+        render->drawLine(x, boxBounds.y, x, boxBounds.y+boxBounds.h, gridColor);
+    }
+  }
+  else if (hasFlag(Flags::VGrid)) {
+    if (boxBounds.h > 0) {
+      for (int y=boxBounds.y+boxBounds.h*2; y<=sp.y+sp.h; y+=boxBounds.h)
+        render->drawLine(boxBounds.x, y, boxBounds.x+boxBounds.w, y, gridColor);
+    }
   }
 
   // Draw the rulers enclosing the box
-  if (hasPaintFlag(PaintRulers)) {
-    gfx::Color rulerColor = gfx::rgba(0, 0, 255);
-
+  if (hasFlag(Flags::Rulers)) {
     for (Rulers::iterator it = m_rulers.begin(), end = m_rulers.end(); it != end; ++it) {
       switch (it->getOrientation()) {
 
@@ -218,6 +316,21 @@ void SelectBoxState::postRenderDecorator(EditorPostRender* render)
       }
     }
   }
+
+  if (hasFlag(Flags::QuickBox)) {
+    render->drawRectXor(boxBounds);
+  }
+}
+
+void SelectBoxState::getInvalidDecoratoredRegion(Editor* editor, gfx::Region& region)
+{
+  // Do nothing
+}
+
+void SelectBoxState::updateContextBar()
+{
+  ContextBar* contextBar = App::instance()->contextBar();
+  contextBar->updateForSelectingBox(m_delegate->onGetContextBarHelp());
 }
 
 bool SelectBoxState::touchRuler(Editor* editor, Ruler& ruler, int x, int y)
@@ -233,9 +346,9 @@ bool SelectBoxState::touchRuler(Editor* editor, Ruler& ruler, int x, int y)
   return false;
 }
 
-bool SelectBoxState::hasPaintFlag(PaintFlags flag) const
+bool SelectBoxState::hasFlag(Flags flag) const
 {
-  return ((m_paintFlags & flag) == flag);
+  return (int(m_flags) & int(flag)) == int(flag);
 }
 
 } // namespace app

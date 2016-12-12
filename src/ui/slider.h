@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,15 +8,21 @@
 #define UI_SLIDER_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
+#include "obs/signal.h"
 #include "ui/widget.h"
 
 namespace ui {
 
-  class Slider : public Widget
-  {
+  class SliderDelegate {
   public:
-    Slider(int min, int max, int value);
+    virtual ~SliderDelegate() { }
+    virtual std::string onGetTextFromValue(int value) = 0;
+    virtual int onGetValueFromText(const std::string& text) = 0;
+  };
+
+  class Slider : public Widget {
+  public:
+    Slider(int min, int max, int value, SliderDelegate* delegate = nullptr);
 
     int getMinValue() const { return m_min; }
     int getMaxValue() const { return m_max; }
@@ -25,16 +31,22 @@ namespace ui {
     void setRange(int min, int max);
     void setValue(int value);
 
-    void getSliderThemeInfo(int* min, int* max, int* value);
+    bool isReadOnly() const { return m_readOnly; }
+    void setReadOnly(bool readOnly) { m_readOnly = readOnly; }
+
+    void getSliderThemeInfo(int* min, int* max, int* value) const;
+
+    std::string convertValueToText(int value) const;
+    int convertTextToValue(const std::string& text) const;
 
     // Signals
-    Signal0<void> Change;
-    Signal0<void> SliderReleased;
+    obs::signal<void()> Change;
+    obs::signal<void()> SliderReleased;
 
   protected:
     // Events
     bool onProcessMessage(Message* msg) override;
-    void onPreferredSize(PreferredSizeEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     void onPaint(PaintEvent& ev) override;
 
     // New events
@@ -47,6 +59,8 @@ namespace ui {
     int m_min;
     int m_max;
     int m_value;
+    bool m_readOnly;
+    SliderDelegate* m_delegate;
   };
 
 } // namespace ui

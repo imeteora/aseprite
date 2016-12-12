@@ -1,32 +1,34 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_CONTEXT_BAR_H_INCLUDED
 #define APP_UI_CONTEXT_BAR_H_INCLUDED
 #pragma once
 
-#include "app/settings/settings_observers.h"
+#include "app/pref/preferences.h"
+#include "app/shade.h"
+#include "app/tools/active_tool_observer.h"
+#include "app/tools/ink_type.h"
+#include "app/tools/tool_loop_modifiers.h"
 #include "app/ui/context_bar_observer.h"
-#include "base/observable.h"
+#include "doc/brush.h"
+#include "obs/connection.h"
+#include "obs/observable.h"
+#include "obs/signal.h"
 #include "ui/box.h"
+
+#include <vector>
+
+namespace doc {
+  class Remap;
+}
 
 namespace ui {
   class Box;
+  class Button;
   class Label;
 }
 
@@ -36,72 +38,113 @@ namespace tools {
 
 namespace app {
 
-  class IToolSettings;
+  class BrushSlot;
 
-  class ContextBar : public ui::Box,
-                     public ToolSettingsObserver,
-                     public base::Observable<ContextBarObserver> {
+  class ContextBar : public ui::Box
+                   , public obs::observable<ContextBarObserver>
+                   , public tools::ActiveToolObserver {
   public:
     ContextBar();
     ~ContextBar();
 
-    void updateFromTool(tools::Tool* tool);
+    void updateForActiveTool();
+    void updateForTool(tools::Tool* tool);
     void updateForMovingPixels();
-    void updateSelectionMode(SelectionMode mode);
+    void updateForSelectingBox(const std::string& text);
+    void updateToolLoopModifiersIndicators(app::tools::ToolLoopModifiers modifiers);
     void updateAutoSelectLayer(bool state);
+    bool isAutoSelectLayer() const;
+
+    void setActiveBrush(const doc::BrushRef& brush);
+    void setActiveBrushBySlot(tools::Tool* tool, int slot);
+    doc::BrushRef activeBrush(tools::Tool* tool = nullptr) const;
+    void discardActiveBrush();
+
+    BrushSlot createBrushSlotFromPreferences();
+    static doc::BrushRef createBrushFromPreferences(
+      ToolPreferences::Brush* brushPref = nullptr);
+
+    doc::Remap* createShadeRemap(bool left);
+    void reverseShadeColors();
+    Shade getShade() const;
+
+    void setInkType(tools::InkType type);
+
+    // Signals
+    obs::signal<void()> BrushChange;
 
   protected:
-    bool onProcessMessage(ui::Message* msg) override;
-    void onPreferredSize(ui::PreferredSizeEvent& ev) override;
-
-    // ToolSettingsObserver impl
-    void onSetOpacity(int newOpacity) override;
+    void onSizeHint(ui::SizeHintEvent& ev) override;
+    void onToolSetOpacity(const int& newOpacity);
+    void onToolSetFreehandAlgorithm();
 
   private:
     void onBrushSizeChange();
     void onBrushAngleChange();
-    void onCurrentToolChange();
+    void onSymmetryModeChange();
+    void onFgOrBgColorChange(doc::Brush::ImageColor imageColor);
     void onDropPixels(ContextBarObserver::DropAction action);
 
+    // ActiveToolObserver impl
+    void onActiveToolChange(tools::Tool* tool) override;
+
+    class ZoomButtons;
     class BrushTypeField;
     class BrushAngleField;
     class BrushSizeField;
     class ToleranceField;
     class ContiguousField;
+    class PaintBucketSettingsField;
     class InkTypeField;
     class InkOpacityField;
+    class InkShadesField;
     class SprayWidthField;
     class SpraySpeedField;
     class SelectionModeField;
     class TransparentColorField;
+    class PivotField;
     class RotAlgorithmField;
     class FreehandAlgorithmField;
-    class GrabAlphaField;
+    class BrushPatternField;
+    class EyedropperField;
     class DropPixelsField;
     class AutoSelectLayerField;
+    class SymmetryField;
 
-    IToolSettings* m_toolSettings;
+    ZoomButtons* m_zoomButtons;
     BrushTypeField* m_brushType;
     BrushAngleField* m_brushAngle;
     BrushSizeField* m_brushSize;
     ui::Label* m_toleranceLabel;
     ToleranceField* m_tolerance;
     ContiguousField* m_contiguous;
+    PaintBucketSettingsField* m_paintBucketSettings;
     InkTypeField* m_inkType;
-    ui::Label* m_opacityLabel;
+    ui::Label* m_inkOpacityLabel;
     InkOpacityField* m_inkOpacity;
-    GrabAlphaField* m_grabAlpha;
+    InkShadesField* m_inkShades;
+    EyedropperField* m_eyedropperField;
     AutoSelectLayerField* m_autoSelectLayer;
     ui::Box* m_freehandBox;
     FreehandAlgorithmField* m_freehandAlgo;
+    BrushPatternField* m_brushPatternField;
     ui::Box* m_sprayBox;
+    ui::Label* m_sprayLabel;
     SprayWidthField* m_sprayWidth;
     SpraySpeedField* m_spraySpeed;
     ui::Box* m_selectionOptionsBox;
     SelectionModeField* m_selectionMode;
     TransparentColorField* m_transparentColor;
+    PivotField* m_pivot;
     RotAlgorithmField* m_rotAlgo;
     DropPixelsField* m_dropPixels;
+    doc::BrushRef m_activeBrush;
+    ui::Label* m_selectBoxHelp;
+    SymmetryField* m_symmetry;
+    obs::scoped_connection m_sizeConn;
+    obs::scoped_connection m_angleConn;
+    obs::scoped_connection m_opacityConn;
+    obs::scoped_connection m_freehandAlgoConn;
   };
 
 } // namespace app

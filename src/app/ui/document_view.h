@@ -1,29 +1,22 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_DOCUMENT_VIEW_H_INCLUDED
 #define APP_UI_DOCUMENT_VIEW_H_INCLUDED
 #pragma once
 
+#include "app/ui/input_chain_element.h"
 #include "app/ui/tabs.h"
 #include "app/ui/workspace_view.h"
 #include "doc/document_observer.h"
 #include "ui/box.h"
+
+namespace doc {
+  class Site;
+}
 
 namespace ui {
   class View;
@@ -31,34 +24,51 @@ namespace ui {
 
 namespace app {
   class Document;
-  class DocumentLocation;
   class Editor;
+
+  class DocumentViewPreviewDelegate {
+  public:
+    virtual ~DocumentViewPreviewDelegate() { }
+    virtual void onScrollOtherEditor(Editor* editor) = 0;
+    virtual void onDisposeOtherEditor(Editor* editor) = 0;
+    virtual void onPreviewOtherEditor(Editor* editor) = 0;
+  };
 
   class DocumentView : public ui::Box
                      , public TabView
                      , public doc::DocumentObserver
-                     , public WorkspaceView {
+                     , public WorkspaceView
+                     , public app::InputChainElement {
   public:
     enum Type {
       Normal,
-      Mini
+      Preview
     };
 
-    DocumentView(Document* document, Type type);
+    DocumentView(Document* document, Type type,
+                 DocumentViewPreviewDelegate* previewDelegate);
     ~DocumentView();
 
-    Document* getDocument() const { return m_document; }
-    void getDocumentLocation(DocumentLocation* location) const;
-    Editor* getEditor() { return m_editor; }
+    Document* document() const { return m_document; }
+    Editor* editor() { return m_editor; }
+    ui::View* viewWidget() const { return m_view; }
+    void getSite(doc::Site* site) const;
+
+    bool isPreview() { return m_type == Preview; }
 
     // TabView implementation
     std::string getTabText() override;
+    TabIcon getTabIcon() override;
 
     // WorkspaceView implementation
     ui::Widget* getContentWidget() override { return this; }
+    bool canCloneWorkspaceView() override { return true; }
     WorkspaceView* cloneWorkspaceView() override;
     void onWorkspaceViewSelected() override;
     void onClonedFrom(WorkspaceView* from) override;
+    bool onCloseView(Workspace* workspace, bool quitting) override;
+    void onTabPopup(Workspace* workspace) override;
+    InputChainElement* onGetInputChainElement() override { return this; }
 
     // DocumentObserver implementation
     void onGeneralUpdate(doc::DocumentEvent& ev) override;
@@ -68,15 +78,31 @@ namespace app {
     void onBeforeRemoveLayer(doc::DocumentEvent& ev) override;
     void onAddFrame(doc::DocumentEvent& ev) override;
     void onRemoveFrame(doc::DocumentEvent& ev) override;
+    void onAddCel(doc::DocumentEvent& ev) override;
+    void onRemoveCel(doc::DocumentEvent& ev) override;
     void onTotalFramesChanged(doc::DocumentEvent& ev) override;
     void onLayerRestacked(doc::DocumentEvent& ev) override;
+
+    // InputChainElement impl
+    void onNewInputPriority(InputChainElement* element) override;
+    bool onCanCut(Context* ctx) override;
+    bool onCanCopy(Context* ctx) override;
+    bool onCanPaste(Context* ctx) override;
+    bool onCanClear(Context* ctx) override;
+    bool onCut(Context* ctx) override;
+    bool onCopy(Context* ctx) override;
+    bool onPaste(Context* ctx) override;
+    bool onClear(Context* ctx) override;
+    void onCancel(Context* ctx) override;
 
   protected:
     bool onProcessMessage(ui::Message* msg) override;
 
   private:
+    Type m_type;
     Document* m_document;
     ui::View* m_view;
+    DocumentViewPreviewDelegate* m_previewDelegate;
     Editor* m_editor;
   };
 

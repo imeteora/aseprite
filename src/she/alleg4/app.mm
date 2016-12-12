@@ -1,20 +1,25 @@
 // SHE library
-// Copyright (C) 2012-2014  David Capello
+// Copyright (C) 2012-2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
 
-#import <AppKit/AppKit.h>
-#import <IOKit/hid/IOHIDLib.h>
+#include <AppKit/AppKit.h>
+#include <IOKit/hid/IOHIDLib.h>
 
 #include <allegro.h>
 #include <allegro/platform/alosx.h>
 #include <allegro/internal/aintern.h>
 #include <allegro/platform/aintosx.h>
 
-#include "she/alleg4/internals.h"
+#include "she/alleg4/alleg_display.h"
 #include "she/event.h"
-#include "she/system.h"
+#include "she/event_queue.h"
+
+void* get_osx_window()
+{
+  return osx_window;
+}
 
 @interface SheAppDelegate : AllegroAppDelegate
 - (BOOL)application: (NSApplication *)theApplication openFile: (NSString *)filename;

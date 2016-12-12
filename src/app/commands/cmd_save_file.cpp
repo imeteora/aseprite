@@ -1,27 +1,18 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
+#include "app/commands/cmd_save_file.h"
+
 #include "app/app.h"
 #include "app/commands/command.h"
+#include "app/commands/commands.h"
 #include "app/commands/params.h"
 #include "app/console.h"
 #include "app/context_access.h"
@@ -29,17 +20,39 @@
 #include "app/file_selector.h"
 #include "app/job.h"
 #include "app/modules/gui.h"
+#include "app/pref/preferences.h"
 #include "app/recent_files.h"
 #include "app/ui/status_bar.h"
 #include "base/bind.h"
+#include "base/convert_to.h"
 #include "base/fs.h"
-#include "base/path.h"
 #include "base/thread.h"
 #include "base/unique_ptr.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
 namespace app {
+
+class SaveAsCopyDelegate : public FileSelectorDelegate {
+public:
+  SaveAsCopyDelegate(double scale)
+    : m_resizeScale(scale) { }
+
+  bool hasResizeCombobox() override {
+    return true;
+  }
+
+  double getResizeScale() override {
+    return m_resizeScale;
+  }
+
+  void setResizeScale(double scale) override {
+    m_resizeScale = scale;
+  }
+
+private:
+  double m_resizeScale;
+};
 
 class SaveFileJob : public Job, public IFileOpProgress {
 public:
@@ -53,7 +66,7 @@ public:
     startJob();
 
     if (isCanceled()) {
-      fop_stop(m_fop);
+      m_fop->stop();
     }
 
     waitJob();
@@ -64,12 +77,12 @@ private:
   // Thread to do the hard work: save the file to the disk.
   virtual void onJob() override {
     try {
-      fop_operate(m_fop, this);
+      m_fop->operate(this);
     }
     catch (const std::exception& e) {
-      fop_error(m_fop, "Error saving file:\n%s", e.what());
+      m_fop->setError("Error saving file:\n%s", e.what());
     }
-    fop_done(m_fop);
+    m_fop->done();
   }
 
   virtual void ackFileOpProgress(double progress) override {
@@ -79,31 +92,36 @@ private:
   FileOp* m_fop;
 };
 
-static void save_document_in_background(Context* context, Document* document, bool mark_as_saved)
+static void save_document_in_background(const Context* context,
+                                        const Document* document, bool mark_as_saved,
+                                        const std::string& fn_format)
 {
-  base::UniquePtr<FileOp> fop(fop_to_save_document(context, document));
+  base::UniquePtr<FileOp> fop(
+    FileOp::createSaveDocumentOperation(
+      context, document,
+      document->filename().c_str(), fn_format.c_str()));
   if (!fop)
     return;
 
   SaveFileJob job(fop);
   job.showProgressWindow();
 
-  if (fop->has_error()) {
+  if (fop->hasError()) {
     Console console;
-    console.printf(fop->error.c_str());
+    console.printf(fop->error().c_str());
 
     // We don't know if the file was saved correctly or not. So mark
     // it as it should be saved again.
-    document->impossibleToBackToSavedState();
+    const_cast<Document*>(document)->impossibleToBackToSavedState();
   }
   // If the job was cancelled, mark the document as modified.
-  else if (fop_is_stop(fop)) {
-    document->impossibleToBackToSavedState();
+  else if (fop->isStop()) {
+    const_cast<Document*>(document)->impossibleToBackToSavedState();
   }
-  else if (context->isUiAvailable()) {
-    App::instance()->getRecentFiles()->addRecentFile(document->filename().c_str());
+  else if (context->isUIAvailable()) {
+    App::instance()->recentFiles()->addRecentFile(document->filename().c_str());
     if (mark_as_saved)
-      document->markAsSaved();
+      const_cast<Document*>(document)->markAsSaved();
 
     StatusBar::instance()
       ->setStatusText(2000, "File %s, saved.",
@@ -113,111 +131,120 @@ static void save_document_in_background(Context* context, Document* document, bo
 
 //////////////////////////////////////////////////////////////////////
 
-class SaveFileBaseCommand : public Command {
-public:
-  SaveFileBaseCommand(const char* short_name, const char* friendly_name, CommandFlags flags)
-    : Command(short_name, friendly_name, flags) {
+SaveFileBaseCommand::SaveFileBaseCommand(const char* short_name, const char* friendly_name, CommandFlags flags)
+  : Command(short_name, friendly_name, flags)
+{
+}
+
+void SaveFileBaseCommand::onLoadParams(const Params& params)
+{
+  m_filename = params.get("filename");
+  m_filenameFormat = params.get("filename-format");
+}
+
+// Returns true if there is a current sprite to save.
+// [main thread]
+bool SaveFileBaseCommand::onEnabled(Context* context)
+{
+  return context->checkFlags(ContextFlags::ActiveDocumentIsWritable);
+}
+
+bool SaveFileBaseCommand::saveAsDialog(Context* context,
+                                       const char* dlgTitle,
+                                       FileSelectorDelegate* delegate)
+{
+  const Document* document = context->activeDocument();
+  std::string filename;
+
+  // If there is a delegate, we're doing a "Save Copy As", so we don't
+  // have to mark the file as saved.
+  bool saveCopyAs = (delegate != nullptr);
+  bool markAsSaved = (!saveCopyAs);
+  double scale = 1.0;
+
+  if (!m_filename.empty()) {
+    filename = m_filename;
   }
+  else {
+    std::string exts = get_writable_extensions();
+    filename = document->filename();
 
-protected:
-  void onLoadParams(Params* params) override {
-    m_filename = params->get("filename");
-  }
+    std::string newfilename = app::show_file_selector(
+      dlgTitle, filename, exts,
+      FileSelectorType::Save,
+      delegate);
 
-  // Returns true if there is a current sprite to save.
-  // [main thread]
-  bool onEnabled(Context* context) override {
-    return context->checkFlags(ContextFlags::ActiveDocumentIsWritable);
-  }
+    if (newfilename.empty())
+      return false;
 
-  void saveAsDialog(const ContextReader& reader, const char* dlgTitle, bool markAsSaved)
-  {
-    const Document* document = reader.document();
-    std::string filename;
-
-    if (!m_filename.empty()) {
-      filename = m_filename;
+    filename = newfilename;
+    if (delegate &&
+        delegate->hasResizeCombobox()) {
+      scale = delegate->getResizeScale();
     }
-    else {
-      filename = document->filename();
+  }
 
-      char exts[4096];
-      get_writable_extensions(exts, sizeof(exts));
+  std::string oldFilename;
+  {
+    ContextWriter writer(context);
+    Document* documentWriter = writer.document();
+    oldFilename = documentWriter->filename();
 
-      for (;;) {
-        std::string newfilename = app::show_file_selector(dlgTitle, filename, exts);
-        if (newfilename.empty())
-          return;
+    // Change the document file name
+    documentWriter->setFilename(filename.c_str());
+    m_selectedFilename = filename;
+  }
 
-        filename = newfilename;
-
-        // Ask if the user wants overwrite the existent file.
-        int ret = 0;
-        if (base::is_file(filename)) {
-          ret = ui::Alert::show("Warning<<The file already exists, overwrite it?<<%s||&Yes||&No||&Cancel",
-            base::get_file_name(filename).c_str());
-
-          // Check for read-only attribute.
-          if (ret == 1) {
-            if (!confirmReadonly(filename))
-              ret = 2;              // Select file again.
-            else
-              break;
-          }
-        }
-        else
-          break;
-
-        // "yes": we must continue with the operation...
-        if (ret == 1) {
-          break;
-        }
-        // "cancel" or <esc> per example: we back doing nothing
-        else if (ret != 2)
-          return;
-
-        // "no": we must back to select other file-name
+  // Apply scale
+  bool undoResize = false;
+  if (scale != 1.0) {
+    Command* resizeCmd = CommandsModule::instance()->getCommandByName(CommandId::SpriteSize);
+    ASSERT(resizeCmd);
+    if (resizeCmd) {
+      int width = document->sprite()->width();
+      int height = document->sprite()->height();
+      int newWidth = int(double(width) * scale);
+      int newHeight = int(double(height) * scale);
+      if (newWidth < 1) newWidth = 1;
+      if (newHeight < 1) newHeight = 1;
+      if (width != newWidth || height != newHeight) {
+        Params params;
+        params.set("use-ui", "false");
+        params.set("width", base::convert_to<std::string>(newWidth).c_str());
+        params.set("height", base::convert_to<std::string>(newHeight).c_str());
+        params.set("resize-method", "nearest-neighbor"); // TODO add algorithm in the UI?
+        context->executeCommand(resizeCmd, params);
+        undoResize = true;
       }
     }
-
-    {
-      ContextWriter writer(reader);
-      Document* documentWriter = writer.document();
-      std::string oldFilename = documentWriter->filename();
-
-      // Change the document file name
-      documentWriter->setFilename(filename.c_str());
-      m_selectedFilename = filename;
-
-      // Save the document
-      save_document_in_background(writer.context(), documentWriter, markAsSaved);
-
-      if (documentWriter->isModified())
-        documentWriter->setFilename(oldFilename);
-
-      update_screen_for_document(documentWriter);
-    }
   }
 
-  static bool confirmReadonly(const std::string& filename)
+  // Save the document
+  save_document_in_background(
+    context, const_cast<Document*>(document),
+    markAsSaved, m_filenameFormat);
+
+  // Undo resize
+  if (undoResize) {
+    Command* undoCmd = CommandsModule::instance()->getCommandByName(CommandId::Undo);
+    if (undoCmd)
+      context->executeCommand(undoCmd);
+  }
+
   {
-    if (!base::has_readonly_attr(filename))
-      return true;
+    ContextWriter writer(context);
+    Document* documentWriter = writer.document();
 
-    int ret = ui::Alert::show("Warning<<The file is read-only, do you really want to overwrite it?<<%s||&Yes||&No",
-      base::get_file_name(filename).c_str());
-
-    if (ret == 1) {
-      base::remove_readonly_attr(filename);
-      return true;
-    }
+    if (document->isModified())
+      documentWriter->setFilename(oldFilename);
     else
-      return false;
+      documentWriter->incrementVersion();
   }
 
-  std::string m_filename;
-  std::string m_selectedFilename;
-};
+  return true;
+}
+
+//////////////////////////////////////////////////////////////////////
 
 class SaveFileCommand : public SaveFileBaseCommand {
 public:
@@ -225,7 +252,7 @@ public:
   Command* clone() const override { return new SaveFileCommand(*this); }
 
 protected:
-  void onExecute(Context* context);
+  void onExecute(Context* context) override;
 };
 
 SaveFileCommand::SaveFileCommand()
@@ -237,26 +264,23 @@ SaveFileCommand::SaveFileCommand()
 // [main thread]
 void SaveFileCommand::onExecute(Context* context)
 {
-  const ContextReader reader(context);
-  const Document* document(reader.document());
+  Document* document = context->activeDocument();
 
   // If the document is associated to a file in the file-system, we can
   // save it directly without user interaction.
   if (document->isAssociatedToFile()) {
-    ContextWriter writer(reader);
+    ContextWriter writer(context);
     Document* documentWriter = writer.document();
 
-    if (!confirmReadonly(documentWriter->filename()))
-      return;
-
-    save_document_in_background(context, documentWriter, true);
-    update_screen_for_document(documentWriter);
+    save_document_in_background(
+      context, documentWriter, true,
+      m_filenameFormat.c_str());
   }
   // If the document isn't associated to a file, we must to show the
   // save-as dialog to the user to select for first time the file-name
   // for this document.
   else {
-    saveAsDialog(reader, "Save File", true);
+    saveAsDialog(context, "Save File");
   }
 }
 
@@ -266,7 +290,7 @@ public:
   Command* clone() const override { return new SaveFileAsCommand(*this); }
 
 protected:
-  void onExecute(Context* context);
+  void onExecute(Context* context) override;
 };
 
 SaveFileAsCommand::SaveFileAsCommand()
@@ -276,8 +300,7 @@ SaveFileAsCommand::SaveFileAsCommand()
 
 void SaveFileAsCommand::onExecute(Context* context)
 {
-  const ContextReader reader(context);
-  saveAsDialog(reader, "Save As", true);
+  saveAsDialog(context, "Save As");
 }
 
 class SaveFileCopyAsCommand : public SaveFileBaseCommand {
@@ -286,7 +309,7 @@ public:
   Command* clone() const override { return new SaveFileCopyAsCommand(*this); }
 
 protected:
-  void onExecute(Context* context);
+  void onExecute(Context* context) override;
 };
 
 SaveFileCopyAsCommand::SaveFileCopyAsCommand()
@@ -296,18 +319,29 @@ SaveFileCopyAsCommand::SaveFileCopyAsCommand()
 
 void SaveFileCopyAsCommand::onExecute(Context* context)
 {
-  const ContextReader reader(context);
-  const Document* document(reader.document());
-  std::string old_filename = document->filename();
+  const Document* document = context->activeDocument();
+  std::string oldFilename = document->filename();
 
   // show "Save As" dialog
-  saveAsDialog(reader, "Save Copy As", false);
+  DocumentPreferences& docPref = Preferences::instance().document(document);
+  SaveAsCopyDelegate delegate(docPref.saveCopy.resizeScale());
+
+  // Is a default output filename in the preferences?
+  if (!docPref.saveCopy.filename().empty()) {
+    ContextWriter writer(context);
+    writer.document()->setFilename(
+      docPref.saveCopy.filename());
+  }
+
+  if (saveAsDialog(context, "Save Copy As", &delegate)) {
+    docPref.saveCopy.filename(document->filename());
+    docPref.saveCopy.resizeScale(delegate.getResizeScale());
+  }
 
   // Restore the file name.
   {
-    ContextWriter writer(reader);
-    writer.document()->setFilename(old_filename.c_str());
-    update_screen_for_document(writer.document());
+    ContextWriter writer(context);
+    writer.document()->setFilename(oldFilename.c_str());
   }
 }
 

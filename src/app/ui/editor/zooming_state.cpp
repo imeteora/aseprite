@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -25,23 +13,24 @@
 #include "app/app.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/status_bar.h"
-#include "gfx/rect.h"
 #include "doc/sprite.h"
+#include "gfx/rect.h"
+#include "she/display.h"
+#include "ui/manager.h"
 #include "ui/message.h"
 #include "ui/system.h"
+#include "ui/theme.h"
 #include "ui/view.h"
+
+#include <cmath>
 
 namespace app {
 
 using namespace ui;
-  
+
 ZoomingState::ZoomingState()
   : m_startZoom(1, 1)
   , m_moved(false)
-{
-}
-
-ZoomingState::~ZoomingState()
 {
 }
 
@@ -64,8 +53,8 @@ bool ZoomingState::onMouseUp(Editor* editor, MouseMessage* msg)
     else if (msg->right())
       zoom.out();
 
-    editor->setZoomAndCenterInMouse(zoom,
-      msg->position(), Editor::kCofiguredZoomBehavior);
+    editor->setZoomAndCenterInMouse(
+      zoom, msg->position(), Editor::ZoomBehavior::MOUSE);
   }
 
   editor->backToPreviousState();
@@ -76,23 +65,23 @@ bool ZoomingState::onMouseUp(Editor* editor, MouseMessage* msg)
 bool ZoomingState::onMouseMove(Editor* editor, MouseMessage* msg)
 {
   gfx::Point pt = (msg->position() - m_startPos);
-  render::Zoom zoom(1, 1);
-  double scale = m_startZoom.scale() + pt.x / 16.0;
-  if (scale < 1.0)
-    scale = 1.0 / -(scale-2.0);
-  zoom = render::Zoom::fromScale(scale);
+  int threshold = 8 * guiscale() * editor->manager()->getDisplay()->scale();
 
-  editor->setZoomAndCenterInMouse(zoom,
-    m_startPos, Editor::kDontCenterOnZoom);
+  if (m_moved || std::sqrt(pt.x*pt.x + pt.y*pt.y) > threshold) {
+    m_moved = true;
 
-  m_moved = true;
+    int newScale = m_startZoom.linearScale() + pt.x / threshold;
+    render::Zoom newZoom = render::Zoom::fromLinearScale(newScale);
+
+    editor->setZoomAndCenterInMouse(
+      newZoom, m_startPos, Editor::ZoomBehavior::MOUSE);
+  }
   return true;
 }
 
-bool ZoomingState::onSetCursor(Editor* editor)
+bool ZoomingState::onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos)
 {
-  editor->hideDrawingCursor();
-  ui::set_mouse_cursor(kMagnifierCursor);
+  editor->showMouseCursor(kMagnifierCursor);
   return true;
 }
 

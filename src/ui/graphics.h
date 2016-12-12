@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2014  David Capello
+// Copyright (C) 2001-2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -33,6 +33,7 @@ namespace ui {
   public:
     enum class DrawMode {
       Solid,
+      Xor,
       Checked,
     };
 
@@ -67,6 +68,7 @@ namespace ui {
 
     void drawSurface(she::Surface* surface, int x, int y);
     void drawRgbaSurface(she::Surface* surface, int x, int y);
+    void drawColoredRgbaSurface(she::Surface* surface, gfx::Color color, int x, int y);
 
     void blit(she::Surface* src, int srcx, int srcy, int dstx, int dsty, int w, int h);
 
@@ -74,12 +76,12 @@ namespace ui {
     // FONT & TEXT
     // ======================================================================
 
+    she::Font* font() { return m_font; }
     void setFont(she::Font* font);
-    she::Font* getFont() { return m_font; }
 
     void drawChar(int chr, gfx::Color fg, gfx::Color bg, int x, int y);
     void drawString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Point& pt);
-    void drawUIString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Point& pt);
+    void drawUIString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Point& pt, bool drawUnderscore = true);
     void drawAlignedUIString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Rect& rc, int align);
 
     gfx::Size measureChar(int chr);
@@ -90,11 +92,16 @@ namespace ui {
   private:
     gfx::Size doUIStringAlgorithm(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Rect& rc, int align, bool draw);
 
+    void dirty(const gfx::Rect& bounds) {
+      m_dirtyBounds |= bounds;
+    }
+
     she::Surface* m_surface;
     int m_dx;
     int m_dy;
     gfx::Rect m_clipBounds;
     she::Font* m_font;
+    gfx::Rect m_dirtyBounds;
   };
 
   // Class to draw directly in the screen.
@@ -169,7 +176,7 @@ namespace ui {
     DISABLE_COPYING(CheckedDrawMode);
   };
 
-  typedef SharedPtr<Graphics> GraphicsPtr;
+  typedef base::SharedPtr<Graphics> GraphicsPtr;
 
 } // namespace ui
 

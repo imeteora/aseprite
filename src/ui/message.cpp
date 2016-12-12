@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,6 +11,7 @@
 #include "ui/message.h"
 
 #include "base/memory.h"
+#include "she/system.h"
 #include "ui/manager.h"
 #include "ui/widget.h"
 
@@ -18,16 +19,15 @@
 
 namespace ui {
 
-Message::Message(MessageType type)
+Message::Message(MessageType type, KeyModifiers modifiers)
   : m_type(type)
   , m_used(false)
-  , m_modifiers((KeyModifiers)
-     ((she::is_key_pressed(kKeyLShift) || she::is_key_pressed(kKeyRShift) ? kKeyShiftModifier: 0) |
-      (she::is_key_pressed(kKeyLControl) || she::is_key_pressed(kKeyRControl) ? kKeyCtrlModifier: 0) |
-      (she::is_key_pressed(kKeyAlt) ? kKeyAltModifier: 0) |
-      (she::is_key_pressed(kKeyCommand) ? kKeyCmdModifier: 0) |
-      (she::is_key_pressed(kKeySpace) ? kKeySpaceModifier: 0)))
+  , m_fromFilter(false)
 {
+  if (modifiers == kKeyUninitializedModifier)
+    m_modifiers = she::instance()->keyModifiers();
+  else
+    m_modifiers = modifiers;
 }
 
 Message::~Message()
@@ -62,17 +62,21 @@ void Message::broadcastToChildren(Widget* widget)
 {
   ASSERT_VALID_WIDGET(widget);
 
-  UI_FOREACH_WIDGET(widget->getChildren(), it)
-    broadcastToChildren(*it);
+  for (auto child : widget->children())
+    broadcastToChildren(child);
 
   addRecipient(widget);
 }
 
-KeyMessage::KeyMessage(MessageType type, KeyScancode scancode, int unicodeChar, int repeat)
-  : Message(type)
+KeyMessage::KeyMessage(MessageType type,
+                       KeyScancode scancode,
+                       KeyModifiers modifiers,
+                       int unicodeChar, int repeat)
+  : Message(type, modifiers)
   , m_scancode(scancode)
   , m_unicodeChar(unicodeChar)
   , m_repeat(repeat)
+  , m_isDead(false)
   , m_propagate_to_children(false)
   , m_propagate_to_parent(true)
 {

@@ -12,15 +12,14 @@
 
 namespace ui {
 
-  class TextBox : public Widget
-  {
+  class TextBox : public Widget {
   public:
     TextBox(const std::string& text, int align);
 
   protected:
     bool onProcessMessage(Message* msg) override;
     void onPaint(PaintEvent& ev) override;
-    void onPreferredSize(PreferredSizeEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     void onSetText() override;
 
   private:

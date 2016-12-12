@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,17 +10,23 @@
 
 #include "app/document_exporter.h"
 
+#include "app/cmd/set_pixel_format.h"
 #include "app/console.h"
 #include "app/document.h"
-#include "app/document_api.h"
 #include "app/file/file.h"
+#include "app/filename_formatter.h"
 #include "app/ui_context.h"
 #include "base/convert_to.h"
-#include "base/path.h"
+#include "base/fs.h"
+#include "base/fstream_path.h"
+#include "base/replace_string.h"
+#include "base/shared_ptr.h"
+#include "base/string.h"
 #include "base/unique_ptr.h"
 #include "doc/algorithm/shrink_bounds.h"
 #include "doc/cel.h"
 #include "doc/dithering_method.h"
+#include "doc/frame_tag.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
@@ -44,31 +38,51 @@
 
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <list>
 
 using namespace doc;
 
+namespace {
+
+std::string escape_for_json(const std::string& path)
+{
+  std::string res = path;
+  base::replace_string(res, "\\", "\\\\");
+  base::replace_string(res, "\"", "\\\"");
+  return res;
+}
+
+std::ostream& operator<<(std::ostream& os, const doc::UserData& data)
+{
+  doc::color_t color = data.color();
+  if (doc::rgba_geta(color)) {
+    os << ", \"color\": \"#"
+       << std::hex << std::setfill('0')
+       << std::setw(2) << (int)doc::rgba_getr(color)
+       << std::setw(2) << (int)doc::rgba_getg(color)
+       << std::setw(2) << (int)doc::rgba_getb(color)
+       << std::setw(2) << (int)doc::rgba_geta(color)
+       << std::dec
+       << "\"";
+  }
+  if (!data.text().empty())
+    os << ", \"data\": \"" << escape_for_json(data.text()) << "\"";
+  return os;
+}
+
+} // anonymous namespace
+
 namespace app {
 
-class DocumentExporter::Sample {
+class SampleBounds {
 public:
-  Sample(Document* document, Sprite* sprite, Layer* layer,
-    frame_t frame, const std::string& filename) :
-    m_document(document),
-    m_sprite(sprite),
-    m_layer(layer),
-    m_frame(frame),
-    m_filename(filename) {
+  SampleBounds(Sprite* sprite) :
+    m_originalSize(sprite->width(), sprite->height()),
+    m_trimmedBounds(0, 0, sprite->width(), sprite->height()),
+    m_inTextureBounds(0, 0, sprite->width(), sprite->height()) {
   }
-
-  Document* document() const { return m_document; }
-  Sprite* sprite() const { return m_sprite; }
-  Layer* layer() const { return m_layer; }
-  frame_t frame() const { return m_frame; }
-  std::string filename() const { return m_filename; }
-  const gfx::Size& originalSize() const { return m_originalSize; }
-  const gfx::Rect& trimmedBounds() const { return m_trimmedBounds; }
-  const gfx::Rect& inTextureBounds() const { return m_inTextureBounds; }
 
   bool trimmed() const {
     return m_trimmedBounds.x > 0
@@ -77,9 +91,92 @@ public:
       || m_trimmedBounds.h != m_originalSize.h;
   }
 
-  void setOriginalSize(const gfx::Size& size) { m_originalSize = size; }
+  const gfx::Size& originalSize() const { return m_originalSize; }
+  const gfx::Rect& trimmedBounds() const { return m_trimmedBounds; }
+  const gfx::Rect& inTextureBounds() const { return m_inTextureBounds; }
+
   void setTrimmedBounds(const gfx::Rect& bounds) { m_trimmedBounds = bounds; }
   void setInTextureBounds(const gfx::Rect& bounds) { m_inTextureBounds = bounds; }
+
+private:
+  gfx::Size m_originalSize;
+  gfx::Rect m_trimmedBounds;
+  gfx::Rect m_inTextureBounds;
+};
+
+typedef base::SharedPtr<SampleBounds> SampleBoundsPtr;
+
+int DocumentExporter::Item::frames() const
+{
+  if (frameTag) {
+    int result = frameTag->toFrame() - frameTag->fromFrame() + 1;
+    return MID(1, result, doc->sprite()->totalFrames());
+  }
+  else
+    return doc->sprite()->totalFrames();
+}
+
+int DocumentExporter::Item::fromFrame() const
+{
+  if (frameTag)
+    return MID(0, frameTag->fromFrame(), doc->sprite()->lastFrame());
+  else
+    return 0;
+}
+
+int DocumentExporter::Item::toFrame() const
+{
+  if (frameTag)
+    return MID(0, frameTag->toFrame(), doc->sprite()->lastFrame());
+  else
+    return doc->sprite()->lastFrame();
+}
+
+class DocumentExporter::Sample {
+public:
+  Sample(Document* document, Sprite* sprite, Layer* layer,
+    frame_t frame, const std::string& filename, int innerPadding) :
+    m_document(document),
+    m_sprite(sprite),
+    m_layer(layer),
+    m_frame(frame),
+    m_filename(filename),
+    m_innerPadding(innerPadding),
+    m_bounds(new SampleBounds(sprite)),
+    m_isDuplicated(false) {
+  }
+
+  Document* document() const { return m_document; }
+  Sprite* sprite() const { return m_sprite; }
+  Layer* layer() const { return m_layer; }
+  frame_t frame() const { return m_frame; }
+  std::string filename() const { return m_filename; }
+  const gfx::Size& originalSize() const { return m_bounds->originalSize(); }
+  const gfx::Rect& trimmedBounds() const { return m_bounds->trimmedBounds(); }
+  const gfx::Rect& inTextureBounds() const { return m_bounds->inTextureBounds(); }
+
+  gfx::Size requiredSize() const {
+    gfx::Size size = m_bounds->trimmedBounds().size();
+    size.w += 2*m_innerPadding;
+    size.h += 2*m_innerPadding;
+    return size;
+  }
+
+  bool trimmed() const {
+    return m_bounds->trimmed();
+  }
+
+  void setTrimmedBounds(const gfx::Rect& bounds) { m_bounds->setTrimmedBounds(bounds); }
+  void setInTextureBounds(const gfx::Rect& bounds) { m_bounds->setInTextureBounds(bounds); }
+
+  bool isDuplicated() const { return m_isDuplicated; }
+  bool isEmpty() const { return m_bounds->trimmedBounds().isEmpty(); }
+  SampleBoundsPtr sharedBounds() const { return m_bounds; }
+
+  void setSharedBounds(const SampleBoundsPtr& bounds) {
+    m_isDuplicated = true;
+    m_bounds = bounds;
+  }
 
 private:
   Document* m_document;
@@ -87,9 +184,11 @@ private:
   Layer* m_layer;
   frame_t m_frame;
   std::string m_filename;
-  gfx::Size m_originalSize;
-  gfx::Rect m_trimmedBounds;
-  gfx::Rect m_inTextureBounds;
+  int m_borderPadding;
+  int m_shapePadding;
+  int m_innerPadding;
+  SampleBoundsPtr m_bounds;
+  bool m_isDuplicated;
 };
 
 class DocumentExporter::Samples {
@@ -116,69 +215,114 @@ private:
 class DocumentExporter::LayoutSamples {
 public:
   virtual ~LayoutSamples() { }
-  virtual void layoutSamples(Samples& samples, int& width, int& height) = 0;
+  virtual void layoutSamples(Samples& samples, int borderPadding, int shapePadding, int& width, int& height) = 0;
 };
 
 class DocumentExporter::SimpleLayoutSamples :
     public DocumentExporter::LayoutSamples {
 public:
-  void layoutSamples(Samples& samples, int& width, int& height) override {
+  SimpleLayoutSamples(SpriteSheetType type)
+    : m_type(type) {
+  }
+
+  void layoutSamples(Samples& samples, int borderPadding, int shapePadding, int& width, int& height) override {
     const Sprite* oldSprite = NULL;
     const Layer* oldLayer = NULL;
 
-    gfx::Point framePt(0, 0);
+    gfx::Point framePt(borderPadding, borderPadding);
+    gfx::Size rowSize(0, 0);
+
     for (auto& sample : samples) {
+      if (sample.isDuplicated())
+        continue;
+
+      if (sample.isEmpty()) {
+        sample.setInTextureBounds(gfx::Rect(0, 0, 0, 0));
+        continue;
+      }
+
       const Sprite* sprite = sample.sprite();
       const Layer* layer = sample.layer();
-      gfx::Size size(sprite->width(), sprite->height());
+      gfx::Size size = sample.requiredSize();
 
       if (oldSprite) {
-          // If the user didn't specified a width for the texture, we put
+        if (m_type == SpriteSheetType::Columns) {
+          // If the user didn't specify a height for the texture, we
+          // put each sprite/layer in a different column.
+          if (height == 0) {
+            // New sprite or layer, go to next column.
+            if (oldSprite != sprite || oldLayer != layer) {
+              framePt.x += rowSize.w + shapePadding;
+              framePt.y = borderPadding;
+              rowSize = size;
+            }
+          }
+          // When a texture height is specified, we can put different
+          // sprites/layers in each column until we reach the texture
+          // bottom-border.
+          else if (framePt.y+size.h > height-borderPadding) {
+            framePt.x += rowSize.w + shapePadding;
+            framePt.y = borderPadding;
+            rowSize = size;
+          }
+        }
+        else {
+          // If the user didn't specify a width for the texture, we put
           // each sprite/layer in a different row.
           if (width == 0) {
-              // New sprite or layer, go to next row.
-              if (oldSprite != sprite || oldLayer != layer) {
-                  framePt.x = 0;
-                  framePt.y += oldSprite->height(); // We're skipping the previous sprite height
-              }
+            // New sprite or layer, go to next row.
+            if (oldSprite != sprite || oldLayer != layer) {
+              framePt.x = borderPadding;
+              framePt.y += rowSize.h + shapePadding;
+              rowSize = size;
+            }
           }
           // When a texture width is specified, we can put different
           // sprites/layers in each row until we reach the texture
           // right-border.
-          else if (framePt.x+size.w > width) {
-              framePt.x = 0;
-              framePt.y += oldSprite->height();
-              // TODO framePt.y+size.h > height ?
+          else if (framePt.x+size.w > width-borderPadding) {
+            framePt.x = borderPadding;
+            framePt.y += rowSize.h + shapePadding;
+            rowSize = size;
           }
+        }
       }
 
-      sample.setOriginalSize(size);
-      sample.setTrimmedBounds(gfx::Rect(gfx::Point(0, 0), size));
       sample.setInTextureBounds(gfx::Rect(framePt, size));
 
       // Next frame position.
-      framePt.x += size.w;
+      if (m_type == SpriteSheetType::Columns) {
+        framePt.y += size.h + shapePadding;
+      }
+      else {
+        framePt.x += size.w + shapePadding;
+      }
+
+      rowSize = rowSize.createUnion(size);
 
       oldSprite = sprite;
       oldLayer = layer;
     }
   }
+
+private:
+  SpriteSheetType m_type;
 };
 
 class DocumentExporter::BestFitLayoutSamples :
     public DocumentExporter::LayoutSamples {
 public:
-  void layoutSamples(Samples& samples, int& width, int& height) override {
+  void layoutSamples(Samples& samples, int borderPadding, int shapePadding, int& width, int& height) override {
     gfx::PackingRects pr;
 
+    // TODO Add support for shape paddings
+
     for (auto& sample : samples) {
-      const Sprite* sprite = sample.sprite();
-      gfx::Size size(sprite->width(), sprite->height());
+      if (sample.isDuplicated() ||
+          sample.isEmpty())
+        continue;
 
-      sample.setOriginalSize(size);
-      sample.setTrimmedBounds(gfx::Rect(gfx::Point(0, 0), size));
-
-      pr.add(size);
+      pr.add(sample.requiredSize());
     }
 
     if (width == 0 || height == 0) {
@@ -191,6 +335,9 @@ public:
 
     auto it = samples.begin();
     for (auto& rc : pr) {
+      if (it->isDuplicated())
+        continue;
+
       ASSERT(it != samples.end());
       it->setInTextureBounds(rc);
       ++it;
@@ -203,22 +350,31 @@ DocumentExporter::DocumentExporter()
  , m_textureFormat(DefaultTextureFormat)
  , m_textureWidth(0)
  , m_textureHeight(0)
- , m_texturePack(false)
+ , m_sheetType(SpriteSheetType::None)
  , m_scale(1.0)
  , m_scaleMode(DefaultScaleMode)
  , m_ignoreEmptyCels(false)
+ , m_borderPadding(0)
+ , m_shapePadding(0)
+ , m_innerPadding(0)
+ , m_trimCels(false)
+ , m_listFrameTags(false)
+ , m_listLayers(false)
 {
 }
 
-void DocumentExporter::exportSheet()
+Document* DocumentExporter::exportSheet()
 {
   // We output the metadata to std::cout if the user didn't specify a file.
   std::ofstream fos;
-  std::streambuf* osbuf;
-  if (m_dataFilename.empty())
-    osbuf = std::cout.rdbuf();
+  std::streambuf* osbuf = nullptr;
+  if (m_dataFilename.empty()) {
+    // Redirect to stdout if we are running in batch mode
+    if (!UIContext::instance()->isUIAvailable())
+      osbuf = std::cout.rdbuf();
+  }
   else {
-    fos.open(m_dataFilename.c_str(), std::ios::out);
+    fos.open(FSTREAM_PATH(m_dataFilename), std::ios::out);
     osbuf = fos.rdbuf();
   }
   std::ostream os(osbuf);
@@ -230,17 +386,25 @@ void DocumentExporter::exportSheet()
   if (samples.empty()) {
     Console console;
     console.printf("No documents to export");
-    return;
+    return nullptr;
   }
 
   // 2) Layout those samples in a texture field.
-  if (m_texturePack) {
-    BestFitLayoutSamples layout;
-    layout.layoutSamples(samples, m_textureWidth, m_textureHeight);
-  }
-  else {
-    SimpleLayoutSamples layout;
-    layout.layoutSamples(samples, m_textureWidth, m_textureHeight);
+  switch (m_sheetType) {
+    case SpriteSheetType::Packed: {
+      BestFitLayoutSamples layout;
+      layout.layoutSamples(
+        samples, m_borderPadding, m_shapePadding,
+        m_textureWidth, m_textureHeight);
+      break;
+    }
+    default: {
+      SimpleLayoutSamples layout(m_sheetType);
+      layout.layoutSamples(
+        samples, m_borderPadding, m_shapePadding,
+        m_textureWidth, m_textureHeight);
+      break;
+    }
   }
 
   // 3) Create and render the texture.
@@ -254,68 +418,145 @@ void DocumentExporter::exportSheet()
   renderTexture(samples, textureImage);
 
   // Save the metadata.
-  createDataFile(samples, os, textureImage);
+  if (osbuf)
+    createDataFile(samples, os, textureImage);
 
   // Save the image files.
   if (!m_textureFilename.empty()) {
     textureDocument->setFilename(m_textureFilename.c_str());
-    save_document(UIContext::instance(), textureDocument.get());
+    int ret = save_document(UIContext::instance(), textureDocument.get());
+    if (ret == 0)
+      textureDocument->markAsSaved();
   }
+
+  return textureDocument.release();
 }
 
 void DocumentExporter::captureSamples(Samples& samples)
 {
-  ImageBufferPtr checkEmptyImageBuf;
-  std::vector<char> buf(32);
-
   for (auto& item : m_documents) {
     Document* doc = item.doc;
     Sprite* sprite = doc->sprite();
     Layer* layer = item.layer;
+    FrameTag* frameTag = item.frameTag;
+    int frames = item.frames();
+    bool hasFrames = (frames > 1);
+    bool hasLayer = (layer != nullptr);
+    bool hasFrameTag = (frameTag && !item.temporalTag);
 
-    for (frame_t frame=frame_t(0);
-         frame<sprite->totalFrames(); ++frame) {
-      std::string filename = doc->filename();
+    std::string format = m_filenameFormat;
+    if (format.empty()) {
+      if (hasFrames || hasLayer | hasFrameTag) {
+        format = "{title}";
+        if (hasLayer   ) format += " ({layer})";
+        if (hasFrameTag) format += " #{tag}";
+        if (hasFrames  ) format += " {frame}";
+        format += ".{extension}";
+      }
+      else
+        format = "{name}";
+    }
 
-      if (sprite->totalFrames() > frame_t(1)) {
-        std::string path = base::get_file_path(filename);
-        std::string title = base::get_file_title(filename);
-        if (layer) {
-          title += " (";
-          title += layer->name();
-          title += ") ";
+    frame_t frameFirst = item.fromFrame();
+    frame_t frameLast = item.toFrame();
+    for (frame_t frame=frameFirst; frame<=frameLast; ++frame) {
+      FrameTag* innerTag = (frameTag ? frameTag: sprite->frameTags().innerTag(frame));
+      FrameTag* outerTag = sprite->frameTags().outerTag(frame);
+      FilenameInfo fnInfo;
+      fnInfo
+        .filename(doc->filename())
+        .layerName(layer ? layer->name(): "")
+        .innerTagName(innerTag ? innerTag->name(): "")
+        .outerTagName(outerTag ? outerTag->name(): "")
+        .frame((frames > 1) ? frame-frameFirst: frame_t(-1));
+
+      std::string filename = filename_formatter(format, fnInfo);
+
+      Sample sample(doc, sprite, layer, frame, filename, m_innerPadding);
+      Cel* cel = nullptr;
+      Cel* link = nullptr;
+      bool done = false;
+
+      if (layer && layer->isImage())
+        cel = layer->cel(frame);
+
+      if (cel)
+        link = cel->link();
+
+      // Re-use linked samples
+      if (link) {
+        for (const Sample& other : samples) {
+          if (other.sprite() == sprite &&
+              other.layer() == layer &&
+              other.frame() == link->frame()) {
+            ASSERT(!other.isDuplicated());
+
+            sample.setSharedBounds(other.sharedBounds());
+            done = true;
+            break;
+          }
         }
-
-        filename = base::join_path(path, title +
-            base::convert_to<std::string>((int)frame + 1)
-            + "." + base::get_file_extension(filename));
+        // "done" variable can be false here, e.g. when we export a
+        // frame tag and the first linked cel is outside the tag range.
+        ASSERT(done || (!done && frameTag));
       }
 
-      Sample sample(doc, sprite, layer, frame, filename);
-
-      if (m_ignoreEmptyCels) {
-        if (layer && layer->isImage() && !layer->cel(frame)) {
-          // Empty cel this sample completely
+      if (!done && (m_ignoreEmptyCels || m_trimCels)) {
+        // Ignore empty cels
+        if (layer && layer->isImage() && !cel)
           continue;
-        }
 
-        base::UniquePtr<Image> checkEmptyImage(
+        base::UniquePtr<Image> sampleRender(
           Image::create(sprite->pixelFormat(),
             sprite->width(),
             sprite->height(),
-            checkEmptyImageBuf));
+            m_sampleRenderBuf));
 
-        checkEmptyImage->setMaskColor(sprite->transparentColor());
-        clear_image(checkEmptyImage, sprite->transparentColor());
-        renderSample(sample, checkEmptyImage, 0, 0);
+        sampleRender->setMaskColor(sprite->transparentColor());
+        clear_image(sampleRender, sprite->transparentColor());
+        renderSample(sample, sampleRender, 0, 0);
 
         gfx::Rect frameBounds;
-        if (!algorithm::shrink_bounds(checkEmptyImage, frameBounds,
-            sprite->transparentColor())) {
-          // If shrink_bounds returns false, it's because the whole
-          // image is transparent (equal to the mask color).
-          continue;
+        doc::color_t refColor = 0;
+
+        if (m_trimCels) {
+          if ((layer &&
+               layer->isBackground()) ||
+              (!layer &&
+               sprite->backgroundLayer() &&
+               sprite->backgroundLayer()->isVisible())) {
+            refColor = get_pixel(sampleRender, 0, 0);
+          }
+          else {
+            refColor = sprite->transparentColor();
+          }
         }
+        else if (m_ignoreEmptyCels)
+          refColor = sprite->transparentColor();
+
+        if (!algorithm::shrink_bounds(sampleRender, frameBounds, refColor)) {
+          // If shrink_bounds() returns false, it's because the whole
+          // image is transparent (equal to the mask color).
+
+          // Should we ignore this empty frame? (i.e. don't include
+          // the frame in the sprite sheet)
+          if (m_ignoreEmptyCels) {
+            for (FrameTag* tag : sprite->frameTags()) {
+              auto& delta = m_tagDelta[tag->id()];
+
+              if (frame < tag->fromFrame()) --delta.first;
+              if (frame <= tag->toFrame()) --delta.second;
+            }
+            continue;
+          }
+
+          // Create an empty entry for this completely trimmed frame
+          // anyway to get its duration in the list of frames.
+          sample.setTrimmedBounds(frameBounds = gfx::Rect(0, 0, 0, 0));
+        }
+
+        if (m_trimCels)
+          sample.setTrimmedBounds(frameBounds);
       }
 
       samples.addSample(sample);
@@ -333,6 +574,10 @@ Document* DocumentExporter::createEmptyTexture(const Samples& samples)
   for (Samples::const_iterator
          it = samples.begin(),
          end = samples.end(); it != end; ++it) {
+    if (it->isDuplicated() ||
+        it->isEmpty())
+      continue;
+
     // We try to render an indexed image. But if we find a sprite with
     // two or more palettes, or two of the sprites have different
     // palettes, we've to use RGB format.
@@ -351,11 +596,29 @@ Document* DocumentExporter::createEmptyTexture(const Samples& samples)
         palette = it->sprite()->palette(frame_t(0));
     }
 
-    fullTextureBounds = fullTextureBounds.createUnion(it->inTextureBounds());
+    gfx::Rect sampleBounds = it->inTextureBounds();
+
+    // If the user specified a fixed sprite sheet size, we add the
+    // border padding in the sample size to do an union between
+    // fullTextureBounds and sample's inTextureBounds (generally, it
+    // shouldn't make fullTextureBounds bigger).
+    if (m_textureWidth > 0) sampleBounds.w += m_borderPadding;
+    if (m_textureHeight > 0) sampleBounds.h += m_borderPadding;
+
+    fullTextureBounds |= sampleBounds;
   }
 
-  base::UniquePtr<Sprite> sprite(Sprite::createBasicSprite(
-      pixelFormat, fullTextureBounds.w, fullTextureBounds.h, maxColors));
+  // If the user didn't specified the sprite sheet size, the border is
+  // added right here (the left/top border padding should be added by
+  // the DocumentExporter::LayoutSamples() impl).
+  if (m_textureWidth == 0) fullTextureBounds.w += m_borderPadding;
+  if (m_textureHeight == 0) fullTextureBounds.h += m_borderPadding;
+
+  base::UniquePtr<Sprite> sprite(
+    Sprite::createBasicSprite(
+      pixelFormat,
+      fullTextureBounds.x+fullTextureBounds.w,
+      fullTextureBounds.y+fullTextureBounds.h, maxColors));
 
   if (palette != NULL)
     sprite->setPalette(palette, false);
@@ -371,26 +634,49 @@ void DocumentExporter::renderTexture(const Samples& samples, Image* textureImage
   textureImage->clear(0);
 
   for (const auto& sample : samples) {
+    if (sample.isDuplicated() ||
+        sample.isEmpty())
+      continue;
+
     // Make the sprite compatible with the texture so the render()
     // works correctly.
     if (sample.sprite()->pixelFormat() != textureImage->pixelFormat()) {
-      DocumentApi docApi(sample.document(), NULL); // DocumentApi without undo
-      docApi.setPixelFormat(
+      cmd::SetPixelFormat(
         sample.sprite(),
         textureImage->pixelFormat(),
-        DitheringMethod::NONE);
+        DitheringMethod::NONE).execute(UIContext::instance());
     }
 
-    int x = sample.inTextureBounds().x - sample.trimmedBounds().x;
-    int y = sample.inTextureBounds().y - sample.trimmedBounds().y;
-
-    renderSample(sample, textureImage, x, y);
+    renderSample(sample, textureImage,
+      sample.inTextureBounds().x+m_innerPadding,
+      sample.inTextureBounds().y+m_innerPadding);
   }
 }
 
 void DocumentExporter::createDataFile(const Samples& samples, std::ostream& os, Image* textureImage)
 {
-  os << "{ \"frames\": {\n";
+  std::string frames_begin;
+  std::string frames_end;
+  bool filename_as_key = false;
+  bool filename_as_attr = false;
+
+  // TODO we should use some string templates system here
+  switch (m_dataFormat) {
+    case JsonHashDataFormat:
+      frames_begin = "{";
+      frames_end = "}";
+      filename_as_key = true;
+      filename_as_attr = false;
+      break;
+    case JsonArrayDataFormat:
+      frames_begin = "[";
+      frames_end = "]";
+      filename_as_key = false;
+      filename_as_attr = true;
+      break;
+  }
+
+  os << "{ \"frames\": " << frames_begin << "\n";
   for (Samples::const_iterator
          it = samples.begin(),
          end = samples.end(); it != end; ) {
@@ -399,8 +685,13 @@ void DocumentExporter::createDataFile(const Samples& samples, std::ostream& os, 
     gfx::Rect spriteSourceBounds = sample.trimmedBounds();
     gfx::Rect frameBounds = sample.inTextureBounds();
 
-    os << "   \"" << sample.filename() << "\": {\n"
-       << "    \"frame\": { "
+    if (filename_as_key)
+      os << "   \"" << escape_for_json(sample.filename()) << "\": {\n";
+    else if (filename_as_attr)
+      os << "   {\n"
+         << "    \"filename\": \"" << escape_for_json(sample.filename()) << "\",\n";
+
+    os << "    \"frame\": { "
        << "\"x\": " << frameBounds.x << ", "
        << "\"y\": " << frameBounds.y << ", "
        << "\"w\": " << frameBounds.w << ", "
@@ -423,33 +714,127 @@ void DocumentExporter::createDataFile(const Samples& samples, std::ostream& os, 
     else
       os << "\n";
   }
+  os << " " << frames_end;
 
-  os << " },\n"
+  // "meta" property
+  os << ",\n"
      << " \"meta\": {\n"
      << "  \"app\": \"" << WEBSITE << "\",\n"
      << "  \"version\": \"" << VERSION << "\",\n";
+
   if (!m_textureFilename.empty())
-    os << "  \"image\": \"" << m_textureFilename.c_str() << "\",\n";
+    os << "  \"image\": \"" << escape_for_json(m_textureFilename).c_str() << "\",\n";
+
   os << "  \"format\": \"" << (textureImage->pixelFormat() == IMAGE_RGB ? "RGBA8888": "I8") << "\",\n"
      << "  \"size\": { "
      << "\"w\": " << textureImage->width() << ", "
      << "\"h\": " << textureImage->height() << " },\n"
-     << "  \"scale\": \"" << m_scale << "\"\n"
-     << " }\n"
+     << "  \"scale\": \"" << m_scale << "\"";
+
+  // meta.frameTags
+  if (m_listFrameTags) {
+    os << ",\n"
+       << "  \"frameTags\": [";
+
+    bool firstTag = true;
+    for (auto& item : m_documents) {
+      Document* doc = item.doc;
+      Sprite* sprite = doc->sprite();
+
+      for (FrameTag* tag : sprite->frameTags()) {
+        if (firstTag)
+          firstTag = false;
+        else
+          os << ",";
+
+        std::pair<int, int> delta(0, 0);
+        if (!m_tagDelta.empty())
+          delta = m_tagDelta[tag->id()];
+
+        os << "\n   { \"name\": \"" << escape_for_json(tag->name()) << "\","
+           << " \"from\": " << (tag->fromFrame()+delta.first) << ","
+           << " \"to\": " << (tag->toFrame()+delta.second) << ","
+           << " \"direction\": \"" << escape_for_json(convert_to_string(tag->aniDir())) << "\" }";
+      }
+    }
+    os << "\n  ]";
+  }
+
+  // meta.layers
+  if (m_listLayers) {
+    os << ",\n"
+       << "  \"layers\": [";
+
+    bool firstLayer = true;
+    for (auto& item : m_documents) {
+      Document* doc = item.doc;
+      Sprite* sprite = doc->sprite();
+
+      std::vector<Layer*> layers;
+      sprite->getLayersList(layers);
+
+      for (Layer* layer : layers) {
+        if (firstLayer)
+          firstLayer = false;
+        else
+          os << ",";
+        os << "\n   { \"name\": \"" << escape_for_json(layer->name()) << "\"";
+        if (LayerImage* layerImg = dynamic_cast<LayerImage*>(layer)) {
+          os << ", \"opacity\": " << layerImg->opacity()
+             << ", \"blendMode\": \"" << blend_mode_to_string(layerImg->blendMode()) << "\"";
+        }
+        os << layer->userData();
+
+        // Cels
+        CelList cels;
+        layer->getCels(cels);
+        bool someCelWithData = false;
+        for (const Cel* cel : cels) {
+          if (!cel->data()->userData().isEmpty()) {
+            someCelWithData = true;
+            break;
+          }
+        }
+
+        if (someCelWithData) {
+          bool firstCel = true;
+
+          os << ", \"cels\": [";
+          for (const Cel* cel : cels) {
+            if (!cel->data()->userData().isEmpty()) {
+              if (firstCel)
+                firstCel = false;
+              else
+                os << ", ";
+
+              os << "{ \"frame\": " << cel->frame()
+                 << cel->data()->userData()
+                 << " }";
+            }
+          }
+          os << "]";
+        }
+
+        os << " }";
+      }
+    }
+    os << "\n  ]";
+  }
+
+  os << "\n }\n"
      << "}\n";
 }
 
 void DocumentExporter::renderSample(const Sample& sample, doc::Image* dst, int x, int y)
 {
   render::Render render;
+  gfx::Clip clip(x, y, sample.trimmedBounds());
 
   if (sample.layer()) {
-    render.renderLayer(dst, sample.layer(), sample.frame(),
-      gfx::Clip(x, y, sample.sprite()->bounds()));
+    render.renderLayer(dst, sample.layer(), sample.frame(), clip);
   }
   else {
-    render.renderSprite(dst, sample.sprite(), sample.frame(),
-      gfx::Clip(x, y, sample.sprite()->bounds()));
+    render.renderSprite(dst, sample.sprite(), sample.frame(), clip);
   }
 }
 

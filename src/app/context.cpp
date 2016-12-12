@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,12 +10,11 @@
 
 #include "app/context.h"
 
+#include "app/app.h"
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
 #include "app/console.h"
 #include "app/document.h"
-#include "app/document_location.h"
-#include "app/settings/settings.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -35,20 +22,7 @@
 namespace app {
 
 Context::Context()
-  : m_settings(NULL)
 {
-}
-
-Context::Context(ISettings* settings)
-  : m_settings(settings)
-{
-  setSettings(settings);
-}
-
-Context::~Context()
-{
-  delete m_settings;
-  m_settings = NULL;
 }
 
 void Context::sendDocumentToTop(doc::Document* document)
@@ -63,12 +37,12 @@ app::Document* Context::activeDocument() const
   return static_cast<app::Document*>(doc::Context::activeDocument());
 }
 
-DocumentLocation Context::activeLocation() const
+bool Context::hasModifiedDocuments() const
 {
-  DocumentLocation location;
-  onGetActiveLocation(&location);
-  ASSERT(location.document() == doc::Context::activeDocument());
-  return location;
+  for (auto doc : documents())
+    if (static_cast<app::Document*>(doc)->isModified())
+      return true;
+  return false;
 }
 
 void Context::executeCommand(const char* commandName)
@@ -80,43 +54,53 @@ void Context::executeCommand(const char* commandName)
     throw std::runtime_error("Invalid command name");
 }
 
-void Context::executeCommand(Command* command, Params* params)
+void Context::executeCommand(Command* command, const Params& params)
 {
   Console console;
 
   ASSERT(command != NULL);
 
-  PRINTF("Executing '%s' command.\n", command->short_name());
-  BeforeCommandExecution(command);
-
+  LOG(VERBOSE) << "CTXT: Executing command " << command->id() << "\n";
   try {
     m_flags.update(this);
 
-    if (params)
-      command->loadParams(params);
+    command->loadParams(params);
 
-    if (command->isEnabled(this)) {
-      command->execute(this);
+    CommandExecutionEvent ev(command);
+    BeforeCommandExecution(ev);
 
-      AfterCommandExecution(command);
+    if (ev.isCanceled()) {
+      LOG(VERBOSE) << "CTXT: Command " << command->id() << " was canceled/simulated.\n";
     }
+    else if (command->isEnabled(this)) {
+      command->execute(this);
+      LOG(VERBOSE) << "CTXT: Command " << command->id() << " executed successfully\n";
+    }
+    else {
+      LOG(VERBOSE) << "CTXT: Command " << command->id() << " is disabled\n";
+    }
+
+    AfterCommandExecution(ev);
+
+    // TODO move this code to another place (e.g. a Workplace/Tabs widget)
+    if (isUIAvailable())
+      app_rebuild_documents_tabs();
   }
   catch (base::Exception& e) {
-    PRINTF("Exception caught executing '%s' command\n%s\n",
-           command->short_name(), e.what());
+    LOG(ERROR) << "CTXT: Exception caught executing " << command->id() << " command\n"
+               << e.what() << "\n";
 
     Console::showException(e);
   }
   catch (std::exception& e) {
-    PRINTF("std::exception caught executing '%s' command\n%s\n",
-           command->short_name(), e.what());
+    LOG(ERROR) << "CTXT: std::exception caught executing " << command->id() << " command\n"
+               << e.what() << "\n";
 
     console.printf("An error ocurred executing the command.\n\nDetails:\n%s", e.what());
   }
-#ifndef DEBUGMODE
+#ifdef NDEBUG
   catch (...) {
-    PRINTF("unknown exception executing '%s' command\n",
-           command->short_name());
+    LOG(ERROR) << "CTXT: Unknown exception executing " << command->id() << " command\n";
 
     console.printf("An unknown error ocurred executing the command.\n"
                    "Please save your work, close the program, try it\n"
@@ -130,11 +114,6 @@ void Context::executeCommand(Command* command, Params* params)
 void Context::onCreateDocument(doc::CreateDocumentArgs* args)
 {
   args->setDocument(new app::Document(NULL));
-}
-
-void Context::onGetActiveLocation(DocumentLocation* location) const
-{
-  // Without active location
 }
 
 } // namespace app

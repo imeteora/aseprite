@@ -1,29 +1,18 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_APP_H_INCLUDED
 #define APP_APP_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
-#include "base/string.h"
+#include "app/app_brushes.h"
+#include "base/mutex.h"
 #include "base/unique_ptr.h"
 #include "doc/pixel_format.h"
+#include "obs/signal.h"
 
 #include <string>
 #include <vector>
@@ -33,22 +22,33 @@ namespace doc {
 }
 
 namespace ui {
-  class GuiSystem;
+  class UISystem;
 }
 
 namespace app {
 
   class AppOptions;
+  class BackupIndicator;
+  class ContextBar;
   class Document;
   class DocumentExporter;
   class INotificationDelegate;
+  class InputChain;
   class LegacyModules;
   class LoggerModule;
   class MainWindow;
   class Preferences;
   class RecentFiles;
+  class Timeline;
+  class Workspace;
+
+  namespace crash {
+    class DataRecovery;
+  }
 
   namespace tools {
+    class ActiveToolManager;
+    class Tool;
     class ToolBox;
   }
 
@@ -73,22 +73,32 @@ namespace app {
     void initialize(const AppOptions& options);
     void run();
 
-    tools::ToolBox* getToolBox() const;
-    RecentFiles* getRecentFiles() const;
-    MainWindow* getMainWindow() const { return m_mainWindow; }
+    tools::ToolBox* toolBox() const;
+    tools::Tool* activeTool() const;
+    tools::ActiveToolManager* activeToolManager() const;
+    RecentFiles* recentFiles() const;
+    MainWindow* mainWindow() const { return m_mainWindow; }
+    Workspace* workspace() const;
+    ContextBar* contextBar() const;
+    Timeline* timeline() const;
     Preferences& preferences() const;
+    crash::DataRecovery* dataRecovery() const;
+
+    AppBrushes& brushes() {
+      ASSERT(m_brushes.get());
+      return *m_brushes;
+    }
 
     void showNotification(INotificationDelegate* del);
+    // This can be called from a non-UI thread.
+    void showBackupNotification(bool state);
     void updateDisplayTitleBar();
 
+    InputChain& inputChain();
+
     // App Signals
-    Signal0<void> Exit;
-    Signal0<void> PaletteChange;
-    Signal0<void> BrushSizeBeforeChange;
-    Signal0<void> BrushSizeAfterChange;
-    Signal0<void> BrushAngleBeforeChange;
-    Signal0<void> BrushAngleAfterChange;
-    Signal0<void> CurrentToolChange;
+    obs::signal<void()> Exit;
+    obs::signal<void()> PaletteChange;
 
   private:
     typedef std::vector<std::string> FileList;
@@ -97,7 +107,7 @@ namespace app {
 
     static App* m_instance;
 
-    base::UniquePtr<ui::GuiSystem> m_guiSystem;
+    base::UniquePtr<ui::UISystem> m_uiSystem;
     CoreModules* m_coreModules;
     Modules* m_modules;
     LegacyModules* m_legacy;
@@ -106,6 +116,9 @@ namespace app {
     base::UniquePtr<MainWindow> m_mainWindow;
     FileList m_files;
     base::UniquePtr<DocumentExporter> m_exporter;
+    base::UniquePtr<AppBrushes> m_brushes;
+    BackupIndicator* m_backupIndicator;
+    base::mutex m_backupIndicatorMutex;
   };
 
   void app_refresh_screen();

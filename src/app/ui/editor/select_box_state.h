@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_EDITOR_SELECT_BOX_STATE_H_INCLUDED
 #define APP_UI_EDITOR_SELECT_BOX_STATE_H_INCLUDED
@@ -23,15 +11,28 @@
 #include "app/ui/editor/editor_decorator.h"
 #include "app/ui/editor/ruler.h"
 #include "app/ui/editor/standby_state.h"
+#include "ui/mouse_buttons.h"
 
 #include <vector>
+#include <string>
 
 namespace app {
 
   class SelectBoxDelegate {
   public:
     virtual ~SelectBoxDelegate() { }
-    virtual void onChangeRectangle(const gfx::Rect& rect) = 0;
+
+    // Called each time the selected box is modified (e.g. rulers are
+    // moved).
+    virtual void onChangeRectangle(const gfx::Rect& rect) { }
+
+    // Called only in QUICKBOX mode, when the user released the mouse
+    // button.
+    virtual void onQuickboxEnd(Editor* editor, const gfx::Rect& rect, ui::MouseButtons buttons) { }
+    virtual void onQuickboxCancel(Editor* editor) { }
+
+    // Help text to be shown in the ContextBar
+    virtual std::string onGetContextBarHelp() { return ""; }
   };
 
   class SelectBoxState : public StandbyState
@@ -39,48 +40,71 @@ namespace app {
     enum { H1, H2, V1, V2 };
 
   public:
-    typedef int PaintFlags;
-    static const int PaintRulers = 1;
-    static const int PaintDarkOutside = 2;
-    static const int PaintGrid = 4;
+    enum class Flags {
+      // Draw rulers at each edge of the current box
+      Rulers = 1,
+
+      // The outside of the current box must be darker (used in "Canvas Size" command)
+      DarkOutside = 2,
+
+      // Show a horizontal array of boxes starting from the current box
+      HGrid = 4,
+
+      // Show a vertical array of boxes starting from the current box
+      VGrid = 8,
+
+      // Show a grid starting from the current box
+      Grid = (HGrid | VGrid),
+
+      // Select the box as in selection tool, drawing a boxu
+      QuickBox = 16,
+    };
 
     SelectBoxState(SelectBoxDelegate* delegate,
                    const gfx::Rect& rc,
-                   PaintFlags paintFlags);
+                   Flags flags);
+    ~SelectBoxState();
+
+    void setFlags(Flags flags);
 
     // Returns the bounding box arranged by the rulers.
     gfx::Rect getBoxBounds() const;
     void setBoxBounds(const gfx::Rect& rc);
 
     // EditorState overrides
-    virtual void onAfterChangeState(Editor* editor) override;
+    virtual void onEnterState(Editor* editor) override;
     virtual void onBeforePopState(Editor* editor) override;
     virtual bool onMouseDown(Editor* editor, ui::MouseMessage* msg) override;
     virtual bool onMouseUp(Editor* editor, ui::MouseMessage* msg) override;
     virtual bool onMouseMove(Editor* editor, ui::MouseMessage* msg) override;
-    virtual bool onSetCursor(Editor* editor) override;
-
-    // Returns false as it overrides default standby state behavior &
-    // look. This state uses normal arrow cursors.
-    virtual bool requireBrushPreview() override { return false; }
+    virtual bool onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos) override;
+    virtual bool acceptQuickTool(tools::Tool* tool) override;
+    virtual bool requireBrushPreview() override;
+    virtual tools::Ink* getStateInk() override;
 
     // EditorDecorator overrides
     virtual void preRenderDecorator(EditorPreRender* render) override;
     virtual void postRenderDecorator(EditorPostRender* render) override;
+    virtual void getInvalidDecoratoredRegion(Editor* editor, gfx::Region& region) override;
 
   private:
     typedef std::vector<Ruler> Rulers;
+
+    void updateContextBar();
 
     // Returns true if the position screen position (x, y) is touching
     // the given ruler.
     bool touchRuler(Editor* editor, Ruler& ruler, int x, int y);
 
-    bool hasPaintFlag(PaintFlags flag) const;
+    bool hasFlag(Flags flag) const;
 
     SelectBoxDelegate* m_delegate;
     Rulers m_rulers;
     int m_movingRuler;
-    PaintFlags m_paintFlags;
+    bool m_selectingBox;
+    ui::MouseButtons m_selectingButtons;
+    gfx::Point m_startingPos;
+    Flags m_flags;
   };
 
 } // namespace app

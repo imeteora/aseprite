@@ -1,25 +1,14 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
+#include "app/app.h"
 #include "app/commands/command.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
@@ -28,12 +17,11 @@
 #include "app/find_widget.h"
 #include "app/ini_file.h"
 #include "app/load_widget.h"
-#include "app/settings/document_settings.h"
-#include "app/settings/settings.h"
+#include "app/pref/preferences.h"
 #include "base/bind.h"
-#include "filters/median_filter.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
+#include "filters/median_filter.h"
 #include "ui/button.h"
 #include "ui/entry.h"
 #include "ui/grid.h"
@@ -65,15 +53,15 @@ public:
     m_widthEntry->setTextf("%d", m_filter.getWidth());
     m_heightEntry->setTextf("%d", m_filter.getHeight());
 
-    m_widthEntry->EntryChange.connect(&DespeckleWindow::onSizeChange, this);
-    m_heightEntry->EntryChange.connect(&DespeckleWindow::onSizeChange, this);
+    m_widthEntry->Change.connect(&DespeckleWindow::onSizeChange, this);
+    m_heightEntry->Change.connect(&DespeckleWindow::onSizeChange, this);
   }
 
 private:
   void onSizeChange()
   {
-    m_filter.setSize(m_widthEntry->getTextInt(),
-                     m_heightEntry->getTextInt());
+    m_filter.setSize(m_widthEntry->textInt(),
+                     m_heightEntry->textInt());
     restartPreview();
   }
 
@@ -98,8 +86,8 @@ public:
   Command* clone() const override { return new DespeckleCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 DespeckleCommand::DespeckleCommand()
@@ -117,10 +105,11 @@ bool DespeckleCommand::onEnabled(Context* context)
 
 void DespeckleCommand::onExecute(Context* context)
 {
-  IDocumentSettings* docSettings = context->settings()->getDocumentSettings(context->activeDocument());
+  DocumentPreferences& docPref = Preferences::instance()
+    .document(context->activeDocument());
 
   MedianFilter filter;
-  filter.setTiledMode(docSettings->getTiledMode());
+  filter.setTiledMode((filters::TiledMode)docPref.tiled.mode());
   filter.setSize(get_config_int(ConfigSection, "Width", 3),
                  get_config_int(ConfigSection, "Height", 3));
 

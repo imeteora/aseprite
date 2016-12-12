@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -25,7 +13,7 @@
 #include "app/document_api.h"
 #include "app/modules/gui.h"
 #include "app/ui/color_bar.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "doc/sprite.h"
 
 namespace app {
@@ -36,8 +24,8 @@ public:
   Command* clone() const override { return new FlattenLayersCommand(*this); }
 
 protected:
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 FlattenLayersCommand::FlattenLayersCommand()
@@ -58,9 +46,9 @@ void FlattenLayersCommand::onExecute(Context* context)
   Document* document = writer.document();
   Sprite* sprite = writer.sprite();
   {
-    UndoTransaction undoTransaction(writer.context(), "Flatten Layers");
-    document->getApi().flattenLayers(sprite);
-    undoTransaction.commit();
+    Transaction transaction(writer.context(), "Flatten Layers");
+    document->getApi(transaction).flattenLayers(sprite);
+    transaction.commit();
   }
   update_screen_for_document(writer.document());
 }

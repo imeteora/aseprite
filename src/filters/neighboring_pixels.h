@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef FILTERS_NEIGHBORING_PIXELS_H_INCLUDED
 #define FILTERS_NEIGHBORING_PIXELS_H_INCLUDED
@@ -39,13 +27,11 @@ namespace filters {
                                      TiledMode tiledMode,
                                      Delegate& delegate)
   {
-    int dx, dy;
-
     // Y position to get pixel.
     int getx, gety = y - centerY;
     int addx, addy = 0;
     if (gety < 0) {
-      if (tiledMode & TILED_Y_AXIS)
+      if (int(tiledMode) & int(TiledMode::Y_AXIS))
         gety = sourceImage->height() - (-(gety+1) % sourceImage->height()) - 1;
       else {
         addy = -gety;
@@ -53,18 +39,18 @@ namespace filters {
       }
     }
     else if (gety >= sourceImage->height()) {
-      if (tiledMode & TILED_Y_AXIS)
+      if (int(tiledMode) & int(TiledMode::Y_AXIS))
         gety = gety % sourceImage->height();
       else
         gety = sourceImage->height()-1;
     }
 
-    for (dy=0; dy<height; ++dy) {
+    for (int dy=0; dy<height; ++dy) {
       // X position to get pixel.
       getx = x - centerX;
       addx = 0;
       if (getx < 0) {
-        if (tiledMode & TILED_X_AXIS)
+        if (int(tiledMode) & int(TiledMode::X_AXIS))
           getx = sourceImage->width() - (-(getx+1) % sourceImage->width()) - 1;
         else {
           addx = -getx;
@@ -72,7 +58,7 @@ namespace filters {
         }
       }
       else if (getx >= sourceImage->width()) {
-        if (tiledMode & TILED_X_AXIS)
+        if (int(tiledMode) & int(TiledMode::X_AXIS))
           getx = getx % sourceImage->width();
         else
           getx = sourceImage->width()-1;
@@ -81,7 +67,7 @@ namespace filters {
       typename Traits::const_address_t srcAddress =
         reinterpret_cast<typename Traits::const_address_t>(sourceImage->getPixelAddress(getx, gety));
 
-      for (dx=0; dx<width; dx++) {
+      for (int dx=0; dx<width; dx++) {
         // Call the delegate for each pixel value.
         delegate(*srcAddress);
 
@@ -93,7 +79,7 @@ namespace filters {
           else
             --addx;
         }
-        else if (tiledMode & TILED_X_AXIS) {
+        else if (int(tiledMode) & int(TiledMode::X_AXIS)) {
           getx = 0;
           srcAddress =
             reinterpret_cast<typename Traits::const_address_t>(sourceImage->getPixelAddress(getx, gety));
@@ -107,7 +93,7 @@ namespace filters {
         else
           --addy;
       }
-      else if (tiledMode & TILED_Y_AXIS)
+      else if (int(tiledMode) & int(TiledMode::Y_AXIS))
         gety = 0;
     }
   }

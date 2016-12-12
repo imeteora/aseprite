@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -23,8 +11,7 @@
 #include "app/commands/command.h"
 
 #include "app/app.h"
-#include "app/ui/main_window.h"
-#include "app/ui/tabs.h"
+#include "app/ui/workspace.h"
 
 namespace app {
 
@@ -34,7 +21,8 @@ public:
   Command* clone() const override { return new GotoNextTabCommand(*this); }
 
 protected:
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 GotoNextTabCommand::GotoNextTabCommand()
@@ -44,9 +32,14 @@ GotoNextTabCommand::GotoNextTabCommand()
 {
 }
 
+bool GotoNextTabCommand::onEnabled(Context* context)
+{
+  return App::instance()->workspace()->canSelectOtherTab();
+}
+
 void GotoNextTabCommand::onExecute(Context* context)
 {
-  App::instance()->getMainWindow()->getTabsBar()->selectNextTab();
+  App::instance()->workspace()->selectNextTab();
 }
 
 class GotoPreviousTabCommand : public Command {
@@ -55,7 +48,8 @@ public:
   Command* clone() const override { return new GotoPreviousTabCommand(*this); }
 
 protected:
-  void onExecute(Context* context);
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 GotoPreviousTabCommand::GotoPreviousTabCommand()
@@ -65,9 +59,14 @@ GotoPreviousTabCommand::GotoPreviousTabCommand()
 {
 }
 
+bool GotoPreviousTabCommand::onEnabled(Context* context)
+{
+  return App::instance()->workspace()->canSelectOtherTab();
+}
+
 void GotoPreviousTabCommand::onExecute(Context* context)
 {
-  App::instance()->getMainWindow()->getTabsBar()->selectPreviousTab();
+  App::instance()->workspace()->selectPreviousTab();
 }
 
 Command* CommandFactory::createGotoNextTabCommand()

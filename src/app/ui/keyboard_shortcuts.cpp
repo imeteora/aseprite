@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -28,8 +16,6 @@
 #include "app/commands/commands.h"
 #include "app/commands/params.h"
 #include "app/document.h"
-#include "app/document_location.h"
-#include "app/settings/settings.h"
 #include "app/tools/ink.h"
 #include "app/tools/tool.h"
 #include "app/tools/tool_box.h"
@@ -52,10 +38,15 @@ namespace {
     { "SnapToGrid"          , "Snap To Grid"       , app::KeyAction::SnapToGrid },
     { "AngleSnap"           , "Angle Snap"         , app::KeyAction::AngleSnap },
     { "MaintainAspectRatio" , "Maintain Aspect Ratio", app::KeyAction::MaintainAspectRatio },
+    { "ScaleFromCenter"     , "Scale From Center"   , app::KeyAction::ScaleFromCenter },
     { "LockAxis"            , "Lock Axis"          , app::KeyAction::LockAxis },
     { "AddSelection"        , "Add Selection"      , app::KeyAction::AddSelection },
     { "SubtractSelection"   , "Subtract Selection" , app::KeyAction::SubtractSelection },
-    { "AutoSelectLayer"     , "Auto Select Layer" , app::KeyAction::AutoSelectLayer },
+    { "AutoSelectLayer"     , "Auto Select Layer"  , app::KeyAction::AutoSelectLayer },
+    { "StraightLineFromLastPoint", "Straight Line from Last Point", app::KeyAction::StraightLineFromLastPoint },
+    { "MoveOrigin"          , "Move Origin"      , app::KeyAction::MoveOrigin },
+    { "SquareAspect"        , "Square Aspect"      , app::KeyAction::SquareAspect },
+    { "DrawFromCenter"      , "Draw From Center"   , app::KeyAction::DrawFromCenter },
     { "LeftMouseButton"     , "Trigger Left Mouse Button" , app::KeyAction::LeftMouseButton },
     { "RightMouseButton"    , "Trigger Right Mouse Button" , app::KeyAction::RightMouseButton },
     { NULL                  , NULL                 , app::KeyAction::None }
@@ -65,11 +56,11 @@ namespace {
   {
     const char* shortcut = NULL;
 
-#if defined ALLEGRO_WINDOWS
+#ifdef _WIN32
     if (!shortcut) shortcut = elem->Attribute("win");
-#elif defined ALLEGRO_MACOSX
+#elif defined __APPLE__
     if (!shortcut) shortcut = elem->Attribute("mac");
-#elif defined ALLEGRO_UNIX
+#else
     if (!shortcut) shortcut = elem->Attribute("linux");
 #endif
 
@@ -77,13 +68,6 @@ namespace {
       shortcut = elem->Attribute("shortcut");
 
     return shortcut;
-  }
-
-  bool bool_attr_is_true(const TiXmlElement* elem, const char* attribute_name)
-  {
-    const char* value = elem->Attribute(attribute_name);
-
-    return (value != NULL) && (strcmp(value, "true") == 0);
   }
 
   std::string get_user_friendly_string_for_keyaction(app::KeyAction action)
@@ -94,7 +78,7 @@ namespace {
     }
     return "";
   }
-  
+
 } // anonymous namespace
 
 namespace base {
@@ -117,7 +101,7 @@ namespace base {
     }
     return "";
   }
-  
+
 } // namespace base
 
 namespace app {
@@ -127,12 +111,12 @@ using namespace ui;
 //////////////////////////////////////////////////////////////////////
 // Key
 
-Key::Key(Command* command, const Params* params, KeyContext keyContext)
+Key::Key(Command* command, const Params& params, KeyContext keyContext)
   : m_type(KeyType::Command)
   , m_useUsers(false)
   , m_keycontext(keyContext)
   , m_command(command)
-  , m_params(params ? params->clone(): NULL)
+  , m_params(params)
 {
 }
 
@@ -155,28 +139,31 @@ Key::Key(KeyAction action)
       m_keycontext = KeyContext::Any;
       break;
     case KeyAction::CopySelection:
-      m_keycontext = KeyContext::MovingPixels;
-      break;
     case KeyAction::SnapToGrid:
-      m_keycontext = KeyContext::MovingPixels;
+    case KeyAction::LockAxis:
+      m_keycontext = KeyContext::TranslatingSelection;
       break;
     case KeyAction::AngleSnap:
-      m_keycontext = KeyContext::MovingPixels;
+      m_keycontext = KeyContext::RotatingSelection;
       break;
     case KeyAction::MaintainAspectRatio:
-      m_keycontext = KeyContext::MovingPixels;
-      break;
-    case KeyAction::LockAxis:
-      m_keycontext = KeyContext::MovingPixels;
+    case KeyAction::ScaleFromCenter:
+      m_keycontext = KeyContext::ScalingSelection;
       break;
     case KeyAction::AddSelection:
-      m_keycontext = KeyContext::Selection;
-      break;
     case KeyAction::SubtractSelection:
-      m_keycontext = KeyContext::Selection;
+      m_keycontext = KeyContext::SelectionTool;
       break;
     case KeyAction::AutoSelectLayer:
       m_keycontext = KeyContext::MoveTool;
+      break;
+    case KeyAction::StraightLineFromLastPoint:
+      m_keycontext = KeyContext::FreehandTool;
+      break;
+    case KeyAction::MoveOrigin:
+    case KeyAction::SquareAspect:
+    case KeyAction::DrawFromCenter:
+      m_keycontext = KeyContext::ShapeTool;
       break;
     case KeyAction::LeftMouseButton:
       m_keycontext = KeyContext::Any;
@@ -214,7 +201,7 @@ bool Key::isPressed(Message* msg) const
   ASSERT(dynamic_cast<KeyMessage*>(msg) != NULL);
 
   for (const Accelerator& accel : accels()) {
-    if (accel.check(msg->keyModifiers(),
+    if (accel.isPressed(msg->modifiers(),
           static_cast<KeyMessage*>(msg)->scancode(),
           static_cast<KeyMessage*>(msg)->unicodeChar()) &&
         (m_keycontext == KeyContext::Any ||
@@ -226,10 +213,19 @@ bool Key::isPressed(Message* msg) const
   return false;
 }
 
-bool Key::checkFromAllegroKeyArray()
+bool Key::isPressed() const
 {
   for (const Accelerator& accel : this->accels()) {
-    if (accel.checkFromAllegroKeyArray())
+    if (accel.isPressed())
+      return true;
+  }
+  return false;
+}
+
+bool Key::isLooselyPressed() const
+{
+  for (const Accelerator& accel : this->accels()) {
+    if (accel.isLooselyPressed())
       return true;
   }
   return false;
@@ -264,8 +260,7 @@ std::string Key::triggerString() const
 {
   switch (m_type) {
     case KeyType::Command:
-      if (m_params)
-        m_command->loadParams(m_params);
+      m_command->loadParams(m_params);
       return m_command->friendlyName();
     case KeyType::Tool:
     case KeyType::Quicktool: {
@@ -320,7 +315,7 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
     const char* command_key = get_shortcut(xmlKey);
     bool removed = bool_attr_is_true(xmlKey, "removed");
 
-    if (command_name && command_key) {
+    if (command_name) {
       Command* command = CommandsModule::instance()->getCommandByName(command_name);
       if (command) {
         // Read context
@@ -328,7 +323,7 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
         const char* keycontextstr = xmlKey->Attribute("context");
         if (keycontextstr) {
           if (strcmp(keycontextstr, "Selection") == 0)
-            keycontext = KeyContext::Selection;
+            keycontext = KeyContext::SelectionTool;
           else if (strcmp(keycontextstr, "Normal") == 0)
             keycontext = KeyContext::Normal;
         }
@@ -347,22 +342,21 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
           xmlParam = xmlParam->NextSiblingElement();
         }
 
-        PRINTF(" - Shortcut for command `%s' <%s>\n", command_name, command_key);
-
         // add the keyboard shortcut to the command
-        Key* key = this->command(command_name, &params, keycontext);
-        if (key) {
+        Key* key = this->command(command_name, params, keycontext);
+        if (key && command_key) {
           Accelerator accel(command_key);
 
           if (!removed) {
             key->add(accel, source);
 
-            // Add the shortcut to the menuitems with this
-            // command (this is only visual, the "manager_msg_proc"
-            // is the only one that process keyboard shortcuts)
+            // Add the shortcut to the menuitems with this command
+            // (this is only visual, the
+            // "CustomizedGuiManager::onProcessMessage" is the only
+            // one that process keyboard shortcuts)
             if (key->accels().size() == 1) {
               AppMenus::instance()->applyShortcutToMenuitemsWithCommand(
-                command, &params, key);
+                command, params, key);
             }
           }
           else
@@ -384,13 +378,12 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
     const char* tool_key = get_shortcut(xmlKey);
     bool removed = bool_attr_is_true(xmlKey, "removed");
 
-    if (tool_id && tool_key) {
-      tools::Tool* tool = App::instance()->getToolBox()->getToolById(tool_id);
+    if (tool_id) {
+      tools::Tool* tool = App::instance()->toolBox()->getToolById(tool_id);
       if (tool) {
-        PRINTF(" - Shortcut for tool `%s': <%s>\n", tool_id, tool_key);
-
         Key* key = this->tool(tool);
-        if (key) {
+        if (key && tool_key) {
+          LOG(VERBOSE) << "KEYS: Shortcut for tool " << tool_id << ": " << tool_key << "\n";
           Accelerator accel(tool_key);
 
           if (!removed)
@@ -413,13 +406,12 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
     const char* tool_key = get_shortcut(xmlKey);
     bool removed = bool_attr_is_true(xmlKey, "removed");
 
-    if (tool_id && tool_key) {
-      tools::Tool* tool = App::instance()->getToolBox()->getToolById(tool_id);
+    if (tool_id) {
+      tools::Tool* tool = App::instance()->toolBox()->getToolById(tool_id);
       if (tool) {
-        PRINTF(" - Shortcut for quicktool `%s': <%s>\n", tool_id, tool_key);
-
         Key* key = this->quicktool(tool);
-        if (key) {
+        if (key && tool_key) {
+          LOG(VERBOSE) << "KEYS: Shortcut for quicktool " << tool_id << ": " << tool_key << "\n";
           Accelerator accel(tool_key);
 
           if (!removed)
@@ -442,14 +434,12 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
     const char* tool_key = get_shortcut(xmlKey);
     bool removed = bool_attr_is_true(xmlKey, "removed");
 
-    if (tool_action && tool_key) {
-      PRINTF(" - Shortcut for sprite editor `%s': <%s>\n", tool_action, tool_key);
-
+    if (tool_action) {
       KeyAction action = base::convert_to<KeyAction, std::string>(tool_action);
-
       if (action != KeyAction::None) {
         Key* key = this->action(action);
-        if (key) {
+        if (key && tool_key) {
+          LOG(VERBOSE) << "KEYS: Shortcut for action " << tool_action << ": " << tool_key << "\n";
           Accelerator accel(tool_key);
 
           if (!removed)
@@ -466,7 +456,7 @@ void KeyboardShortcuts::importFile(TiXmlElement* rootElement, KeySource source)
 void KeyboardShortcuts::importFile(const std::string& filename, KeySource source)
 {
   XmlDocumentRef doc = app::open_xml(filename);
-  TiXmlHandle handle(doc);
+  TiXmlHandle handle(doc.get());
   TiXmlElement* xmlKey = handle.FirstChild("keyboard").ToElement();
 
   importFile(xmlKey, source);
@@ -488,11 +478,14 @@ void KeyboardShortcuts::exportFile(const std::string& filename)
   exportKeys(tools, KeyType::Tool);
   exportKeys(quicktools, KeyType::Quicktool);
   exportKeys(actions, KeyType::Action);
-  
+
   keyboard.InsertEndChild(commands);
   keyboard.InsertEndChild(tools);
   keyboard.InsertEndChild(quicktools);
   keyboard.InsertEndChild(actions);
+
+  TiXmlDeclaration declaration("1.0", "utf-8", "");
+  doc->InsertEndChild(declaration);
   doc->InsertEndChild(keyboard);
   save_xml(doc, filename);
 }
@@ -521,7 +514,7 @@ void KeyboardShortcuts::exportAccel(TiXmlElement& parent, Key* key, const ui::Ac
     case KeyType::Command: {
       const char* keycontextStr = NULL;
 
-      elem.SetAttribute("command", key->command()->short_name());
+      elem.SetAttribute("command", key->command()->id().c_str());
 
       switch (key->keycontext()) {
         case KeyContext::Any:
@@ -530,30 +523,40 @@ void KeyboardShortcuts::exportAccel(TiXmlElement& parent, Key* key, const ui::Ac
         case KeyContext::Normal:
           keycontextStr = "Normal";
           break;
-        case KeyContext::Selection:
+        case KeyContext::SelectionTool:
           keycontextStr = "Selection";
           break;
-        case KeyContext::MovingPixels:
-          keycontextStr = "MovingPixels";
+        case KeyContext::TranslatingSelection:
+          keycontextStr = "TranslatingSelection";
+          break;
+        case KeyContext::ScalingSelection:
+          keycontextStr = "ScalingSelection";
+          break;
+        case KeyContext::RotatingSelection:
+          keycontextStr = "RotatingSelection";
           break;
         case KeyContext::MoveTool:
           keycontextStr = "MoveTool";
+          break;
+        case KeyContext::FreehandTool:
+          keycontextStr = "FreehandTool";
+          break;
+        case KeyContext::ShapeTool:
+          keycontextStr = "ShapeTool";
           break;
       }
 
       if (keycontextStr)
         elem.SetAttribute("context", keycontextStr);
 
-      if (key->params()) {
-        for (const auto& param : *key->params()) {
-          if (param.second.empty())
-            continue;
+      for (const auto& param : key->params()) {
+        if (param.second.empty())
+          continue;
 
-          TiXmlElement paramElem("param");
-          paramElem.SetAttribute("name", param.first.c_str());
-          paramElem.SetAttribute("value", param.second.c_str());
-          elem.InsertEndChild(paramElem);
-        }
+        TiXmlElement paramElem("param");
+        paramElem.SetAttribute("name", param.first.c_str());
+        paramElem.SetAttribute("value", param.second.c_str());
+        elem.InsertEndChild(paramElem);
       }
       break;
     }
@@ -583,8 +586,7 @@ void KeyboardShortcuts::reset()
     key->reset();
 }
 
-Key* KeyboardShortcuts::command(const char* commandName,
-  Params* params, KeyContext keyContext)
+Key* KeyboardShortcuts::command(const char* commandName, const Params& params, KeyContext keyContext)
 {
   Command* command = CommandsModule::instance()->getCommandByName(commandName);
   if (!command)
@@ -594,8 +596,7 @@ Key* KeyboardShortcuts::command(const char* commandName,
     if (key->type() == KeyType::Command &&
         key->keycontext() == keyContext &&
         key->command() == command &&
-        ((!params && key->params()->empty()) ||
-          (params && *key->params() == *params))) {
+        key->params() == params) {
       return key;
     }
   }
@@ -657,19 +658,17 @@ void KeyboardShortcuts::disableAccel(const ui::Accelerator& accel, KeyContext ke
 
 KeyContext KeyboardShortcuts::getCurrentKeyContext()
 {
-  app::Context* ctx = UIContext::instance();
-  DocumentLocation location = ctx->activeLocation();
-  Document* doc = location.document();
+  Document* doc = UIContext::instance()->activeDocument();
 
   if (doc &&
       doc->isMaskVisible() &&
-      ctx->settings()->getCurrentTool()->getInk(0)->isSelection())
-    return KeyContext::Selection;
+      App::instance()->activeTool()->getInk(0)->isSelection())
+    return KeyContext::SelectionTool;
   else
     return KeyContext::Normal;
 }
 
-bool KeyboardShortcuts::getCommandFromKeyMessage(Message* msg, Command** command, Params** params)
+bool KeyboardShortcuts::getCommandFromKeyMessage(Message* msg, Command** command, Params* params)
 {
   for (Key* key : m_keys) {
     if (key->type() == KeyType::Command && key->isPressed(msg)) {
@@ -685,23 +684,38 @@ tools::Tool* KeyboardShortcuts::getCurrentQuicktool(tools::Tool* currentTool)
 {
   if (currentTool && currentTool->getInk(0)->isSelection()) {
     Key* key = action(KeyAction::CopySelection);
-    if (key && key->checkFromAllegroKeyArray())
+    if (key && key->isPressed())
       return NULL;
   }
 
-  tools::ToolBox* toolbox = App::instance()->getToolBox();
+  tools::ToolBox* toolbox = App::instance()->toolBox();
 
   // Iterate over all tools
   for (tools::Tool* tool : *toolbox) {
     Key* key = quicktool(tool);
 
     // Collect all tools with the pressed keyboard-shortcut
-    if (key && key->checkFromAllegroKeyArray()) {
+    if (key && key->isPressed()) {
       return tool;
     }
   }
 
   return NULL;
+}
+
+KeyAction KeyboardShortcuts::getCurrentActionModifiers(KeyContext context)
+{
+  KeyAction flags = KeyAction::None;
+
+  for (Key* key : m_keys) {
+    if (key->type() == KeyType::Action &&
+        key->keycontext() == context &&
+        key->isLooselyPressed()) {
+      flags = static_cast<KeyAction>(int(flags) | int(key->action()));
+    }
+  }
+
+  return flags;
 }
 
 } // namespace app

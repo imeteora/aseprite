@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,8 +8,8 @@
 #define UI_WINDOW_H_INCLUDED
 #pragma once
 
-#include "base/signal.h"
 #include "gfx/point.h"
+#include "obs/signal.h"
 #include "ui/close_event.h"
 #include "ui/event.h"
 #include "ui/hit_test_event.h"
@@ -17,15 +17,14 @@
 
 namespace ui {
 
-  class Window : public Widget
-  {
+  class Window : public Widget {
   public:
     enum Type { DesktopWindow, WithTitleBar, WithoutTitleBar };
 
     explicit Window(Type type, const std::string& text = "");
     ~Window();
 
-    Widget* getKiller();
+    Widget* closer() const { return m_closer; }
 
     void setAutoRemap(bool state);
     void setMoveable(bool state);
@@ -40,13 +39,14 @@ namespace ui {
 
     void openWindow();
     void openWindowInForeground();
-    void closeWindow(Widget* killer);
+    void closeWindow(Widget* closer);
 
     bool isTopLevel();
     bool isForeground() const { return m_isForeground; }
     bool isDesktop() const { return m_isDesktop; }
     bool isOnTop() const { return m_isOnTop; }
     bool isWantFocus() const { return m_isWantFocus; }
+    bool isSizeable() const { return m_isSizeable; }
     bool isMoveable() const { return m_isMoveable; }
 
     HitTest hitTest(const gfx::Point& point);
@@ -54,12 +54,12 @@ namespace ui {
     void removeDecorativeWidgets();
 
     // Signals
-    Signal1<void, CloseEvent&> Close;
+    obs::signal<void (CloseEvent&)> Close;
 
   protected:
     virtual bool onProcessMessage(Message* msg) override;
     virtual void onResize(ResizeEvent& ev) override;
-    virtual void onPreferredSize(PreferredSizeEvent& ev) override;
+    virtual void onSizeHint(SizeHintEvent& ev) override;
     virtual void onPaint(PaintEvent& ev) override;
     virtual void onBroadcastMouseMessage(WidgetsList& targets) override;
     virtual void onSetText() override;
@@ -68,6 +68,7 @@ namespace ui {
     virtual void onClose(CloseEvent& ev);
     virtual void onHitTest(HitTestEvent& ev);
     virtual void onWindowResize();
+    virtual void onWindowMovement();
 
   private:
     void windowSetPosition(const gfx::Rect& rect);
@@ -75,7 +76,7 @@ namespace ui {
     void limitSize(int* w, int* h);
     void moveWindow(const gfx::Rect& rect, bool use_blit);
 
-    Widget* m_killer;
+    Widget* m_closer;
     bool m_isDesktop : 1;
     bool m_isMoveable : 1;
     bool m_isSizeable : 1;

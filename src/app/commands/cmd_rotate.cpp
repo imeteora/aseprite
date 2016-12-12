@@ -1,40 +1,32 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include "app/app.h"
-#include "app/commands/command.h"
+#include "app/commands/cmd_rotate.h"
 #include "app/commands/params.h"
 #include "app/context_access.h"
 #include "app/document_api.h"
 #include "app/document_range.h"
 #include "app/job.h"
+#include "app/modules/editors.h"
 #include "app/modules/gui.h"
+#include "app/tools/tool_box.h"
+#include "app/transaction.h"
 #include "app/ui/color_bar.h"
-#include "app/ui/main_window.h"
+#include "app/ui/editor/editor.h"
 #include "app/ui/timeline.h"
-#include "app/undo_transaction.h"
+#include "app/ui/toolbar.h"
 #include "app/util/range_utils.h"
 #include "base/convert_to.h"
 #include "doc/cel.h"
+#include "doc/cels_range.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -42,24 +34,7 @@
 
 namespace app {
 
-class RotateCommand : public Command {
-public:
-  RotateCommand();
-  Command* clone() const override { return new RotateCommand(*this); }
-
-protected:
-  void onLoadParams(Params* params);
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
-  std::string onGetFriendlyName() const;
-
-private:
-  bool m_flipMask;
-  int m_angle;
-};
-
-class RotateJob : public Job
-{
+class RotateJob : public Job {
   ContextWriter m_writer;
   Document* m_document;
   Sprite* m_sprite;
@@ -82,44 +57,48 @@ public:
 
 protected:
 
-  /**
-   * [working thread]
-   */
+  // [working thread]
   virtual void onJob()
   {
-    UndoTransaction undoTransaction(m_writer.context(), "Rotate Canvas");
-    DocumentApi api = m_document->getApi();
+    Transaction transaction(m_writer.context(), "Rotate Canvas");
+    DocumentApi api = m_document->getApi(transaction);
 
-    // for each cel...
+    // 1) Rotate cel positions
+    for (Cel* cel : m_cels) {
+      Image* image = cel->image();
+      if (!image)
+        continue;
+
+      switch (m_angle) {
+        case 180:
+          api.setCelPosition(m_sprite, cel,
+            m_sprite->width() - cel->x() - image->width(),
+            m_sprite->height() - cel->y() - image->height());
+          break;
+        case 90:
+          api.setCelPosition(m_sprite, cel,
+            m_sprite->height() - cel->y() - image->height(),
+            cel->x());
+          break;
+        case -90:
+          api.setCelPosition(m_sprite, cel,
+            cel->y(),
+            m_sprite->width() - cel->x() - image->width());
+          break;
+      }
+    }
+
+    // 2) Rotate images
     int i = 0;
     for (Cel* cel : m_cels) {
       Image* image = cel->image();
       if (image) {
-        // change it location
-        switch (m_angle) {
-          case 180:
-            api.setCelPosition(m_sprite, cel,
-              m_sprite->width() - cel->x() - image->width(),
-              m_sprite->height() - cel->y() - image->height());
-            break;
-          case 90:
-            api.setCelPosition(m_sprite, cel,
-              m_sprite->height() - cel->y() - image->height(),
-              cel->x());
-            break;
-          case -90:
-            api.setCelPosition(m_sprite, cel,
-              cel->y(),
-              m_sprite->width() - cel->x() - image->width());
-            break;
-        }
-
-        // rotate the image
         ImageRef new_image(Image::create(image->pixelFormat(),
             m_angle == 180 ? image->width(): image->height(),
             m_angle == 180 ? image->height(): image->width()));
-        doc::rotate_image(image, new_image, m_angle);
+        new_image->setMaskColor(image->maskColor());
 
+        doc::rotate_image(image, new_image.get(), m_angle);
         api.replaceImage(m_sprite, cel->imageRef(), new_image);
       }
 
@@ -128,7 +107,7 @@ protected:
 
       // cancel all the operation?
       if (isCanceled())
-        return;        // UndoTransaction destructor will undo all operations
+        return;        // Transaction destructor will undo all operations
     }
 
     // rotate mask
@@ -173,7 +152,7 @@ protected:
       api.setSpriteSize(m_sprite, m_sprite->height(), m_sprite->width());
 
     // commit changes
-    undoTransaction.commit();
+    transaction.commit();
   }
 
 };
@@ -187,13 +166,13 @@ RotateCommand::RotateCommand()
   m_angle = 0;
 }
 
-void RotateCommand::onLoadParams(Params* params)
+void RotateCommand::onLoadParams(const Params& params)
 {
-  std::string target = params->get("target");
+  std::string target = params.get("target");
   m_flipMask = (target == "mask");
 
-  if (params->has_param("angle")) {
-    m_angle = strtol(params->get("angle").c_str(), NULL, 10);
+  if (params.has_param("angle")) {
+    m_angle = strtol(params.get("angle").c_str(), NULL, 10);
   }
 }
 
@@ -205,34 +184,52 @@ bool RotateCommand::onEnabled(Context* context)
 
 void RotateCommand::onExecute(Context* context)
 {
-  ContextReader reader(context);
   {
+    Site site = context->activeSite();
     CelList cels;
     bool rotateSprite = false;
 
     // Flip the mask or current cel
     if (m_flipMask) {
-      DocumentRange range = App::instance()->getMainWindow()->getTimeline()->range();
+      auto range = App::instance()->timeline()->range();
       if (range.enabled())
-        cels = get_cels_in_range(reader.sprite(), range);
-      else if (reader.cel())
-        cels.push_back(reader.cel());
+        cels = get_unique_cels(site.sprite(), range);
+      else if (site.cel()) {
+        // If we want to rotate the visible mask for the current cel,
+        // we can go to MovingPixelsState.
+        if (static_cast<app::Document*>(site.document())->isMaskVisible()) {
+          // Select marquee tool
+          if (tools::Tool* tool = App::instance()->toolBox()
+              ->getToolById(tools::WellKnownTools::RectangularMarquee)) {
+            ToolBar::instance()->selectTool(tool);
+            current_editor->startSelectionTransformation(gfx::Point(0, 0), m_angle);
+            return;
+          }
+        }
+
+        cels.push_back(site.cel());
+      }
     }
     // Flip the whole sprite
-    else if (reader.sprite()) {
-      reader.sprite()->getCels(cels);
+    else if (site.sprite()) {
+      for (Cel* cel : site.sprite()->uniqueCels())
+        cels.push_back(cel);
+
       rotateSprite = true;
     }
 
     if (cels.empty())           // Nothing to do
       return;
 
-    RotateJob job(reader, m_angle, cels, rotateSprite);
-    job.startJob();
-    job.waitJob();
+    ContextReader reader(context);
+    {
+      RotateJob job(reader, m_angle, cels, rotateSprite);
+      job.startJob();
+      job.waitJob();
+    }
+    reader.document()->generateMaskBoundaries();
+    update_screen_for_document(reader.document());
   }
-  reader.document()->generateMaskBoundaries();
-  update_screen_for_document(reader.document());
 }
 
 std::string RotateCommand::onGetFriendlyName() const

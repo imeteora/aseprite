@@ -1,73 +1,76 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_EDITOR_PIXELS_MOVEMENT_H_INCLUDED
 #define APP_UI_EDITOR_PIXELS_MOVEMENT_H_INCLUDED
 #pragma once
 
 #include "app/context_access.h"
-#include "app/settings/settings_observers.h"
+#include "app/extra_cel.h"
+#include "app/transaction.h"
 #include "app/ui/editor/handle_type.h"
-#include "app/undo_transaction.h"
 #include "base/shared_ptr.h"
-#include "gfx/size.h"
 #include "doc/algorithm/flip_type.h"
+#include "doc/site.h"
+#include "gfx/size.h"
+#include "obs/connection.h"
 
 namespace doc {
   class Image;
+  class Mask;
   class Sprite;
 }
 
 namespace app {
   class Document;
 
+  namespace cmd {
+    class SetMask;
+  }
+
   // Helper class to move pixels interactively and control undo history
   // correctly.  The extra cel of the sprite is temporally used to show
   // feedback, drag, and drop the specified image in the constructor
   // (which generally would be the selected region or the clipboard
   // content).
-  class PixelsMovement : public SelectionSettingsObserver {
+  class PixelsMovement {
   public:
     enum MoveModifier {
       NormalMovement = 1,
       SnapToGridMovement = 2,
       AngleSnapMovement = 4,
       MaintainAspectRatioMovement = 8,
-      LockAxisMovement = 16
+      LockAxisMovement = 16,
+      ScaleFromPivot = 32,
     };
 
-    // The "moveThis" image specifies the chunk of pixels to be moved.
-    // The "x" and "y" parameters specify the initial position of the image.
+    enum CommitChangesOption {
+      DontCommitChanges,
+      CommitChanges,
+    };
+
+    enum KeepMaskOption {
+      DontKeepMask,
+      KeepMask,
+    };
+
     PixelsMovement(Context* context,
-      Document* document, Sprite* sprite, Layer* layer,
-      const Image* moveThis,
-      const gfx::Point& initialPos, int opacity,
-      const char* operationName);
+                   Site site,
+                   const Image* moveThis,
+                   const Mask* mask,
+                   const char* operationName);
     ~PixelsMovement();
 
+    HandleType handle() const { return m_handle; }
+
+    void trim();
     void cutMask();
     void copyMask();
     void catchImage(const gfx::Point& pos, HandleType handle);
     void catchImageAgain(const gfx::Point& pos, HandleType handle);
-
-    // Creates a mask for the given image. Useful when the user paste a
-    // image from the clipboard.
-    void maskImage(const Image* image);
 
     // Moves the image to the new position (relative to the start
     // position given in the ctor).
@@ -75,20 +78,22 @@ namespace app {
 
     // Returns a copy of the current image being dragged with the
     // current transformation.
-    Image* getDraggedImageCopy(gfx::Point& origin);
+    void getDraggedImageCopy(base::UniquePtr<Image>& outputImage,
+                             base::UniquePtr<Mask>& outputMask);
 
     // Copies the image being dragged in the current position.
     void stampImage();
 
     void dropImageTemporarily();
     void dropImage();
-    void discardImage(bool commit = true);
+    void discardImage(const CommitChangesOption commit = CommitChanges,
+                      const KeepMaskOption keepMask = DontKeepMask);
     bool isDragging() const;
 
     gfx::Rect getImageBounds();
     gfx::Size getInitialImageSize() const;
 
-    void setMaskColor(color_t mask_color);
+    void setMaskColor(bool opaque, color_t mask_color);
 
     // Flips the image and mask in the given direction in "flipType".
     // Flip Horizontally/Vertically commands are replaced calling this
@@ -96,35 +101,46 @@ namespace app {
     // current selection instead of dropping and flipping it).
     void flipImage(doc::algorithm::FlipType flipType);
 
-    const gfx::Transformation& getTransformation() const { return m_currentData; }
+    // Rotates the image and the mask the given angle. It's used to
+    // simulate RotateCommand when we're inside MovingPixelsState.
+    void rotate(double angle);
 
-  protected:
-    void onSetRotationAlgorithm(RotationAlgorithm algorithm) override;
+    const Transformation& getTransformation() const { return m_currentData; }
 
   private:
+    void onPivotChange();
+    void onRotationAlgorithmChange();
     void redrawExtraImage();
     void redrawCurrentMask();
-    void drawImage(doc::Image* dst, const gfx::Point& pos);
-    void drawParallelogram(doc::Image* dst, doc::Image* src,
-      const gfx::Transformation::Corners& corners,
+    void drawImage(doc::Image* dst, const gfx::Point& pos, bool renderOriginalLayer);
+    void drawMask(doc::Mask* dst, bool shrink);
+    void drawParallelogram(doc::Image* dst, const doc::Image* src, const doc::Mask* mask,
+      const Transformation::Corners& corners,
       const gfx::Point& leftTop);
     void updateDocumentMask();
 
     const ContextReader m_reader;
+    Site m_site;
     Document* m_document;
     Sprite* m_sprite;
-    UndoTransaction m_undoTransaction;
-    bool m_firstDrop;
+    Layer* m_layer;
+    Transaction m_transaction;
+    cmd::SetMask* m_setMaskCmd;
     bool m_isDragging;
     bool m_adjustPivot;
     HandleType m_handle;
     Image* m_originalImage;
     gfx::Point m_catchPos;
-    gfx::Transformation m_initialData;
-    gfx::Transformation m_currentData;
+    Transformation m_initialData;
+    Transformation m_currentData;
     Mask* m_initialMask;
     Mask* m_currentMask;
+    bool m_opaque;
     color_t m_maskColor;
+    obs::scoped_connection m_pivotVisConn;
+    obs::scoped_connection m_pivotPosConn;
+    obs::scoped_connection m_rotAlgoConn;
+    ExtraCelRef m_extraCel;
   };
 
   inline PixelsMovement::MoveModifier& operator|=(PixelsMovement::MoveModifier& a,
@@ -133,8 +149,8 @@ namespace app {
     return a;
   }
 
-  typedef SharedPtr<PixelsMovement> PixelsMovementPtr;
-  
+  typedef base::SharedPtr<PixelsMovement> PixelsMovementPtr;
+
 } // namespace app
 
 #endif

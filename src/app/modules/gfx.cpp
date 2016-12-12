@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -35,7 +23,6 @@
 #include "app/ui/skin/skin_theme.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
-#include "doc/blend.h"
 #include "doc/image.h"
 #include "doc/palette.h"
 
@@ -74,69 +61,87 @@ static void rectgrid(ui::Graphics* g, const gfx::Rect& rc, const gfx::Size& tile
   }
 }
 
-static void draw_color(ui::Graphics* g, const Rect& rc, const app::Color& color)
+void draw_color(ui::Graphics* g,
+                const Rect& rc,
+                const app::Color& _color,
+                const doc::ColorMode colorMode)
 {
   if (rc.w < 1 || rc.h < 1)
     return;
 
-  app::Color::Type type = color.getType();
+  app::Color color = _color;
 
-  if (type == app::Color::MaskType) {
-    rectgrid(g, rc, gfx::Size(rc.w/4, rc.h/2));
-    return;
+  int alpha = color.getAlpha();
+
+  if (alpha < 255) {
+    if (rc.w == rc.h)
+      rectgrid(g, rc, gfx::Size(rc.w/2, rc.h/2));
+    else
+      rectgrid(g, rc, gfx::Size(rc.w/4, rc.h/2));
   }
-  else if (type == app::Color::IndexType) {
-    int index = color.getIndex();
 
-    if (index >= 0 && index < get_current_palette()->size()) {
-      g->fillRect(color_utils::color_for_ui(color), rc);
+  if (alpha > 0) {
+    if (colorMode == doc::ColorMode::GRAYSCALE) {
+      color = app::Color::fromGray(
+        color.getGray(),
+        color.getAlpha());
+    }
+
+    if (color.getType() == app::Color::IndexType) {
+      int index = color.getIndex();
+
+      if (index >= 0 && index < get_current_palette()->size()) {
+        g->fillRect(color_utils::color_for_ui(color), rc);
+      }
+      else {
+        g->fillRect(gfx::rgba(0, 0, 0), rc);
+        g->drawLine(gfx::rgba(255, 255, 255),
+                    gfx::Point(rc.x+rc.w-2, rc.y+1),
+                    gfx::Point(rc.x+1, rc.y+rc.h-2));
+      }
     }
     else {
-      g->fillRect(gfx::rgba(0, 0, 0), rc);
-      g->drawLine(gfx::rgba(255, 255, 255),
-        gfx::Point(rc.x+rc.w-2, rc.y+1),
-        gfx::Point(rc.x+1, rc.y+rc.h-2));
+      g->fillRect(color_utils::color_for_ui(color), rc);
     }
-    return;
   }
-
-  g->fillRect(color_utils::color_for_ui(color), rc);
 }
 
 void draw_color_button(ui::Graphics* g,
-  const Rect& rc, const app::Color& color,
-  bool hot, bool drag)
+                       const Rect& rc,
+                       const app::Color& color,
+                       const doc::ColorMode colorMode,
+                       const bool hot,
+                       const bool drag)
 {
-  SkinTheme* theme = (SkinTheme*)ui::CurrentTheme::get();
+  SkinTheme* theme = SkinTheme::instance();
   int scale = ui::guiscale();
 
   // Draw background (the color)
   draw_color(g,
-    Rect(rc.x+1*scale,
-      rc.y+1*scale,
-      rc.w-2*scale,
-      rc.h-2*scale), color);
+             Rect(rc.x+1*scale,
+                  rc.y+1*scale,
+                  rc.w-2*scale,
+                  rc.h-2*scale),
+             color,
+             colorMode);
 
   // Draw opaque border
-  {
-    int parts[8] = {
-      PART_COLORBAR_0_NW,
-      PART_COLORBAR_0_N,
-      PART_COLORBAR_1_NE,
-      PART_COLORBAR_1_E,
-      PART_COLORBAR_3_SE,
-      PART_COLORBAR_2_S,
-      PART_COLORBAR_2_SW,
-      PART_COLORBAR_0_W
-    };
-    theme->draw_bounds_array(g, rc, parts);
-  }
+  theme->drawRect(
+    g, rc,
+    theme->parts.colorbar0()->bitmapNW(),
+    theme->parts.colorbar0()->bitmapN(),
+    theme->parts.colorbar1()->bitmapNE(),
+    theme->parts.colorbar1()->bitmapE(),
+    theme->parts.colorbar3()->bitmapSE(),
+    theme->parts.colorbar2()->bitmapS(),
+    theme->parts.colorbar2()->bitmapSW(),
+    theme->parts.colorbar0()->bitmapW());
 
   // Draw hot
   if (hot) {
-    theme->draw_bounds_nw(g,
-      gfx::Rect(rc.x, rc.y, rc.w, rc.h-1 - 1*scale),
-      PART_COLORBAR_BORDER_HOTFG_NW);
+    theme->drawRect(
+      g, gfx::Rect(rc.x, rc.y, rc.w, rc.h-1 - 1*scale),
+      theme->parts.colorbarBorderHotfg().get());
   }
 }
 

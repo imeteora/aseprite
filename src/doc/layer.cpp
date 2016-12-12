@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,19 +10,18 @@
 
 #include "doc/layer.h"
 
-#include "doc/blend.h"
 #include "doc/cel.h"
 #include "doc/image.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
 
 #include <algorithm>
-#include <string.h>
+#include <cstring>
 
 namespace doc {
 
 Layer::Layer(ObjectType type, Sprite* sprite)
-  : Object(type)
+  : WithUserData(type)
   , m_sprite(sprite)
   , m_parent(NULL)
   , m_flags(LayerFlags(
@@ -85,6 +84,8 @@ Cel* Layer::cel(frame_t frame) const
 
 LayerImage::LayerImage(Sprite* sprite)
   : Layer(ObjectType::LayerImage, sprite)
+  , m_blendmode(BlendMode::NORMAL)
+  , m_opacity(255)
 {
 }
 
@@ -124,16 +125,11 @@ void LayerImage::destroyAllCels()
 
 Cel* LayerImage::cel(frame_t frame) const
 {
-  CelConstIterator it = getCelBegin();
-  CelConstIterator end = getCelEnd();
-
-  for (; it != end; ++it) {
-    Cel* cel = *it;
-    if (cel->frame() == frame)
-      return cel;
-  }
-
-  return NULL;
+  CelConstIterator it = findCelIterator(frame);
+  if (it != getCelEnd())
+    return *it;
+  else
+    return nullptr;
 }
 
 void LayerImage::getCels(CelList& cels) const
@@ -153,16 +149,55 @@ Cel* LayerImage::getLastCel() const
     return NULL;
 }
 
-void LayerImage::addCel(Cel *cel)
+CelConstIterator LayerImage::findCelIterator(frame_t frame) const
 {
-  CelIterator it = getCelBegin();
-  CelIterator end = getCelEnd();
+  CelIterator it = const_cast<LayerImage*>(this)->findCelIterator(frame);
+  return CelConstIterator(it);
+}
 
-  for (; it != end; ++it) {
-    if ((*it)->frame() > cel->frame())
-      break;
-  }
+CelIterator LayerImage::findCelIterator(frame_t frame)
+{
+  auto first = getCelBegin();
+  auto end = getCelEnd();
 
+  // Here we use a binary search to find the first cel equal to "frame" (or after frame)
+  first = std::lower_bound(
+    first, end, nullptr,
+    [frame](Cel* cel, Cel*) -> bool {
+      return cel->frame() < frame;
+    });
+
+  // We return the iterator only if it's an exact match
+  if (first != end && (*first)->frame() == frame)
+    return first;
+  else
+    return end;
+}
+
+CelIterator LayerImage::findFirstCelIteratorAfter(frame_t firstAfterFrame)
+{
+  auto first = getCelBegin();
+  auto end = getCelEnd();
+
+  // Here we use a binary search to find the first cel after the given frame
+  first = std::lower_bound(
+    first, end, nullptr,
+    [firstAfterFrame](Cel* cel, Cel*) -> bool {
+      return cel->frame() <= firstAfterFrame;
+    });
+
+  return first;
+}
+
+void LayerImage::addCel(Cel* cel)
+{
+  ASSERT(cel);
+  ASSERT(cel->data() && "The cel doesn't contain CelData");
+  ASSERT(cel->image());
+  ASSERT(sprite());
+  ASSERT(cel->image()->pixelFormat() == sprite()->pixelFormat());
+
+  CelIterator it = findFirstCelIteratorAfter(cel->frame());
   m_cels.insert(it, cel);
 
   cel->setParentLayer(this);
@@ -176,8 +211,8 @@ void LayerImage::addCel(Cel *cel)
  */
 void LayerImage::removeCel(Cel* cel)
 {
-  CelIterator it = std::find(m_cels.begin(), m_cels.end(), cel);
-
+  ASSERT(cel);
+  CelIterator it = findCelIterator(cel->frame());
   ASSERT(it != m_cels.end());
 
   m_cels.erase(it);
@@ -204,11 +239,28 @@ void LayerImage::configureAsBackground()
   ASSERT(sprite() != NULL);
   ASSERT(sprite()->backgroundLayer() == NULL);
 
-  setMovable(false);
-  setBackground(true);
+  switchFlags(LayerFlags::BackgroundLayerFlags, true);
   setName("Background");
 
   sprite()->folder()->stackLayer(this, NULL);
+}
+
+void LayerImage::displaceFrames(frame_t fromThis, frame_t delta)
+{
+  Sprite* sprite = this->sprite();
+
+  if (delta > 0) {
+    for (frame_t c=sprite->lastFrame(); c>=fromThis; --c) {
+      if (Cel* cel = this->cel(c))
+        moveCel(cel, c+delta);
+    }
+  }
+  else {
+    for (frame_t c=fromThis; c<=sprite->lastFrame(); ++c) {
+      if (Cel* cel = this->cel(c))
+        moveCel(cel, c+delta);
+    }
+  }
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -292,7 +344,13 @@ void LayerFolder::stackLayer(Layer* layer, Layer* after)
     m_layers.insert(after_it, layer);
   }
   else
-    m_layers.push_front(layer);
+    m_layers.insert(m_layers.begin(), layer);
+}
+
+void LayerFolder::displaceFrames(frame_t fromThis, frame_t delta)
+{
+  for (Layer* layer : m_layers)
+    layer->displaceFrames(fromThis, delta);
 }
 
 } // namespace doc

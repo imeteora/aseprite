@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -39,7 +27,6 @@ Image* load_pic_file(const char* filename, int* x, int* y, Palette** palette)
 {
   base::UniquePtr<Image> image;
   int size, compression;
-  int image_size;
   int block_size;
   int block_type;
   int version;
@@ -50,7 +37,8 @@ Image* load_pic_file(const char* filename, int* x, int* y, Palette** palette)
   int byte;
   int bpp;
 
-  base::FileHandle f(base::open_file_with_exception(filename, "rb"));
+  base::FileHandle handle(base::open_file_with_exception(filename, "rb"));
+  FILE* f = handle.get();
 
   // Animator format?
   magic = base::fgetw(f);
@@ -62,7 +50,7 @@ Image* load_pic_file(const char* filename, int* x, int* y, Palette** palette)
     *y = ((short)base::fgetw(f));       // Y offset
     bpp = std::fgetc(f);                // bits per pixel (must be 8)
     compression = std::fgetc(f);        // compression flag (must be 0)
-    image_size = base::fgetl(f);        // image size (in bytes)
+    base::fgetl(f);                     // image size (in bytes)
     std::fgetc(f);                      // reserved
 
     if (bpp != 8 || compression != 0) {
@@ -71,7 +59,7 @@ Image* load_pic_file(const char* filename, int* x, int* y, Palette** palette)
 
     // Read palette (RGB in 0-63)
     if (palette) {
-      *palette = new Palette(frame_t(0), Palette::MaxColors);
+      *palette = new Palette(frame_t(0), 256);
     }
     for (c=0; c<256; c++) {
       r = std::fgetc(f);
@@ -95,8 +83,9 @@ Image* load_pic_file(const char* filename, int* x, int* y, Palette** palette)
   }
 
   // rewind
-  f.reset(NULL);
-  f = base::open_file_with_exception(filename, "rb");
+  handle.reset();
+  handle = base::open_file_with_exception(filename, "rb");
+  f = handle.get();
 
   // read a PIC/MSK Animator Pro file
   size = base::fgetl(f);        // file size
@@ -184,7 +173,8 @@ int save_pic_file(const char *filename, int x, int y, const Palette* palette, co
   if ((bpp == 8) && (!palette))
     return -1;
 
-  base::FileHandle f(base::open_file_with_exception(filename, "wb"));
+  base::FileHandle handle(base::open_file_with_exception(filename, "wb"));
+  FILE* f = handle.get();
 
   size = 64;
   // Bit-per-pixel image data block

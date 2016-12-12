@@ -165,7 +165,7 @@ static int use_bgr_palette_hack = FALSE; /* use BGR hack for color conversion pa
 int _xwin_missed_input;
 #endif
 
-#define X_MAX_EVENTS   5
+#define X_MAX_EVENTS       50
 #define MOUSE_WARP_DELAY   200
 
 static char _xwin_driver_desc[256] = EMPTY_STRING;
@@ -2426,9 +2426,13 @@ static void _xwin_private_process_event(XEvent *event)
          }
          break;
       case EnterNotify:
+        /* Do not generate Enter/Leave notifications when
+           XGrabPointer/XUngrabPointer() are called
+           (NotifyGrab/NotifyUngrab modes). */
+        if (event->xcrossing.mode != NotifyNormal)
+           break;
          /* Mouse entered window.  */
          _mouse_on = TRUE;
-         _xwin_mouse_enter_notify();
          mouse_savedx = event->xcrossing.x;
          mouse_savedy = event->xcrossing.y;
          mouse_was_warped = 0;
@@ -2443,10 +2447,11 @@ static void _xwin_private_process_event(XEvent *event)
             (*_xwin_mouse_interrupt)(0, 0, 0, 0, mouse_buttons);
          break;
       case LeaveNotify:
+        if (event->xcrossing.mode != NotifyNormal)
+           break;
          _mouse_on = FALSE;
          if (_xwin_mouse_interrupt)
             (*_xwin_mouse_interrupt)(0, 0, 0, 0, mouse_buttons);
-         _xwin_mouse_leave_notify();
          break;
       case Expose:
          /* Request to redraw part of the window.  */

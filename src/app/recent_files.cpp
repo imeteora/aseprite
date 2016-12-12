@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,14 +10,24 @@
 
 #include "app/recent_files.h"
 
-#include "app/app_menus.h"
 #include "app/ini_file.h"
 #include "base/fs.h"
-#include "base/path.h"
 
 #include <cstdio>
 #include <cstring>
 #include <set>
+
+namespace {
+
+struct compare_path {
+  std::string a;
+  compare_path(const std::string& a) : a(a) { }
+  bool operator()(const std::string& b) const {
+    return base::compare_filenames(a, b) == 0;
+  }
+};
+
+}
 
 namespace app {
 
@@ -43,34 +41,19 @@ RecentFiles::RecentFiles()
     sprintf(buf, "Filename%02d", c);
 
     const char* filename = get_config_string("RecentFiles", buf, NULL);
-    if (filename && *filename && base::is_file(filename))
-      m_files.addItem(filename);
+    if (filename && *filename && base::is_file(filename)) {
+      std::string fn = normalizePath(filename);
+      m_files.addItem(fn, compare_path(fn));
+    }
   }
 
   for (int c=m_paths.limit()-1; c>=0; c--) {
     sprintf(buf, "Path%02d", c);
 
     const char* path = get_config_string("RecentPaths", buf, NULL);
-    if (path && *path)
-      m_paths.addItem(path);
-  }
-
-  // Create recent list of paths from filenames (for backward
-  // compatibility with previous versions of ASEPRITE).
-  if (m_paths.empty()) {
-    std::set<std::string> included;
-
-    // For each recent file...
-    const_iterator it = files_begin();
-    const_iterator end = files_end();
-    for (; it != end; ++it) {
-      std::string path = base::get_file_path(*it);
-
-      // Check if the path was not already included in the list
-      if (included.find(path) == included.end()) {
-        included.insert(path);
-        m_paths.addItem(path);
-      }
+    if (path && *path) {
+      std::string p = normalizePath(path);
+      m_paths.addItem(p, compare_path(p));
     }
   }
 }
@@ -80,36 +63,45 @@ RecentFiles::~RecentFiles()
   char buf[512];
 
   int c = 0;
-  for (const_iterator it = files_begin(); it != files_end(); ++it) {
-    const char* filename = it->c_str();
+  for (auto const& filename : m_files) {
     sprintf(buf, "Filename%02d", c);
-    set_config_string("RecentFiles", buf, filename);
+    set_config_string("RecentFiles", buf, filename.c_str());
     c++;
   }
 
   c = 0;
-  for (const_iterator it = paths_begin(); it != paths_end(); ++it) {
-    const char* path = it->c_str();
+  for (auto const& path : m_paths) {
     sprintf(buf, "Path%02d", c);
-    set_config_string("RecentPaths", buf, path);
+    set_config_string("RecentPaths", buf, path.c_str());
     c++;
   }
 }
 
 void RecentFiles::addRecentFile(const char* filename)
 {
-  m_files.addItem(filename);
-  m_paths.addItem(base::get_file_path(filename));
+  std::string fn = normalizePath(filename);
+  m_files.addItem(fn, compare_path(fn));
 
-  AppMenus::instance()->rebuildRecentList();
+  std::string path = base::get_file_path(fn);
+  m_paths.addItem(path, compare_path(path));
+
+  Changed();
 }
 
 void RecentFiles::removeRecentFile(const char* filename)
 {
-  m_files.removeItem(filename);
-  m_paths.removeItem(base::get_file_path(filename));
+  std::string fn = normalizePath(filename);
+  m_files.removeItem(fn, compare_path(fn));
 
-  AppMenus::instance()->rebuildRecentList();
+  std::string path = base::get_file_path(filename);
+  m_paths.removeItem(path, compare_path(path));
+
+  Changed();
+}
+
+std::string RecentFiles::normalizePath(std::string fn)
+{
+  return base::normalize_path(fn);
 }
 
 } // namespace app

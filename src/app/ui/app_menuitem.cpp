@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -30,28 +18,32 @@
 #include "ui/accelerator.h"
 #include "ui/menu.h"
 #include "ui/message.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/widget.h"
 
-#include <stdarg.h>
-#include <stdio.h>
-#include <string.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 
 namespace app {
 
 using namespace ui;
 
-AppMenuItem::AppMenuItem(const char* text, Command* command, const Params* params)
+// static
+Params AppMenuItem::s_contextParams;
+
+AppMenuItem::AppMenuItem(const char* text, Command* command, const Params& params)
  : MenuItem(text)
  , m_key(NULL)
  , m_command(command)
- , m_params(params ? params->clone(): NULL)
+ , m_params(params)
 {
 }
 
-AppMenuItem::~AppMenuItem()
+// static
+void AppMenuItem::setContextParams(const Params& params)
 {
-  delete m_params;
+  s_contextParams = params;
 }
 
 bool AppMenuItem::onProcessMessage(Message* msg)
@@ -61,6 +53,9 @@ bool AppMenuItem::onProcessMessage(Message* msg)
     case kCloseMessage:
       // disable the menu (the keyboard shortcuts are processed by "manager_msg_proc")
       setEnabled(false);
+
+      if (!s_contextParams.empty())
+        s_contextParams.clear();
       break;
 
     default:
@@ -73,8 +68,11 @@ bool AppMenuItem::onProcessMessage(Message* msg)
         context->updateFlags();
 
         if (m_command) {
-          if (m_params)
-            m_command->loadParams(m_params);
+          Params params = m_params;
+          if (!s_contextParams.empty())
+            params |= s_contextParams;
+
+          m_command->loadParams(params);
 
           setEnabled(m_command->isEnabled(context));
           setSelected(m_command->isChecked(context));
@@ -86,29 +84,27 @@ bool AppMenuItem::onProcessMessage(Message* msg)
   return MenuItem::onProcessMessage(msg);
 }
 
-void AppMenuItem::onPreferredSize(PreferredSizeEvent& ev)
+void AppMenuItem::onSizeHint(SizeHintEvent& ev)
 {
   gfx::Size size(0, 0);
 
   if (hasText()) {
     size.w =
-      + this->border_width.l
-      + getTextWidth()
-      + (inBar() ? this->child_spacing/4: this->child_spacing)
-      + this->border_width.r;
+      + textWidth()
+      + (inBar() ? childSpacing()/4: childSpacing())
+      + border().width();
 
     size.h =
-      + this->border_width.t
-      + getTextHeight()
-      + this->border_width.b;
+      + textHeight()
+      + border().height();
 
     if (m_key && !m_key->accels().empty()) {
       size.w += Graphics::measureUIStringLength(
-        m_key->accels().front().toString().c_str(), getFont());
+        m_key->accels().front().toString().c_str(), font());
     }
   }
 
-  ev.setPreferredSize(size);
+  ev.setSizeHint(size);
 }
 
 void AppMenuItem::onClick()
@@ -116,12 +112,15 @@ void AppMenuItem::onClick()
   MenuItem::onClick();
 
   if (m_command) {
-    if (m_params)
-      m_command->loadParams(m_params);
+    Params params = m_params;
+    if (!s_contextParams.empty())
+      params |= s_contextParams;
+
+    m_command->loadParams(params);
 
     UIContext* context = UIContext::instance();
     if (m_command->isEnabled(context))
-      context->executeCommand(m_command);
+      context->executeCommand(m_command, params);
   }
 }
 

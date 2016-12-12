@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -41,9 +29,9 @@ FilterWindow::FilterWindow(const char* title, const char* cfgSection,
   : Window(WithTitleBar, title)
   , m_cfgSection(cfgSection)
   , m_filterMgr(filterMgr)
-  , m_hbox(JI_HORIZONTAL)
-  , m_vbox(JI_VERTICAL)
-  , m_container(JI_VERTICAL)
+  , m_hbox(HORIZONTAL)
+  , m_vbox(VERTICAL)
+  , m_container(VERTICAL)
   , m_okButton("&OK")
   , m_cancelButton("&Cancel")
   , m_preview(filterMgr)
@@ -71,8 +59,8 @@ FilterWindow::FilterWindow(const char* title, const char* cfgSection,
   addChild(&m_hbox);
 
   if (m_tiledCheck) {
-    m_tiledCheck->setSelected(tiledMode != TILED_NONE);
-    m_tiledCheck->Click.connect(Bind<void>(&FilterWindow::onTiledChange, this));
+    m_tiledCheck->setSelected(tiledMode != TiledMode::NONE);
+    m_tiledCheck->Click.connect(base::Bind<void>(&FilterWindow::onTiledChange, this));
 
     m_vbox.addChild(m_tiledCheck);
   }
@@ -111,7 +99,7 @@ bool FilterWindow::doModal()
   openWindowInForeground();
 
   // Did the user press OK?
-  if (getKiller() == &m_okButton) {
+  if (closer() == &m_okButton) {
     m_preview.stop();
 
     // Apply the filter in background
@@ -166,7 +154,9 @@ void FilterWindow::onTiledChange()
 
   // Call derived class implementation of setupTiledMode() so the
   // filter is modified.
-  setupTiledMode(m_tiledCheck->isSelected() ? TILED_BOTH: TILED_NONE);
+  setupTiledMode(m_tiledCheck->isSelected() ?
+    TiledMode::BOTH:
+    TiledMode::NONE);
 
   // Restart the preview.
   restartPreview();

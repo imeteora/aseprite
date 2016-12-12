@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,55 +10,62 @@
 
 #include "app/ui/editor/editor_view.h"
 
+#include "app/app.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
-#include "app/settings/settings.h"
+#include "app/pref/preferences.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/skin/skin_theme.h"
-#include "app/ui_context.h"
+#include "base/bind.h"
 #include "she/surface.h"
 #include "ui/paint_event.h"
 #include "ui/resize_event.h"
+#include "ui/scroll_region_event.h"
 
 namespace app {
 
 using namespace app::skin;
 using namespace ui;
 
+// static
+EditorView::Method EditorView::g_scrollUpdateMethod = Method::KeepOrigin;
+
+// static
+void EditorView::SetScrollUpdateMethod(Method method)
+{
+  g_scrollUpdateMethod = method;
+}
+
 EditorView::EditorView(EditorView::Type type)
   : View()
   , m_type(type)
 {
-  SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
-  int l = theme->get_part(PART_EDITOR_SELECTED_W)->width();
-  int t = theme->get_part(PART_EDITOR_SELECTED_N)->height();
-  int r = theme->get_part(PART_EDITOR_SELECTED_E)->width();
-  int b = theme->get_part(PART_EDITOR_SELECTED_S)->height();
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  int l = theme->parts.editorSelected()->bitmapW()->width();
+  int t = theme->parts.editorSelected()->bitmapN()->height();
+  int r = theme->parts.editorSelected()->bitmapE()->width();
+  int b = theme->parts.editorSelected()->bitmapS()->height();
 
   setBorder(gfx::Border(l, t, r, b));
   setBgColor(gfx::rgba(0, 0, 0));
   setupScrollbars();
 
-  UIContext::instance()->settings()->addObserver(this);
-}
-
-EditorView::~EditorView()
-{
-  UIContext::instance()->settings()->removeObserver(this);
+  m_scrollSettingsConn =
+    Preferences::instance().editor.showScrollbars.AfterChange.connect(
+      base::Bind(&EditorView::setupScrollbars, this));
 }
 
 void EditorView::onPaint(PaintEvent& ev)
 {
-  Graphics* g = ev.getGraphics();
-  Widget* child = attachedWidget();
-  SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
+  Graphics* g = ev.graphics();
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
   bool selected = false;
 
   switch (m_type) {
 
     // Only show the view selected if it is the current editor
     case CurrentEditorMode:
-      selected = (child == current_editor);
+      selected = (editor()->isActive());
       break;
 
       // Always show selected
@@ -80,49 +75,106 @@ void EditorView::onPaint(PaintEvent& ev)
 
   }
 
-  theme->draw_bounds_nw(g, getClientBounds(),
-    selected ? PART_EDITOR_SELECTED_NW:
-    PART_EDITOR_NORMAL_NW,
-    getBgColor());
+  theme->drawRect(
+    g, clientBounds(),
+    (selected ?
+     theme->parts.editorSelected().get():
+     theme->parts.editorNormal().get()),
+    bgColor());
 }
 
 void EditorView::onResize(ResizeEvent& ev)
 {
-  // This avoid the displacement of the widgets in the viewport
+  Editor* editor = this->editor();
+  gfx::Point oldPos;
+  if (editor) {
+    switch (g_scrollUpdateMethod) {
+      case KeepOrigin:
+        oldPos = editor->editorToScreen(gfx::Point(0, 0));
+        break;
+      case KeepCenter:
+        oldPos = editor->screenToEditor(viewportBounds().center());
+        break;
+    }
+  }
 
-  setBoundsQuietly(ev.getBounds());
-  updateView();
+  View::onResize(ev);
+
+  if (editor) {
+    switch (g_scrollUpdateMethod) {
+      case KeepOrigin: {
+        // This keeps the same scroll position for the editor
+        gfx::Point newPos = editor->editorToScreen(gfx::Point(0, 0));
+        gfx::Point oldScroll = viewScroll();
+        editor->setEditorScroll(oldScroll + newPos - oldPos);
+        break;
+      }
+      case KeepCenter:
+        editor->centerInSpritePoint(oldPos);
+        break;
+    }
+  }
+}
+
+void EditorView::onSetViewScroll(const gfx::Point& pt)
+{
+  Editor* editor = this->editor();
+  if (editor) {
+    // We have to hide the brush preview to scroll (without this,
+    // keyboard shortcuts to scroll when the brush preview is visible
+    // will leave brush previews all over the screen).
+    HideBrushPreview hide(editor->brushPreview());
+    View::onSetViewScroll(pt);
+  }
+}
+
+void EditorView::onScrollRegion(ui::ScrollRegionEvent& ev)
+{
+  View::onScrollRegion(ev);
+
+  gfx::Region& region = ev.region();
+  Editor* editor = this->editor();
+  ASSERT(editor);
+  if (editor) {
+    gfx::Region invalidRegion;
+    editor->getInvalidDecoratoredRegion(invalidRegion);
+    region.createSubtraction(region, invalidRegion);
+  }
 }
 
 void EditorView::onScrollChange()
 {
   View::onScrollChange();
 
-  Editor* editor = static_cast<Editor*>(attachedWidget());
+  Editor* editor = this->editor();
   ASSERT(editor != NULL);
   if (editor)
     editor->notifyScrollChanged();
 }
 
-void EditorView::onSetShowSpriteEditorScrollbars(bool state)
-{
-  setupScrollbars();
-}
-
 void EditorView::setupScrollbars()
 {
   if (m_type == AlwaysSelected ||
-      !UIContext::instance()->settings()->getShowSpriteEditorScrollbars())
+      !Preferences::instance().editor.showScrollbars()) {
     hideScrollBars();
+  }
   else {
-    getHorizontalBar()->setBarWidth(kEditorViewScrollbarWidth*guiscale());
-    getVerticalBar()->setBarWidth(kEditorViewScrollbarWidth*guiscale());
+    SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+    int barsize = theme->dimensions.miniScrollbarSize();
 
-    setup_mini_look(getHorizontalBar());
-    setup_mini_look(getVerticalBar());
+    horizontalBar()->setBarWidth(barsize);
+    verticalBar()->setBarWidth(barsize);
+
+    setup_mini_look(horizontalBar());
+    setup_mini_look(verticalBar());
 
     showScrollBars();
   }
+}
+
+Editor* EditorView::editor()
+{
+  return static_cast<Editor*>(attachedWidget());
 }
 
 } // namespace app

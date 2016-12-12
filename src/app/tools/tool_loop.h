@@ -1,27 +1,16 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_TOOLS_TOOL_LOOP_H_INCLUDED
 #define APP_TOOLS_TOOL_LOOP_H_INCLUDED
 #pragma once
 
-#include "app/settings/selection_mode.h"
+#include "app/tools/tool_loop_modifiers.h"
 #include "app/tools/trace_policy.h"
+#include "doc/color.h"
 #include "doc/frame.h"
 #include "filters/tiled_mode.h"
 #include "gfx/point.h"
@@ -31,10 +20,11 @@ namespace gfx {
 }
 
 namespace doc {
+  class Brush;
   class Image;
   class Layer;
   class Mask;
-  class Brush;
+  class Remap;
   class RgbMap;
   class Sprite;
 }
@@ -46,15 +36,13 @@ namespace render {
 namespace app {
   class Context;
   class Document;
-  class IDocumentSettings;
-  class ISettings;
 
   namespace tools {
     class Controller;
     class Ink;
     class Intertwine;
     class PointShape;
-    class ShadingOptions;
+    class Symmetry;
     class Tool;
 
     using namespace doc;
@@ -71,6 +59,7 @@ namespace app {
       enum Button { Left = 0, Right = 1 };
 
       virtual ~ToolLoop() { }
+      virtual void dispose() = 0;
 
       // Returns the tool to use to draw or use
       virtual Tool* getTool() = 0;
@@ -92,6 +81,9 @@ namespace app {
 
       // Should return an image where we can read pixels (readonly image)
       virtual const Image* getSrcImage() = 0;
+
+      // The image used to get get pixels in floodfill algorithm.
+      virtual const Image* getFloodFillSrcImage() = 0;
 
       // Should return an image where we can write pixels
       virtual Image* getDstImage() = 0;
@@ -127,6 +119,7 @@ namespace app {
 
       // Current mask to limit paint area
       virtual Mask* getMask() = 0;
+      virtual void setMask(Mask* newMask) = 0;
 
       // Gets mask X,Y origin coordinates
       virtual gfx::Point getMaskOrigin() = 0;
@@ -140,17 +133,23 @@ namespace app {
       // tools).
       virtual Button getMouseButton() = 0;
 
+      // Returns active foreground/background color (certain tools
+      // needs to know the exact foreground/background color, they
+      // cannot used the primary/secondary).
+      virtual doc::color_t getFgColor() = 0;
+      virtual doc::color_t getBgColor() = 0;
+
       // Primary color to draw (e.g. foreground if the user start drawing
       // with the left button, or background color if he used the right
       // button)
-      virtual int getPrimaryColor() = 0;
-      virtual void setPrimaryColor(int color) = 0;
+      virtual doc::color_t getPrimaryColor() = 0;
+      virtual void setPrimaryColor(doc::color_t color) = 0;
 
       // Secondary color to draw (e.g. background if the user start drawing
       // with the left button, or foreground color if he used the right
       // button)
-      virtual int getSecondaryColor() = 0;
-      virtual void setSecondaryColor(int color) = 0;
+      virtual doc::color_t getSecondaryColor() = 0;
+      virtual void setSecondaryColor(doc::color_t color) = 0;
 
       // Returns the opacity to be used by the ink (Ink).
       virtual int getOpacity() = 0;
@@ -162,24 +161,21 @@ namespace app {
       // contiguous pixels or not.
       virtual bool getContiguous() = 0;
 
-      // Returns the selection mode (if the ink is of selection type).
-      virtual SelectionMode getSelectionMode() = 0;
+      // Returns flags/modifiers that change the way each part of the
+      // tool (ink/controllers/etc.) work.
+      virtual tools::ToolLoopModifiers getModifiers() = 0;
 
-      // Returns the current settings. Used to know current
-      // foreground/background color (certain tools needs to know the
-      // exact foreground/background color, they cannot used the
-      // primary/secondary).
-      virtual ISettings* settings() = 0;
-
-      // Returns the document settings (tiled mode, grid bounds, etc.).
-      // It's used to know the preferred "tiled" mode of the document.
+      // Returns the preferred "tiled" mode of the document.
       // See the method PointShape::doInkHline to check how this member is
       // used. When tiled mode is activated, each scanline can be divided
       // in various sub-lines if they pass the image bounds. For each of
       // these scanlines a Ink::inkHline is called
-      // Also it's used to know the grid/snap-to-grid settings/behavior
-      // (see ToolLoopManager::snapToGrid).
-      virtual IDocumentSettings* getDocumentSettings() = 0;
+      virtual filters::TiledMode getTiledMode() = 0;
+
+      virtual bool getGridVisible() = 0;
+      virtual bool getSnapToGrid() = 0;
+      virtual bool getStopAtGrid() = 0; // For floodfill-like tools
+      virtual gfx::Rect getGridBounds() = 0;
 
       // Returns true if the figure must be filled when we release the
       // mouse (e.g. a filled rectangle, etc.)
@@ -194,8 +190,8 @@ namespace app {
       virtual int getSprayWidth() = 0;
       virtual int getSpraySpeed() = 0;
 
-      // Offset for each point
-      virtual gfx::Point getOffset() = 0;
+      // X,Y origin of the cel where we are drawing
+      virtual gfx::Point getCelOrigin() = 0;
 
       // Velocity vector of the mouse
       virtual void setSpeed(const gfx::Point& speed) = 0;
@@ -210,8 +206,9 @@ namespace app {
       virtual PointShape* getPointShape() = 0;
       virtual Intertwine* getIntertwine() = 0;
       virtual TracePolicy getTracePolicy() = 0;
+      virtual Symmetry* getSymmetry() = 0;
 
-      virtual ShadingOptions* getShadingOptions() = 0;
+      virtual const doc::Remap* getShadingRemap() = 0;
 
       // Used by the tool when the user cancels the operation pressing the
       // other mouse button.
@@ -219,9 +216,6 @@ namespace app {
 
       // Returns true if the loop was canceled by the user
       virtual bool isCanceled() = 0;
-
-      // Converts a coordinate in the screen to the sprite.
-      virtual gfx::Point screenToSprite(const gfx::Point& screenPoint) = 0;
 
       // This region is modified by the ToolLoopManager so then you know
       // what must be updated in updateDirtyArea().
@@ -231,7 +225,6 @@ namespace app {
       virtual void updateDirtyArea() = 0;
 
       virtual void updateStatusBar(const char* text) = 0;
-
     };
 
   } // namespace tools

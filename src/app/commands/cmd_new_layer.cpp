@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -28,14 +16,15 @@
 #include "app/find_widget.h"
 #include "app/load_widget.h"
 #include "app/modules/gui.h"
+#include "app/transaction.h"
 #include "app/ui/main_window.h"
 #include "app/ui/status_bar.h"
-#include "app/undo_transaction.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
 #include <cstdio>
+#include <cstring>
 
 namespace app {
 
@@ -47,12 +36,13 @@ public:
   Command* clone() const override { return new NewLayerCommand(*this); }
 
 protected:
-  void onLoadParams(Params* params);
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  void onLoadParams(const Params& params) override;
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 
 private:
   bool m_ask;
+  bool m_top;
   std::string m_name;
 };
 
@@ -65,15 +55,15 @@ NewLayerCommand::NewLayerCommand()
             CmdRecordableFlag)
 {
   m_ask = false;
+  m_top = false;
   m_name = "";
 }
 
-void NewLayerCommand::onLoadParams(Params* params)
+void NewLayerCommand::onLoadParams(const Params& params)
 {
-  std::string ask = params->get("ask");
-  if (ask == "true") m_ask = true;
-
-  m_name = params->get("name");
+  m_ask = (params.get("ask") == "true");
+  m_top = (params.get("top") == "true");
+  m_name = params.get("name");
 }
 
 bool NewLayerCommand::onEnabled(Context* context)
@@ -105,25 +95,32 @@ void NewLayerCommand::onExecute(Context* context)
 
     window->openWindowInForeground();
 
-    if (window->getKiller() != window->findChild("ok"))
+    if (window->closer() != window->findChild("ok"))
       return;
 
-    name = window->findChild("name")->getText();
+    name = window->findChild("name")->text();
   }
 
+  Layer* activeLayer = writer.layer();
   Layer* layer;
   {
-    UndoTransaction undoTransaction(writer.context(), "New Layer");
-    layer = document->getApi().newLayer(sprite);
-    undoTransaction.commit();
+    Transaction transaction(writer.context(), "New Layer");
+    DocumentApi api = document->getApi(transaction);
+    layer = api.newLayer(sprite, name);
+
+    // If "top" parameter is false, create the layer above the active
+    // one.
+    if (activeLayer && !m_top)
+      api.restackLayerAfter(layer, activeLayer);
+
+    transaction.commit();
   }
-  layer->setName(name);
   update_screen_for_document(document);
 
   StatusBar::instance()->invalidate();
   StatusBar::instance()->showTip(1000, "Layer `%s' created", name.c_str());
 
-  App::instance()->getMainWindow()->popTimeline();
+  App::instance()->mainWindow()->popTimeline();
 }
 
 static std::string get_unique_layer_name(Sprite* sprite)
@@ -137,8 +134,8 @@ static int get_max_layer_num(Layer* layer)
 {
   int max = 0;
 
-  if (strncmp(layer->name().c_str(), "Layer ", 6) == 0)
-    max = strtol(layer->name().c_str()+6, NULL, 10);
+  if (std::strncmp(layer->name().c_str(), "Layer ", 6) == 0)
+    max = std::strtol(layer->name().c_str()+6, NULL, 10);
 
   if (layer->isFolder()) {
     LayerIterator it = static_cast<LayerFolder*>(layer)->getLayerBegin();

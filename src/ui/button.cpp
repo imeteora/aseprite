@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,7 +11,7 @@
 #include "ui/button.h"
 #include "ui/manager.h"
 #include "ui/message.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/theme.h"
 #include "ui/widget.h"
 #include "ui/window.h"
@@ -32,14 +32,14 @@ ButtonBase::ButtonBase(const std::string& text,
   , m_iconInterface(NULL)
   , m_handleSelect(true)
 {
-  setAlign(JI_CENTER | JI_MIDDLE);
+  setAlign(CENTER | MIDDLE);
   setText(text);
   setFocusStop(true);
 
   // Initialize theme
-  this->type = m_drawType;      // TODO Fix this nasty trick
+  setType(m_drawType);      // TODO Fix this nasty trick
   initTheme();
-  this->type = type;
+  setType(type);
 }
 
 ButtonBase::~ButtonBase()
@@ -48,12 +48,12 @@ ButtonBase::~ButtonBase()
     m_iconInterface->destroy();
 }
 
-WidgetType ButtonBase::getBehaviorType() const
+WidgetType ButtonBase::behaviorType() const
 {
   return m_behaviorType;
 }
 
-WidgetType ButtonBase::getDrawType() const
+WidgetType ButtonBase::drawType() const
 {
   return m_drawType;
 }
@@ -100,9 +100,8 @@ bool ButtonBase::onProcessMessage(Message* msg)
       // If the button is enabled.
       if (isEnabled()) {
         bool mnemonicPressed =
-          (msg->altPressed() &&
-           getMnemonicChar() &&
-           getMnemonicChar() == tolower(keymsg->unicodeChar()));
+          ((msg->altPressed() || msg->cmdPressed()) &&
+           mnemonicCharPressed(keymsg));
 
         // For kButtonWidget
         if (m_behaviorType == kButtonWidget) {
@@ -125,11 +124,11 @@ bool ButtonBase::onProcessMessage(Message* msg)
           else if (isFocusMagnet() &&
                    ((scancode == kKeyEnter) ||
                     (scancode == kKeyEnterPad))) {
-            getManager()->setFocus(this);
+            manager()->setFocus(this);
 
             // Dispatch focus movement messages (because the buttons
             // process them)
-            getManager()->dispatchMessages();
+            manager()->dispatchMessages();
 
             setSelected(true);
             return true;
@@ -271,24 +270,25 @@ bool ButtonBase::onProcessMessage(Message* msg)
   return Widget::onProcessMessage(msg);
 }
 
-void ButtonBase::onPreferredSize(PreferredSizeEvent& ev)
+void ButtonBase::onSizeHint(SizeHintEvent& ev)
 {
   gfx::Rect box;
+  gfx::Size iconSize = (m_iconInterface ? m_iconInterface->size(): gfx::Size(0, 0));
   getTextIconInfo(&box, NULL, NULL,
-    m_iconInterface ? m_iconInterface->getIconAlign(): 0,
-    m_iconInterface ? m_iconInterface->getWidth(): 0,
-    m_iconInterface ? m_iconInterface->getHeight(): 0);
+                  m_iconInterface ? m_iconInterface->iconAlign(): 0,
+                  iconSize.w,
+                  iconSize.h);
 
-  ev.setPreferredSize(border_width.l + box.w + border_width.r,
-                      border_width.t + box.h + border_width.b);
+  ev.setSizeHint(box.w + border().width(),
+                 box.h + border().height());
 }
 
 void ButtonBase::onPaint(PaintEvent& ev)
 {
   switch (m_drawType) {
-    case kButtonWidget: getTheme()->paintButton(ev); break;
-    case kCheckWidget:  getTheme()->paintCheckBox(ev); break;
-    case kRadioWidget:  getTheme()->paintRadioButton(ev); break;
+    case kButtonWidget: theme()->paintButton(ev); break;
+    case kCheckWidget:  theme()->paintCheckBox(ev); break;
+    case kRadioWidget:  theme()->paintRadioButton(ev); break;
   }
 }
 
@@ -309,7 +309,7 @@ void ButtonBase::generateButtonSelectSignal()
 Button::Button(const std::string& text)
   : ButtonBase(text, kButtonWidget, kButtonWidget, kButtonWidget)
 {
-  setAlign(JI_CENTER | JI_MIDDLE);
+  setAlign(CENTER | MIDDLE);
 }
 
 // ======================================================================
@@ -319,7 +319,7 @@ Button::Button(const std::string& text)
 CheckBox::CheckBox(const std::string& text, WidgetType drawType)
   : ButtonBase(text, kCheckWidget, kCheckWidget, drawType)
 {
-  setAlign(JI_LEFT | JI_MIDDLE);
+  setAlign(LEFT | MIDDLE);
 }
 
 // ======================================================================
@@ -329,7 +329,7 @@ CheckBox::CheckBox(const std::string& text, WidgetType drawType)
 RadioButton::RadioButton(const std::string& text, int radioGroup, WidgetType drawType)
   : ButtonBase(text, kRadioWidget, kRadioWidget, drawType)
 {
-  setAlign(JI_LEFT | JI_MIDDLE);
+  setAlign(LEFT | MIDDLE);
   setRadioGroup(radioGroup);
 }
 
@@ -347,7 +347,7 @@ int RadioButton::getRadioGroup() const
 
 void RadioButton::deselectRadioGroup()
 {
-  Widget* widget = getRoot();
+  Widget* widget = window();
   if (!widget)
     return;
 
@@ -363,20 +363,22 @@ void RadioButton::deselectRadioGroup()
         radioButton->setSelected(false);
     }
 
-    UI_FOREACH_WIDGET(widget->getChildren(), it) {
-      allChildrens.push(*it);
+    for (auto child : widget->children()) {
+      allChildrens.push(child);
     }
   }
 }
 
-void RadioButton::onSelect()
+void RadioButton::onSelect(bool selected)
 {
-  ButtonBase::onSelect();
+  ButtonBase::onSelect(selected);
+  if (!selected)
+    return;
 
   if (!m_handleSelect)
     return;
 
-  if (getBehaviorType() == kRadioWidget) {
+  if (behaviorType() == kRadioWidget) {
     deselectRadioGroup();
 
     m_handleSelect = false;

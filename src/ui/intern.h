@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2013, 2015  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -23,11 +23,18 @@ namespace ui {
 
   // intern.cpp
 
-  void addWidget(Widget* widget);
-  void removeWidget(Widget* widget);
+  namespace details {
 
-  void setFontOfAllWidgets(she::Font* font);
-  void reinitThemeForAllWidgets();
+    void initWidgets();
+    void exitWidgets();
+
+    void addWidget(Widget* widget);
+    void removeWidget(Widget* widget);
+
+    void resetFontAllWidgets();
+    void reinitThemeForAllWidgets();
+
+  } // namespace details
 
   // theme.cpp
 

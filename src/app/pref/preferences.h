@@ -1,29 +1,32 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_PREF_PREFERENCES_H_INCLUDED
 #define APP_PREF_PREFERENCES_H_INCLUDED
 #pragma once
 
+#include "app/color.h"
+#include "app/document_exporter.h"
 #include "app/pref/option.h"
+#include "app/sprite_sheet_type.h"
+#include "app/tools/freehand_algorithm.h"
+#include "app/tools/ink_type.h"
+#include "app/tools/rotation_algorithm.h"
+#include "app/ui/color_bar.h"
+#include "doc/anidir.h"
+#include "doc/brush_pattern.h"
 #include "doc/documents_observer.h"
+#include "doc/frame.h"
+#include "doc/layer_index.h"
+#include "filters/tiled_mode.h"
+#include "gfx/rect.h"
+#include "render/onionskin_position.h"
+#include "render/zoom.h"
 
-#include "generated_pref_types.h"
+#include "pref.xml.h"
 
 #include <map>
 #include <string>
@@ -42,6 +45,8 @@ namespace app {
   class Preferences : public app::gen::GlobalPref
                     , public doc::DocumentsObserver {
   public:
+    static Preferences& instance();
+
     Preferences();
     ~Preferences();
 
@@ -49,17 +54,23 @@ namespace app {
     void save();
 
     ToolPreferences& tool(tools::Tool* tool);
-    DocumentPreferences& document(app::Document* doc);
+    DocumentPreferences& document(const app::Document* doc);
+
+    // Remove one document explicitly (this can be used if the
+    // document used in Preferences::document() function wasn't member
+    // of UIContext.
+    void removeDocument(doc::Document* doc);
 
   protected:
     void onRemoveDocument(doc::Document* doc) override;
 
   private:
-    std::string docConfigFileName(app::Document* doc);
-    void saveDocPref(app::Document* doc, app::DocumentPreferences* docPref);
+    std::string docConfigFileName(const app::Document* doc);
+
+    void serializeDocPref(const app::Document* doc, app::DocumentPreferences* docPref, bool save);
 
     std::map<std::string, app::ToolPreferences*> m_tools;
-    std::map<app::Document*, app::DocumentPreferences*> m_docs;
+    std::map<const app::Document*, app::DocumentPreferences*> m_docs;
   };
 
 } // namespace app

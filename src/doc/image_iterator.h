@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,11 +8,10 @@
 #define DOC_IMAGE_ITERATOR_H_INCLUDED
 #pragma once
 
+#include "doc/color.h"
+#include "doc/primitives_fast.h"
 #include "gfx/point.h"
 #include "gfx/rect.h"
-#include "doc/color.h"
-#include "doc/image.h"
-#include "doc/image_traits.h"
 
 #include <cstdlib>
 #include <iterator>
@@ -20,6 +19,8 @@
 #include <iostream>
 
 namespace doc {
+
+  class Image;
 
   template<typename ImageTraits,
            typename PointerType,
@@ -50,7 +51,7 @@ namespace doc {
 
     ImageIteratorT(const Image* image, const gfx::Rect& bounds, int x, int y) :
       m_image(const_cast<Image*>(image)),
-      m_ptr((pointer)image->getPixelAddress(x, y)),
+      m_ptr(get_pixel_address_fast<ImageTraits>(image, x, y)),
       m_x(x),
       m_y(y),
       m_xbegin(bounds.x),
@@ -104,7 +105,7 @@ namespace doc {
         ++m_y;
 
         if (m_y < m_image->height())
-          m_ptr = (pointer)m_image->getPixelAddress(m_x, m_y);
+          m_ptr = get_pixel_address_fast<ImageTraits>(m_image, m_x, m_y);
       }
 
       return *this;
@@ -209,7 +210,7 @@ namespace doc {
     }
 
     bool operator==(int b) const {
-      return (color_t(*this) == b);
+      return (color_t(*this) == color_t(b));
     }
 
     bool operator==(color_t b) const {
@@ -221,7 +222,7 @@ namespace doc {
     }
 
     bool operator!=(int b) const {
-      return (color_t(*this) != b);
+      return (color_t(*this) != color_t(b));
     }
 
     bool operator!=(color_t b) const {
@@ -241,7 +242,7 @@ namespace doc {
   };
 
   inline bool operator==(int a, const BitPixelAccess& b) {
-    return (a == color_t(b));
+    return (color_t(a) == color_t(b));
   }
 
   inline bool operator==(color_t a, const BitPixelAccess& b) {
@@ -249,7 +250,7 @@ namespace doc {
   }
 
   inline bool operator!=(int a, const BitPixelAccess& b) {
-    return (a != color_t(b));
+    return (color_t(a) != color_t(b));
   }
 
   inline bool operator!=(color_t a, const BitPixelAccess& b) {
@@ -287,7 +288,7 @@ namespace doc {
 
     ImageIteratorT(const Image* image, const gfx::Rect& bounds, int x, int y) :
       m_image(const_cast<Image*>(image)),
-      m_ptr((pointer)image->getPixelAddress(x, y)),
+      m_ptr(get_pixel_address_fast<BitmapTraits>(image, x, y)),
       m_x(x),
       m_y(y),
       m_subPixel(x % 8),
@@ -341,7 +342,7 @@ namespace doc {
         ++m_y;
 
         if (m_y < m_image->height())
-          m_ptr = (pointer)m_image->getPixelAddress(m_x, m_y);
+          m_ptr = get_pixel_address_fast<BitmapTraits>(m_image, m_x, m_y);
         else
           ++m_ptr;
       }

@@ -1,34 +1,62 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
+#include "app/file_selector.h"
+
+#include "app/app.h"
+#include "app/pref/preferences.h"
 #include "app/ui/file_selector.h"
+#include "base/split_string.h"
+#include "she/display.h"
+#include "she/native_dialogs.h"
+#include "she/system.h"
 
 namespace app {
 
-std::string show_file_selector(const std::string& title,
+std::string show_file_selector(
+  const std::string& title,
   const std::string& initialPath,
-  const std::string& showExtensions)
+  const std::string& showExtensions,
+  FileSelectorType type,
+  FileSelectorDelegate* delegate)
 {
-  FileSelector fileSelector;
+  if (Preferences::instance().experimental.useNativeFileDialog() &&
+      she::instance()->nativeDialogs()) {
+    she::FileDialog* dlg =
+      she::instance()->nativeDialogs()->createFileDialog();
+
+    if (dlg) {
+      std::string res;
+
+      dlg->setTitle(title);
+      dlg->setFileName(initialPath);
+
+      if (type == FileSelectorType::Save)
+        dlg->toSaveFile();
+      else
+        dlg->toOpenFile();
+
+      std::vector<std::string> tokens;
+      base::split_string(showExtensions, tokens, ",");
+      for (const auto& tok : tokens)
+        dlg->addFilter(tok, tok + " files (*." + tok + ")");
+
+      if (dlg->show(she::instance()->defaultDisplay()))
+        res = dlg->fileName();
+
+      dlg->dispose();
+      return res;
+    }
+  }
+
+  FileSelector fileSelector(type, delegate);
   return fileSelector.show(title, initialPath, showExtensions);
 }
 

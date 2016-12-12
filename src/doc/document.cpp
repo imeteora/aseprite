@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,9 +10,8 @@
 
 #include "doc/document.h"
 
-#include "base/path.h"
+#include "base/fs.h"
 #include "doc/context.h"
-#include "doc/export_data.h"
 #include "doc/sprite.h"
 
 namespace doc {
@@ -65,13 +64,13 @@ std::string Document::name() const
 
 void Document::setFilename(const std::string& filename)
 {
-  m_filename = filename;
-  notifyObservers(&DocumentObserver::onFileNameChanged, this);
-}
+  // Normalize the path (if the filename has a path)
+  if (!base::get_file_path(filename).empty())
+    m_filename = base::normalize_path(filename);
+  else
+    m_filename = filename;
 
-void Document::setExportData(const ExportDataPtr& data)
-{
-  m_exportData = data;
+  notify_observers(&DocumentObserver::onFileNameChanged, this);
 }
 
 void Document::close()

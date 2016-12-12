@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -32,7 +20,7 @@
 #include "ui/graphics.h"
 #include "ui/message.h"
 #include "ui/paint_event.h"
-#include "ui/preferred_size_event.h"
+#include "ui/size_hint_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
 #include "ui/widget.h"
@@ -43,6 +31,10 @@ namespace app {
 
 using namespace ui;
 using namespace app::skin;
+
+// Last selected item for ButtonSet activated on mouse up when the
+// mouse capture is get.
+static int g_itemBeforeCapture = -1;
 
 WidgetType buttonset_item_type()
 {
@@ -56,49 +48,101 @@ ButtonSet::Item::Item()
   : Widget(buttonset_item_type())
   , m_icon(NULL)
 {
+  setup_mini_font(this);
+  setAlign(CENTER | MIDDLE);
+  setFocusStop(true);
 }
 
-void ButtonSet::Item::setIcon(she::Surface* icon)
+void ButtonSet::Item::setIcon(const SkinPartPtr& icon, bool mono)
 {
   m_icon = icon;
+  m_mono = mono;
   invalidate();
 }
 
 ButtonSet* ButtonSet::Item::buttonSet()
 {
-  return static_cast<ButtonSet*>(getParent());
+  return static_cast<ButtonSet*>(parent());
 }
 
 void ButtonSet::Item::onPaint(ui::PaintEvent& ev)
 {
-  SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
-  Graphics* g = ev.getGraphics();
-  gfx::Rect rc = getClientBounds();
-  gfx::Color face;
-  int nw;
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  Graphics* g = ev.graphics();
+  gfx::Rect rc = clientBounds();
+  gfx::Color fg, bg;
+  SkinPartPtr nw;
+  gfx::Rect boxRc, textRc, iconRc;
+  gfx::Size iconSize;
+  if (m_icon)
+    iconSize = m_icon->size();
 
-  if (!gfx::is_transparent(getBgColor()))
-    g->fillRect(getBgColor(), g->getClipBounds());
-
-  if (isSelected() || hasMouseOver()) {
-    nw = PART_TOOLBUTTON_HOT_NW;
-    face = theme->getColor(ThemeColor::ButtonHotFace);
-  }
-  else {
-    nw = PART_TOOLBUTTON_LAST_NW;
-    face = theme->getColor(ThemeColor::ButtonNormalFace);
-  }
+  getTextIconInfo(
+    &boxRc, &textRc, &iconRc,
+    CENTER | (hasText() ? BOTTOM: MIDDLE),
+    iconSize.w, iconSize.h);
 
   Grid::Info info = buttonSet()->getChildInfo(this);
-  if (info.col < info.grid_cols-1) rc.w+=1*guiscale();
-  if (info.row < info.grid_rows-1) rc.h+=3*guiscale();
+  bool isLastCol = (info.col+info.hspan >= info.grid_cols);
+  bool isLastRow = (info.row+info.vspan >= info.grid_rows);
 
-  theme->draw_bounds_nw(g, rc, nw, face);
+  if (m_icon || isLastRow) {
+    textRc.y -= 1*guiscale();
+    iconRc.y -= 1*guiscale();
+  }
+
+  if (!gfx::is_transparent(bgColor()))
+    g->fillRect(bgColor(), g->getClipBounds());
+
+  if (isSelected() || hasMouseOver()) {
+    if (hasCapture()) {
+      nw = theme->parts.toolbuttonPushed();
+      fg = theme->colors.buttonSelectedText();
+      bg = theme->colors.buttonSelectedFace();
+    }
+    else {
+      nw = (hasFocus() ? theme->parts.toolbuttonHotFocused():
+                         theme->parts.toolbuttonHot());
+      fg = theme->colors.buttonHotText();
+      bg = theme->colors.buttonHotFace();
+    }
+  }
+  else {
+    nw = (hasFocus() ? theme->parts.toolbuttonFocused():
+                       theme->parts.toolbuttonLast());
+    fg = theme->colors.buttonNormalText();
+    bg = theme->colors.buttonNormalFace();
+  }
+
+  if (!isLastCol)
+    rc.w += 1*guiscale();
+
+  if (!isLastRow) {
+    if (nw == theme->parts.toolbuttonHotFocused())
+      rc.h += 2*guiscale();
+    else
+      rc.h += 3*guiscale();
+  }
+
+  theme->drawRect(g, rc, nw.get(), bg);
 
   if (m_icon) {
-    g->drawRgbaSurface(m_icon,
-      rc.x + rc.w/2 - m_icon->width()/2,
-      rc.y + rc.h/2 - m_icon->height()/2);
+    she::Surface* bmp = m_icon->bitmap(0);
+
+    if (isSelected() && hasCapture())
+      g->drawColoredRgbaSurface(bmp, theme->colors.buttonSelectedText(),
+                                iconRc.x, iconRc.y);
+    else if (m_mono)
+      g->drawColoredRgbaSurface(bmp, theme->colors.buttonNormalText(),
+                                iconRc.x, iconRc.y);
+    else
+      g->drawRgbaSurface(bmp, iconRc.x, iconRc.y);
+  }
+
+  if (hasText()) {
+    g->setFont(font());
+    g->drawUIString(text(), fg, gfx::ColorNone, textRc.origin(),
+                    false);
   }
 }
 
@@ -106,21 +150,81 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
 {
   switch (msg->type()) {
 
+    case kFocusEnterMessage:
+    case kFocusLeaveMessage:
+      if (isEnabled()) {
+        // TODO theme specific stuff
+        invalidate();
+      }
+      break;
+
+    case ui::kKeyDownMessage:
+      if (isEnabled() && hasText()) {
+        KeyMessage* keymsg = static_cast<KeyMessage*>(msg);
+        bool mnemonicPressed = (msg->altPressed() &&
+                                mnemonicCharPressed(keymsg));
+
+        if (mnemonicPressed ||
+            (hasFocus() && keymsg->scancode() == kKeySpace)) {
+          buttonSet()->setSelectedItem(this);
+          onClick();
+        }
+      }
+      break;
+
     case ui::kMouseDownMessage:
+      // Only for single-item and trigerred on mouse up ButtonSets: We
+      // save the current selected item to restore it just in case the
+      // user leaves the ButtonSet without releasing the mouse button
+      // and the mouse capture if offered to other ButtonSet.
+      if (buttonSet()->m_triggerOnMouseUp) {
+        ASSERT(g_itemBeforeCapture < 0);
+        g_itemBeforeCapture = buttonSet()->selectedItem();
+      }
+
       captureMouse();
       buttonSet()->setSelectedItem(this);
-      buttonSet()->onItemChange();
+      invalidate();
+
+      if (static_cast<MouseMessage*>(msg)->left() &&
+          !buttonSet()->m_triggerOnMouseUp) {
+        onClick();
+      }
       break;
 
     case ui::kMouseUpMessage:
-      if (hasCapture())
+      if (hasCapture()) {
+        if (g_itemBeforeCapture >= 0)
+          g_itemBeforeCapture = -1;
+
         releaseMouse();
+        invalidate();
+
+        if (static_cast<MouseMessage*>(msg)->left()) {
+          if (buttonSet()->m_triggerOnMouseUp)
+            onClick();
+        }
+        else if (static_cast<MouseMessage*>(msg)->right()) {
+          onRightClick();
+        }
+      }
       break;
 
     case ui::kMouseMoveMessage:
       if (hasCapture()) {
-        if (buttonSet()->m_offerCapture)
-          offerCapture(static_cast<ui::MouseMessage*>(msg), buttonset_item_type());
+        if (buttonSet()->m_offerCapture) {
+          if (offerCapture(static_cast<ui::MouseMessage*>(msg), buttonset_item_type())) {
+            // Only for ButtonSets trigerred on mouse up.
+            if (buttonSet()->m_triggerOnMouseUp &&
+                g_itemBeforeCapture >= 0) {
+              // As we never received a kMouseUpMessage (so we never
+              // called onClick()), we have to restore the selected
+              // item at the point when we received the mouse capture.
+              buttonSet()->setSelectedItem(g_itemBeforeCapture);
+              g_itemBeforeCapture = -1;
+            }
+          }
+        }
       }
       break;
 
@@ -132,29 +236,71 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
   return Widget::onProcessMessage(msg);
 }
 
-void ButtonSet::Item::onPreferredSize(ui::PreferredSizeEvent& ev)
+void ButtonSet::Item::onSizeHint(ui::SizeHintEvent& ev)
 {
-  gfx::Size sz(16, 16); // TODO Calculate from icon
+  gfx::Size iconSize;
+  if (m_icon) {
+    iconSize = m_icon->size();
+    iconSize.w = MAX(iconSize.w, 16*guiscale());
+    iconSize.h = MAX(iconSize.h, 16*guiscale());
+  }
+
+  gfx::Rect boxRc;
+  getTextIconInfo(
+    &boxRc, NULL, NULL,
+    CENTER | (hasText() ? BOTTOM: MIDDLE),
+    iconSize.w, iconSize.h);
+
+  gfx::Size sz = boxRc.size();
+  if (hasText())
+    sz += 8*guiscale();
 
   Grid::Info info = buttonSet()->getChildInfo(this);
   if (info.row == info.grid_rows-1)
-    sz.h += 3;
+    sz.h += 3*guiscale();
 
-  ev.setPreferredSize(sz*guiscale());
+  ev.setSizeHint(sz);
+}
+
+void ButtonSet::Item::onClick()
+{
+  buttonSet()->onItemChange(this);
+}
+
+void ButtonSet::Item::onRightClick()
+{
+  buttonSet()->onRightClick(this);
 }
 
 ButtonSet::ButtonSet(int columns)
   : Grid(columns, false)
   , m_offerCapture(true)
+  , m_triggerOnMouseUp(false)
+  , m_multipleSelection(false)
 {
   noBorderNoChildSpacing();
 }
 
-void ButtonSet::addItem(she::Surface* icon, int hspan, int vspan)
+ButtonSet::Item* ButtonSet::addItem(const std::string& text, int hspan, int vspan)
+{
+  Item* item = new Item();
+  item->setText(text);
+  addItem(item, hspan, vspan);
+  return item;
+}
+
+ButtonSet::Item* ButtonSet::addItem(const skin::SkinPartPtr& icon, int hspan, int vspan)
 {
   Item* item = new Item();
   item->setIcon(icon);
-  addChildInCell(item, hspan, vspan, JI_CENTER | JI_MIDDLE);
+  addItem(item, hspan, vspan);
+  return item;
+}
+
+ButtonSet::Item* ButtonSet::addItem(Item* item, int hspan, int vspan)
+{
+  addChildInCell(item, hspan, vspan, HORIZONTAL | VERTICAL);
+  return item;
 }
 
 ButtonSet::Item* ButtonSet::getItem(int index)
@@ -165,7 +311,7 @@ ButtonSet::Item* ButtonSet::getItem(int index)
 int ButtonSet::selectedItem() const
 {
   int index = 0;
-  for (Widget* child : getChildren()) {
+  for (Widget* child : children()) {
     if (child->isSelected())
       return index;
     ++index;
@@ -173,25 +319,30 @@ int ButtonSet::selectedItem() const
   return -1;
 }
 
-void ButtonSet::setSelectedItem(int index)
+void ButtonSet::setSelectedItem(int index, bool focusItem)
 {
-  if (index >= 0 && index < (int)getChildren().size())
-    setSelectedItem(static_cast<Item*>(at(index)));
+  if (index >= 0 && index < (int)children().size())
+    setSelectedItem(static_cast<Item*>(at(index)), focusItem);
   else
-    setSelectedItem(static_cast<Item*>(NULL));
+    setSelectedItem(static_cast<Item*>(nullptr), focusItem);
 }
 
-void ButtonSet::setSelectedItem(Item* item)
+void ButtonSet::setSelectedItem(Item* item, bool focusItem)
 {
-  if (item && item->isSelected())
-    return;
+  if (!m_multipleSelection) {
+    if (item && item->isSelected())
+      return;
 
-  Item* sel = findSelectedItem();
-  if (sel)
-    sel->setSelected(false);
+    Item* sel = findSelectedItem();
+    if (sel)
+      sel->setSelected(false);
+  }
 
-  if (item)
-    item->setSelected(true);
+  if (item) {
+    item->setSelected(!item->isSelected());
+    if (focusItem)
+      item->requestFocus();
+  }
 }
 
 void ButtonSet::deselectItems()
@@ -206,18 +357,33 @@ void ButtonSet::setOfferCapture(bool state)
   m_offerCapture = state;
 }
 
-void ButtonSet::onItemChange()
+void ButtonSet::setTriggerOnMouseUp(bool state)
 {
-  ItemChange();
+  m_triggerOnMouseUp = state;
+}
+
+void ButtonSet::setMultipleSelection(bool state)
+{
+  m_multipleSelection = state;
+}
+
+void ButtonSet::onItemChange(Item* item)
+{
+  ItemChange(item);
+}
+
+void ButtonSet::onRightClick(Item* item)
+{
+  RightClick(item);
 }
 
 ButtonSet::Item* ButtonSet::findSelectedItem() const
 {
-  for (Widget* child : getChildren()) {
+  for (auto child : children()) {
     if (child->isSelected())
       return static_cast<Item*>(child);
   }
-  return NULL;
+  return nullptr;
 }
-    
+
 } // namespace app

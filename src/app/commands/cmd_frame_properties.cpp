@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -25,14 +13,13 @@
 #include "app/commands/params.h"
 #include "app/context_access.h"
 #include "app/document_api.h"
-#include "app/find_widget.h"
-#include "app/load_widget.h"
-#include "app/ui/main_window.h"
 #include "app/ui/timeline.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "base/convert_to.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
+
+#include "frame_properties.xml.h"
 
 namespace app {
 
@@ -44,9 +31,9 @@ public:
   Command* clone() const override { return new FramePropertiesCommand(*this); }
 
 protected:
-  void onLoadParams(Params* params);
-  bool onEnabled(Context* context);
-  void onExecute(Context* context);
+  void onLoadParams(const Params& params) override;
+  bool onEnabled(Context* context) override;
+  void onExecute(Context* context) override;
 
 private:
   enum Target {
@@ -68,9 +55,9 @@ FramePropertiesCommand::FramePropertiesCommand()
 {
 }
 
-void FramePropertiesCommand::onLoadParams(Params* params)
+void FramePropertiesCommand::onLoadParams(const Params& params)
 {
-  std::string frame = params->get("frame");
+  std::string frame = params.get("frame");
   if (frame == "all") {
     m_target = ALL_FRAMES;
   }
@@ -79,7 +66,7 @@ void FramePropertiesCommand::onLoadParams(Params* params)
   }
   else {
     m_target = SPECIFIC_FRAME;
-    m_frame = frame_t(base::convert_to<int>(frame)-1);
+    m_frame = frame_t(base::convert_to<int>(frame));
   }
 }
 
@@ -92,14 +79,11 @@ void FramePropertiesCommand::onExecute(Context* context)
 {
   const ContextReader reader(context);
   const Sprite* sprite = reader.sprite();
-
-  base::UniquePtr<Window> window(app::load_widget<Window>("frame_duration.xml", "frame_duration"));
-  Widget* frame = app::find_widget<Widget>(window, "frame");
-  Widget* frlen = app::find_widget<Widget>(window, "frlen");
-  Widget* ok = app::find_widget<Widget>(window, "ok");
-
-  frame_t firstFrame(0);
-  frame_t lastFrame(0);
+  auto& docPref = Preferences::instance().document(context->activeDocument());
+  app::gen::FrameProperties window;
+  frame_t firstFrame = 0;
+  frame_t lastFrame = 0;
+  int base = docPref.timeline.firstFrame();
 
   switch (m_target) {
 
@@ -108,8 +92,8 @@ void FramePropertiesCommand::onExecute(Context* context)
       break;
 
     case CURRENT_RANGE: {
-      // TODO the range of selected frames should be in the DocumentLocation.
-      Timeline::Range range = App::instance()->getMainWindow()->getTimeline()->range();
+      // TODO the range of selected frames should be in doc::Site.
+      auto range = App::instance()->timeline()->range();
       if (range.enabled()) {
         firstFrame = range.frameBegin();
         lastFrame = range.frameEnd();
@@ -121,28 +105,29 @@ void FramePropertiesCommand::onExecute(Context* context)
     }
 
     case SPECIFIC_FRAME:
-      firstFrame = lastFrame = m_frame;
+      firstFrame = lastFrame = m_frame-base;
       break;
   }
 
   if (firstFrame != lastFrame)
-    frame->setTextf("%d-%d", (int)firstFrame+1, (int)lastFrame+1);
+    window.frame()->setTextf("[%d...%d]", (int)firstFrame+base, (int)lastFrame+base);
   else
-    frame->setTextf("%d", (int)firstFrame+1);
+    window.frame()->setTextf("%d", (int)firstFrame+base);
 
-  frlen->setTextf("%d", sprite->frameDuration(firstFrame));
+  window.frlen()->setTextf("%d", sprite->frameDuration(firstFrame));
 
-  window->openWindowInForeground();
-  if (window->getKiller() == ok) {
-    int num = frlen->getTextInt();
+  window.openWindowInForeground();
+  if (window.closer() == window.ok()) {
+    int num = window.frlen()->textInt();
 
     ContextWriter writer(reader);
-    UndoTransaction undoTransaction(writer.context(), "Frame Duration");
+    Transaction transaction(writer.context(), "Frame Duration");
+    DocumentApi api = writer.document()->getApi(transaction);
     if (firstFrame != lastFrame)
-      writer.document()->getApi().setFrameRangeDuration(writer.sprite(), firstFrame, lastFrame, num);
+      api.setFrameRangeDuration(writer.sprite(), firstFrame, lastFrame, num);
     else
-      writer.document()->getApi().setFrameDuration(writer.sprite(), firstFrame, num);
-    undoTransaction.commit();
+      api.setFrameDuration(writer.sprite(), firstFrame, num);
+    transaction.commit();
   }
 }
 

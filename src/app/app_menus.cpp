@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2014  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,6 +10,7 @@
 
 #include "app/app_menus.h"
 
+#include "base/string.h"
 #include "app/app.h"
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
@@ -37,7 +26,6 @@
 #include "app/util/filetoks.h"
 #include "base/bind.h"
 #include "base/fs.h"
-#include "base/path.h"
 #include "ui/ui.h"
 
 #include "tinyxml.h"
@@ -60,7 +48,7 @@ AppMenus* AppMenus::instance()
   static AppMenus* instance = NULL;
   if (!instance) {
     instance = new AppMenus;
-    App::instance()->Exit.connect(Bind<void>(&destroy_instance, instance));
+    App::instance()->Exit.connect(base::Bind<void>(&destroy_instance, instance));
   }
   return instance;
 }
@@ -68,37 +56,46 @@ AppMenus* AppMenus::instance()
 AppMenus::AppMenus()
   : m_recentListMenuitem(NULL)
 {
+  m_recentFilesConn =
+    App::instance()->recentFiles()->Changed.connect(
+      base::Bind(&AppMenus::rebuildRecentList, this));
 }
 
 void AppMenus::reload()
 {
   XmlDocumentRef doc(GuiXml::instance()->doc());
-  TiXmlHandle handle(doc);
+  TiXmlHandle handle(doc.get());
   const char* path = GuiXml::instance()->filename();
 
   ////////////////////////////////////////
   // Load menus
 
-  PRINTF(" - Loading menus from \"%s\"...\n", path);
+  LOG("MENU: Loading menus from %s\n", path);
 
   m_rootMenu.reset(loadMenuById(handle, "main_menu"));
 
+#if _DEBUG
   // Add a warning element because the user is not using the last well-known gui.xml file.
   if (GuiXml::instance()->version() != VERSION)
     m_rootMenu->insertChild(0, createInvalidVersionMenuitem());
+#endif
 
-  PRINTF("Main menu loaded.\n");
+  LOG("MENU: Main menu loaded.\n");
 
+  m_tabPopupMenu.reset(loadMenuById(handle, "tab_popup"));
   m_documentTabPopupMenu.reset(loadMenuById(handle, "document_tab_popup"));
   m_layerPopupMenu.reset(loadMenuById(handle, "layer_popup"));
   m_framePopupMenu.reset(loadMenuById(handle, "frame_popup"));
   m_celPopupMenu.reset(loadMenuById(handle, "cel_popup"));
   m_celMovementPopupMenu.reset(loadMenuById(handle, "cel_movement_popup"));
+  m_frameTagPopupMenu.reset(loadMenuById(handle, "frame_tag_popup"));
+  m_palettePopupMenu.reset(loadMenuById(handle, "palette_popup"));
+  m_inkPopupMenu.reset(loadMenuById(handle, "ink_popup"));
 
   ////////////////////////////////////////
   // Load keyboard shortcuts for commands
 
-  PRINTF(" - Loading commands keyboard shortcuts from \"%s\"...\n", path);
+  LOG("MENU: Loading commands keyboard shortcuts from %s\n", path);
 
   TiXmlElement* xmlKey = handle
     .FirstChild("gui")
@@ -139,25 +136,24 @@ bool AppMenus::rebuildRecentList()
     submenu = new Menu();
     list_menuitem->setSubmenu(submenu);
 
-    RecentFiles::const_iterator it = App::instance()->getRecentFiles()->files_begin();
-    RecentFiles::const_iterator end = App::instance()->getRecentFiles()->files_end();
-
+    auto it = App::instance()->recentFiles()->files_begin();
+    auto end = App::instance()->recentFiles()->files_end();
     if (it != end) {
       Params params;
 
       for (; it != end; ++it) {
         const char* filename = it->c_str();
-
         params.set("filename", filename);
 
         menuitem = new AppMenuItem(
           base::get_file_name(filename).c_str(),
-          cmd_open_file, &params);
+          cmd_open_file,
+          params);
         submenu->addChild(menuitem);
       }
     }
     else {
-      menuitem = new AppMenuItem("Nothing", NULL, NULL);
+      menuitem = new AppMenuItem("Nothing", NULL, Params());
       menuitem->setEnabled(false);
       submenu->addChild(menuitem);
     }
@@ -169,8 +165,6 @@ bool AppMenus::rebuildRecentList()
 Menu* AppMenus::loadMenuById(TiXmlHandle& handle, const char* id)
 {
   ASSERT(id != NULL);
-
-  //PRINTF("loadMenuById(%s)\n", id);
 
   // <gui><menus><menu>
   TiXmlElement* xmlMenu = handle
@@ -193,8 +187,6 @@ Menu* AppMenus::convertXmlelemToMenu(TiXmlElement* elem)
 {
   Menu* menu = new Menu();
 
-  //PRINTF("convertXmlelemToMenu(%s, %s, %s)\n", elem->Value(), elem->Attribute("id"), elem->Attribute("text"));
-
   TiXmlElement* child = elem->FirstChildElement();
   while (child) {
     Widget* menuitem = convertXmlelemToMenuitem(child);
@@ -214,7 +206,7 @@ Widget* AppMenus::convertXmlelemToMenuitem(TiXmlElement* elem)
 {
   // is it a <separator>?
   if (strcmp(elem->Value(), "separator") == 0)
-    return new Separator("", JI_HORIZONTAL);
+    return new MenuSeparator;
 
   const char* command_name = elem->Attribute("command");
   Command* command =
@@ -237,8 +229,7 @@ Widget* AppMenus::convertXmlelemToMenuitem(TiXmlElement* elem)
   }
 
   // Create the item
-  AppMenuItem* menuitem = new AppMenuItem(elem->Attribute("text"),
-                                          command, command ? &params: NULL);
+  AppMenuItem* menuitem = new AppMenuItem(elem->Attribute("text"), command, params);
   if (!menuitem)
     return NULL;
 
@@ -266,41 +257,54 @@ Widget* AppMenus::convertXmlelemToMenuitem(TiXmlElement* elem)
 
 Widget* AppMenus::createInvalidVersionMenuitem()
 {
-  AppMenuItem* menuitem = new AppMenuItem("WARNING!", NULL, NULL);
+  AppMenuItem* menuitem = new AppMenuItem("WARNING!");
   Menu* subMenu = new Menu();
-  subMenu->addChild(new AppMenuItem(PACKAGE " is using a customized gui.xml (maybe from your HOME directory).", NULL, NULL));
-  subMenu->addChild(new AppMenuItem("You should update your customized gui.xml file to the new version to get", NULL, NULL));
-  subMenu->addChild(new AppMenuItem("the latest commands available.", NULL, NULL));
-  subMenu->addChild(new Separator("", JI_HORIZONTAL));
-  subMenu->addChild(new AppMenuItem("You can bypass this validation adding the correct version", NULL, NULL));
-  subMenu->addChild(new AppMenuItem("number in <gui version=\"" VERSION "\"> element.", NULL, NULL));
+  subMenu->addChild(new AppMenuItem(PACKAGE " is using a customized gui.xml (maybe from your HOME directory)."));
+  subMenu->addChild(new AppMenuItem("You should update your customized gui.xml file to the new version to get"));
+  subMenu->addChild(new AppMenuItem("the latest commands available."));
+  subMenu->addChild(new MenuSeparator);
+  subMenu->addChild(new AppMenuItem("You can bypass this validation adding the correct version"));
+  subMenu->addChild(new AppMenuItem("number in <gui version=\"" VERSION "\"> element."));
   menuitem->setSubmenu(subMenu);
   return menuitem;
 }
 
-void AppMenus::applyShortcutToMenuitemsWithCommand(Command* command, Params* params, Key* key)
+void AppMenus::applyShortcutToMenuitemsWithCommand(Command* command, const Params& params, Key* key)
 {
-  applyShortcutToMenuitemsWithCommand(m_rootMenu, command, params, key);
+  // TODO redesign the list of popup menus, it might be an
+  //      autogenerated widget from 'gen'
+  Menu* menus[] = {
+    m_rootMenu,
+    m_tabPopupMenu,
+    m_documentTabPopupMenu,
+    m_layerPopupMenu,
+    m_framePopupMenu,
+    m_celPopupMenu,
+    m_celMovementPopupMenu,
+    m_frameTagPopupMenu,
+    m_palettePopupMenu,
+    m_inkPopupMenu
+  };
+
+  for (Menu* menu : menus)
+    if (menu)
+      applyShortcutToMenuitemsWithCommand(menu, command, params, key);
 }
 
-void AppMenus::applyShortcutToMenuitemsWithCommand(Menu* menu, Command* command, Params* params, Key* key)
+void AppMenus::applyShortcutToMenuitemsWithCommand(Menu* menu, Command* command, const Params& params, Key* key)
 {
-  UI_FOREACH_WIDGET(menu->getChildren(), it) {
-    Widget* child = *it;
-
-    if (child->getType() == kMenuItemWidget) {
+  for (auto child : menu->children()) {
+    if (child->type() == kMenuItemWidget) {
       AppMenuItem* menuitem = dynamic_cast<AppMenuItem*>(child);
       if (!menuitem)
         continue;
 
       Command* mi_command = menuitem->getCommand();
-      Params* mi_params = menuitem->getParams();
+      const Params& mi_params = menuitem->getParams();
 
       if ((mi_command) &&
-          (base::string_to_lower(mi_command->short_name()) ==
-           base::string_to_lower(command->short_name())) &&
-          ((mi_params && *mi_params == *params) ||
-           (Params() == *params))) {
+          (base::utf8_icmp(mi_command->id(), command->id()) == 0) &&
+          (mi_params == params)) {
         // Set the keyboard shortcut to be shown in this menu-item
         menuitem->setKey(key);
       }

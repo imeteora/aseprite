@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2016 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,12 +10,20 @@
 
 #include "doc/sprite.h"
 
+#include "base/base.h"
 #include "base/memory.h"
 #include "base/remove_from_container.h"
 #include "base/unique_ptr.h"
-#include "doc/doc.h"
-#include "doc/image_bits.h"
+#include "doc/cel.h"
+#include "doc/cels_range.h"
+#include "doc/frame_tag.h"
+#include "doc/image_impl.h"
+#include "doc/layer.h"
+#include "doc/layers_range.h"
+#include "doc/palette.h"
 #include "doc/primitives.h"
+#include "doc/remap.h"
+#include "doc/rgbmap.h"
 
 #include <cstring>
 #include <vector>
@@ -30,10 +38,12 @@ static LayerIndex layer2index(const Layer* layer, const Layer* find_layer, int* 
 
 Sprite::Sprite(PixelFormat format, int width, int height, int ncolors)
   : Object(ObjectType::Sprite)
+  , m_document(NULL)
   , m_format(format)
   , m_width(width)
   , m_height(height)
   , m_frames(1)
+  , m_frameTags(this)
 {
   ASSERT(width > 0 && height > 0);
 
@@ -41,15 +51,14 @@ Sprite::Sprite(PixelFormat format, int width, int height, int ncolors)
   m_folder = new LayerFolder(this);
 
   // Generate palette
+  switch (format) {
+    case IMAGE_GRAYSCALE: ncolors = 256; break;
+    case IMAGE_BITMAP: ncolors = 2; break;
+  }
+
   Palette pal(frame_t(0), ncolors);
 
   switch (format) {
-
-    // For colored images
-    case IMAGE_RGB:
-    case IMAGE_INDEXED:
-      pal.resize(ncolors);
-      break;
 
     // For black and white images
     case IMAGE_GRAYSCALE:
@@ -97,7 +106,7 @@ Sprite* Sprite::createBasicSprite(doc::PixelFormat format, int width, int height
 
   // Create the main image.
   doc::ImageRef image(doc::Image::create(format, width, height));
-  doc::clear_image(image, 0);
+  doc::clear_image(image.get(), 0);
 
   // Create the first transparent layer.
   {
@@ -142,8 +151,10 @@ bool Sprite::needAlpha() const
 {
   switch (m_format) {
     case IMAGE_RGB:
-    case IMAGE_GRAYSCALE:
-      return (backgroundLayer() == NULL);
+    case IMAGE_GRAYSCALE: {
+      Layer* bg = backgroundLayer();
+      return (!bg || !bg->isVisible());
+    }
   }
   return false;
 }
@@ -205,6 +216,16 @@ LayerImage* Sprite::backgroundLayer() const
 LayerIndex Sprite::countLayers() const
 {
   return LayerIndex(folder()->getLayersCount());
+}
+
+LayerIndex Sprite::firstLayer() const
+{
+  return LayerIndex(0);
+}
+
+LayerIndex Sprite::lastLayer() const
+{
+  return LayerIndex(folder()->getLayersCount()-1);
 }
 
 Layer* Sprite::layer(int layerIndex) const
@@ -311,24 +332,38 @@ void Sprite::resetPalettes()
   }
 }
 
-void Sprite::deletePalette(Palette* pal)
+void Sprite::deletePalette(frame_t frame)
 {
-  ASSERT(pal != NULL);
+  auto it = m_palettes.begin(), end = m_palettes.end();
+  for (; it != end; ++it) {
+    Palette* pal = *it;
 
-  base::remove_from_container(m_palettes, pal);
-  delete pal;                   // palette
+    if (pal->frame() == frame) {
+      delete pal;                   // delete palette
+      m_palettes.erase(it);
+      break;
+    }
+  }
 }
 
-RgbMap* Sprite::rgbMap(frame_t frame)
+RgbMap* Sprite::rgbMap(frame_t frame) const
 {
-  int mask_color = (backgroundLayer() ? -1: transparentColor());
+  return rgbMap(frame, backgroundLayer() ? RgbMapFor::OpaqueLayer:
+                                           RgbMapFor::TransparentLayer);
+}
+
+RgbMap* Sprite::rgbMap(frame_t frame, RgbMapFor forLayer) const
+{
+  int maskIndex = (forLayer == RgbMapFor::OpaqueLayer ?
+                   -1: transparentColor());
 
   if (m_rgbMap == NULL) {
     m_rgbMap = new RgbMap();
-    m_rgbMap->regenerate(palette(frame), mask_color);
+    m_rgbMap->regenerate(palette(frame), maskIndex);
   }
-  else if (!m_rgbMap->match(palette(frame))) {
-    m_rgbMap->regenerate(palette(frame), mask_color);
+  else if (!m_rgbMap->match(palette(frame)) ||
+           m_rgbMap->maskIndex() != maskIndex) {
+    m_rgbMap->regenerate(palette(frame), maskIndex);
   }
 
   return m_rgbMap;
@@ -342,12 +377,16 @@ void Sprite::addFrame(frame_t newFrame)
   setTotalFrames(m_frames+1);
   for (frame_t i=m_frames-1; i>=newFrame; --i)
     setFrameDuration(i, frameDuration(i-1));
+
+  folder()->displaceFrames(newFrame, +1);
 }
 
-void Sprite::removeFrame(frame_t newFrame)
+void Sprite::removeFrame(frame_t frame)
 {
+  folder()->displaceFrames(frame, -1);
+
   frame_t newTotal = m_frames-1;
-  for (frame_t i=newFrame; i<newTotal; ++i)
+  for (frame_t i=frame; i<newTotal; ++i)
     setFrameDuration(i, frameDuration(i+1));
   setTotalFrames(newTotal);
 }
@@ -382,8 +421,8 @@ void Sprite::setFrameDuration(frame_t frame, int msecs)
 void Sprite::setFrameRangeDuration(frame_t from, frame_t to, int msecs)
 {
   std::fill(
-    m_frlens.begin()+(size_t)from,
-    m_frlens.begin()+(size_t)to+1, MID(1, msecs, 65535));
+    m_frlens.begin()+(std::size_t)from,
+    m_frlens.begin()+(std::size_t)to+1, MID(1, msecs, 65535));
 }
 
 void Sprite::setDurationForAllFrames(int msecs)
@@ -392,67 +431,54 @@ void Sprite::setDurationForAllFrames(int msecs)
 }
 
 //////////////////////////////////////////////////////////////////////
-// Images
+// Shared Images and CelData (for linked Cels)
 
-ImageRef Sprite::getImage(ObjectId imageId)
+ImageRef Sprite::getImageRef(ObjectId imageId)
 {
-  CelList cels;
-  getCels(cels);
-  for (auto& cel : cels) {
+  for (Cel* cel : cels()) {
     if (cel->image()->id() == imageId)
       return cel->imageRef();
   }
-  return ImageRef(NULL);
+  return ImageRef(nullptr);
 }
+
+CelDataRef Sprite::getCelDataRef(ObjectId celDataId)
+{
+  for (Cel* cel : cels()) {
+    if (cel->dataRef()->id() == celDataId)
+      return cel->dataRef();
+  }
+  return CelDataRef(nullptr);
+}
+
+//////////////////////////////////////////////////////////////////////
+// Images
 
 void Sprite::replaceImage(ObjectId curImageId, const ImageRef& newImage)
 {
-  CelList cels;
-  getCels(cels);
-  for (auto& cel : cels) {
+  for (Cel* cel : cels()) {
     if (cel->image()->id() == curImageId)
-      cel->setImage(newImage);
+      cel->data()->setImage(newImage);
   }
-}
-
-void Sprite::getCels(CelList& cels) const
-{
-  folder()->getCels(cels);
 }
 
 // TODO replace it with a images iterator
 void Sprite::getImages(std::vector<Image*>& images) const
 {
-  CelList cels;
-  getCels(cels);                // TODO create a cel iterator
-
-  for (const auto& cel : cels)
-    if (!cel->link())
-      images.push_back(cel->image());
+  for (const auto& cel : uniqueCels())
+    images.push_back(cel->image());
 }
 
-void Sprite::remapImages(frame_t frameFrom, frame_t frameTo, const std::vector<uint8_t>& mapping)
+void Sprite::remapImages(frame_t frameFrom, frame_t frameTo, const Remap& remap)
 {
   ASSERT(m_format == IMAGE_INDEXED);
-  ASSERT(mapping.size() == 256);
+  //ASSERT(remap.size() == 256);
 
-  CelList cels;
-  getCels(cels);
-
-  for (CelIterator it = cels.begin(); it != cels.end(); ++it) {
-    Cel* cel = *it;
-
+  for (const Cel* cel : uniqueCels()) {
     // Remap this Cel because is inside the specified range
     if (cel->frame() >= frameFrom &&
         cel->frame() <= frameTo) {
-      Image* image = cel->image();
-      LockImageBits<IndexedTraits> bits(image);
-      LockImageBits<IndexedTraits>::iterator
-        it = bits.begin(),
-        end = bits.end();
-
-      for (; it != end; ++it)
-        *it = mapping[*it];
+      remap_image(cel->image(), remap);
     }
   }
 }
@@ -504,7 +530,34 @@ void Sprite::pickCels(int x, int y, frame_t frame, int opacityThreshold, CelList
 
     cels.push_back(cel);
   }
-  fflush(stdout);
+}
+
+//////////////////////////////////////////////////////////////////////
+// Iterators
+
+LayersRange Sprite::layers() const
+{
+  return LayersRange(this, LayerIndex(0), LayerIndex(countLayers()-1));
+}
+
+CelsRange Sprite::cels() const
+{
+  return CelsRange(this, frame_t(0), lastFrame());
+}
+
+CelsRange Sprite::cels(frame_t frame) const
+{
+  return CelsRange(this, frame, frame);
+}
+
+CelsRange Sprite::uniqueCels() const
+{
+  return CelsRange(this, frame_t(0), lastFrame(), CelsRange::UNIQUE);
+}
+
+CelsRange Sprite::uniqueCels(frame_t from, frame_t to) const
+{
+  return CelsRange(this, from, to, CelsRange::UNIQUE);
 }
 
 //////////////////////////////////////////////////////////////////////

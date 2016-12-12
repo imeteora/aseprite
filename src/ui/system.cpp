@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,10 +11,11 @@
 #include "ui/system.h"
 
 #include "gfx/point.h"
-#include "she/clock.h"
 #include "she/display.h"
 #include "she/surface.h"
+#include "she/system.h"
 #include "ui/cursor.h"
+#include "ui/intern.h"
 #include "ui/intern.h"
 #include "ui/manager.h"
 #include "ui/overlay.h"
@@ -24,21 +25,20 @@
 
 namespace ui {
 
-bool dirty_display_flag = true;
-
 // Current mouse cursor type.
 
-static CursorType mouse_cursor_type = kNoCursor;
+static CursorType mouse_cursor_type = kOutsideDisplay;
 static Cursor* mouse_cursor = NULL;
 static she::Display* mouse_display = NULL;
 static Overlay* mouse_cursor_overlay = NULL;
 static bool use_native_mouse_cursor = false;
-static bool native_cursor_set = false; // If we displayed a native cursor
+static bool support_native_custom_cursor = false;
 
-/* Mouse information (button and position).  */
+// Mouse information (button and position).
 
 static volatile MouseButtons m_buttons;
 static gfx::Point m_mouse_pos;
+static int mouse_cursor_scale = 1;
 
 static int mouse_scares = 0;
 
@@ -68,15 +68,40 @@ static void update_mouse_overlay(Cursor* cursor)
   }
 }
 
+static bool update_custom_native_cursor(Cursor* cursor)
+{
+  bool result = false;
+
+  // Check if we can use a custom native mouse in this platform
+  if (!use_native_mouse_cursor &&
+      support_native_custom_cursor &&
+      mouse_display) {
+    if (cursor) {
+      result = mouse_display->setNativeMouseCursor(
+        // The surface is already scaled by guiscale()
+        cursor->getSurface(),
+        cursor->getFocus(),
+        // We scale the cursor by the she::Display scale
+        mouse_display->scale() * mouse_cursor_scale);
+    }
+    else if (mouse_cursor_type == kOutsideDisplay) {
+      result = mouse_display->setNativeMouseCursor(she::kArrowCursor);
+    }
+    else {
+      result = mouse_display->setNativeMouseCursor(she::kNoCursor);
+    }
+  }
+
+  return result;
+}
+
 static void update_mouse_cursor()
 {
-  // Use native cursor when it's possible/available/configured to do so.
+  she::NativeCursor nativeCursor = she::kNoCursor;
+  Cursor* cursor = nullptr;
 
-  bool native_cursor_available = false;
-  if (use_native_mouse_cursor || mouse_cursor_type == kOutsideDisplay) {
-    she::NativeCursor nativeCursor = she::kNoCursor;
-
-    native_cursor_available = true;
+  if (use_native_mouse_cursor ||
+      mouse_cursor_type == kOutsideDisplay) {
     switch (mouse_cursor_type) {
       case ui::kOutsideDisplay:
         nativeCursor = she::kArrowCursor;
@@ -85,6 +110,9 @@ static void update_mouse_cursor()
       case ui::kArrowCursor:
       case ui::kArrowPlusCursor:
         nativeCursor = she::kArrowCursor;
+        break;
+      case ui::kCrosshairCursor:
+        nativeCursor = she::kCrosshairCursor;
         break;
       case ui::kForbiddenCursor:
         nativeCursor = she::kForbiddenCursor;
@@ -106,82 +134,67 @@ static void update_mouse_cursor()
       case ui::kSizeSWCursor: nativeCursor = she::kSizeSWCursor; break;
       case ui::kSizeWCursor: nativeCursor = she::kSizeWCursor; break;
       case ui::kSizeNWCursor: nativeCursor = she::kSizeNWCursor; break;
-      default:
-        native_cursor_available = false;
-        break;
-    }
-
-    if (native_cursor_available) {
-      native_cursor_available =
-        mouse_display->setNativeMouseCursor(nativeCursor);
-      native_cursor_set = (nativeCursor != she::kNoCursor);
     }
   }
 
-  // Hide native cursor if it is visible but the current cursor type
-  // is not supported natively.
+  // Set native cursor
+  if (mouse_display) {
+    bool ok = mouse_display->setNativeMouseCursor(nativeCursor);
 
-  if (!native_cursor_available && native_cursor_set) {
-    mouse_display->setNativeMouseCursor(she::kNoCursor);
-    native_cursor_set = false;
+    // It looks like the specific native cursor is not supported,
+    // so we can should use the internal overlay (even when we
+    // have use_native_mouse_cursor flag enabled).
+    if (!ok)
+      nativeCursor = she::kNoCursor;
   }
 
-  // Use a software cursor with the overlay.
-
-  if (!native_cursor_set) {
-    if (mouse_cursor_type == ui::kNoCursor) {
-      update_mouse_overlay(NULL);
-    }
-    else {
-      update_mouse_overlay(CurrentTheme::get()->getCursor(mouse_cursor_type));
-    }
-  }
-  else {
-    // Hide the overlay if we are using a native cursor.
-    update_mouse_overlay(NULL);
+  // Use a custom cursor
+  if (nativeCursor == she::kNoCursor &&
+      mouse_cursor_type != ui::kOutsideDisplay &&
+      CurrentTheme::get()) {
+    cursor = CurrentTheme::get()->getCursor(mouse_cursor_type);
   }
 
-  dirty_display_flag = true;
+  // Try to use a custom native cursor if it's possible
+  if (!update_custom_native_cursor(cursor)) {
+    // Or an overlay as last resource
+    update_mouse_overlay(cursor);
+  }
 }
 
-int _ji_system_init()
+UISystem::UISystem()
 {
-  mouse_cursor_type = kNoCursor;
-  return 0;
+  mouse_cursor_type = kOutsideDisplay;
+  support_native_custom_cursor =
+    ((she::instance() &&
+      (int(she::instance()->capabilities()) &
+       int(she::Capabilities::CustomNativeMouseCursor))) ?
+     true: false);
+
+  details::initWidgets();
 }
 
-void _ji_system_exit()
+UISystem::~UISystem()
 {
-  set_display(NULL);
-  update_mouse_overlay(NULL);
+  OverlayManager::destroyInstance();
+
+  // finish theme
+  CurrentTheme::set(NULL);
+
+  details::exitWidgets();
+
+  _internal_set_mouse_display(nullptr);
+  if (!update_custom_native_cursor(nullptr))
+    update_mouse_overlay(nullptr);
 }
 
-int clock()
-{
-  return she::clock_value();
-}
-
-void set_display(she::Display* display)
+void _internal_set_mouse_display(she::Display* display)
 {
   CursorType cursor = get_mouse_cursor();
-
   set_mouse_cursor(kNoCursor);
   mouse_display = display;
-
-  if (display) {
-    Manager* manager = Manager::getDefault();
-    if (manager) {
-      manager->setDisplay(display);
-
-      // Update default-manager size
-      if ((manager->getBounds().w != ui::display_w() ||
-           manager->getBounds().h != ui::display_h())) {
-        manager->setBounds(gfx::Rect(0, 0, ui::display_w(), ui::display_h()));
-      }
-    }
-
+  if (display)
     set_mouse_cursor(cursor);  // Restore mouse cursor
-  }
 }
 
 int display_w()
@@ -206,9 +219,8 @@ void update_cursor_overlay()
     gfx::Point newPos =
       get_mouse_position() - mouse_cursor->getFocus();
 
-    if (newPos != mouse_cursor_overlay->getPosition()) {
+    if (newPos != mouse_cursor_overlay->position()) {
       mouse_cursor_overlay->moveOverlay(newPos);
-      dirty_display_flag = true;
     }
   }
 }
@@ -216,6 +228,7 @@ void update_cursor_overlay()
 void set_use_native_cursors(bool state)
 {
   use_native_mouse_cursor = state;
+  update_mouse_cursor();
 }
 
 CursorType get_mouse_cursor()
@@ -229,6 +242,12 @@ void set_mouse_cursor(CursorType type)
     return;
 
   mouse_cursor_type = type;
+  update_mouse_cursor();
+}
+
+void set_mouse_cursor_scale(const int newScale)
+{
+  mouse_cursor_scale = newScale;
   update_mouse_cursor();
 }
 
@@ -249,7 +268,8 @@ void show_mouse_cursor()
 
 void _internal_no_mouse_position()
 {
-  update_mouse_overlay(NULL);
+  if (!update_custom_native_cursor(nullptr))
+    update_mouse_overlay(nullptr);
 }
 
 void _internal_set_mouse_position(const gfx::Point& newPos)

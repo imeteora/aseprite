@@ -1,7 +1,27 @@
 <!-- ASEPRITE -->
-<!-- Copyright (C) 2014 by David Capello -->
+<!-- Copyright (C) 2014-2016 by David Capello -->
 <gui>
-<vbox id="mainbox">
+<vbox id="timeline_conf">
+  <hbox>
+    <vbox>
+      <separator cell_hspan="2" text="Position:" left="true" horizontal="true" />
+      <hbox>
+	<buttonset columns="2" id="position">
+	  <item text="&amp;Left" />
+	  <item text="&amp;Right" />
+	  <item text="&amp;Bottom" hspan="2" />
+	</buttonset>
+      </hbox>
+    </vbox>
+    <vbox>
+      <separator cell_hspan="2" text="Frame Header:" left="true" horizontal="true" />
+      <hbox>
+	<label text="First Frame:" />
+	<entry id="first_frame" maxsize="3" />
+      </hbox>
+    </vbox>
+  </hbox>
+
   <separator cell_hspan="2" text="Onion Skin:" left="true" horizontal="true" />
   <grid columns="2">
     <hbox cell_hspan="2">
@@ -15,17 +35,13 @@
 
     <label text="Opacity Step:" />
     <slider min="0" max="255" id="opacity_step" cell_align="horizontal" width="128" />
-  </grid>
 
-  <separator text="Loop:" left="true" horizontal="true" />
-  <hbox cell_hspan="2">
-    <radio group="2" text="Normal" id="normal" />
-    <radio group="2" text="Reverse" id="reverse" />
-    <radio group="2" text="Ping-pong" id="pingpong" />
-  </hbox>
-  <hbox cell_hspan="2">
-    <button id="loop_section" text="Set Loop Section" expansive="true" tooltip="Select a range of frames in the timeline&#10;and then press this button." />
-    <button id="reset_loop_section" text="Reset Loop Section" />
-  </hbox>
+    <check id="loop_tag" text="Loop through tag frames" cell_hspan="2" />
+    <check id="current_layer" text="Current layer only" cell_hspan="2" />
+    <hbox cell_hspan="2">
+      <radio group="2" text="Behind sprite" id="behind" tooltip="Only for transparent layers.&#10;Background is not included in this onion skin mode." tooltip_dir="top" />
+      <radio group="2" text="In front of sprite" id="infront" tooltip="For all kind of layers (background and transparents)" />
+    </hbox>
+  </grid>
 </vbox>
 </gui>

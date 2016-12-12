@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -27,13 +15,13 @@
 #include "app/document_api.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
-#include "app/undo_transaction.h"
+#include "app/transaction.h"
 #include "doc/dithering_method.h"
 #include "doc/image.h"
 #include "doc/sprite.h"
 
 namespace app {
-  
+
 class ChangePixelFormatCommand : public Command {
   PixelFormat m_format;
   DitheringMethod m_dithering;
@@ -42,10 +30,10 @@ public:
   Command* clone() const override { return new ChangePixelFormatCommand(*this); }
 
 protected:
-  void onLoadParams(Params* params);
-  bool onEnabled(Context* context);
-  bool onChecked(Context* context);
-  void onExecute(Context* context);
+  void onLoadParams(const Params& params) override;
+  bool onEnabled(Context* context) override;
+  bool onChecked(Context* context) override;
+  void onExecute(Context* context) override;
 };
 
 ChangePixelFormatCommand::ChangePixelFormatCommand()
@@ -57,14 +45,14 @@ ChangePixelFormatCommand::ChangePixelFormatCommand()
   m_dithering = DitheringMethod::NONE;
 }
 
-void ChangePixelFormatCommand::onLoadParams(Params* params)
+void ChangePixelFormatCommand::onLoadParams(const Params& params)
 {
-  std::string format = params->get("format");
+  std::string format = params.get("format");
   if (format == "rgb") m_format = IMAGE_RGB;
   else if (format == "grayscale") m_format = IMAGE_GRAYSCALE;
   else if (format == "indexed") m_format = IMAGE_INDEXED;
 
-  std::string dithering = params->get("dithering");
+  std::string dithering = params.get("dithering");
   if (dithering == "ordered")
     m_dithering = DitheringMethod::ORDERED;
   else
@@ -105,12 +93,12 @@ void ChangePixelFormatCommand::onExecute(Context* context)
 {
   {
     ContextWriter writer(context);
-    UndoTransaction undoTransaction(writer.context(), "Color Mode Change");
+    Transaction transaction(writer.context(), "Color Mode Change");
     Document* document(writer.document());
     Sprite* sprite(writer.sprite());
 
-    document->getApi().setPixelFormat(sprite, m_format, m_dithering);
-    undoTransaction.commit();
+    document->getApi(transaction).setPixelFormat(sprite, m_format, m_dithering);
+    transaction.commit();
   }
   app_refresh_screen();
 }

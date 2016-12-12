@@ -1,26 +1,12 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-
-#include <cstdlib>
 
 #include "app/commands/filters/convolution_matrix_stock.h"
 
@@ -28,6 +14,9 @@
 #include "app/util/filetoks.h"
 #include "base/file_handle.h"
 #include "filters/convolution_matrix.h"
+
+#include <cstdlib>
+#include <cstring>
 
 namespace app {
 
@@ -41,13 +30,13 @@ ConvolutionMatrixStock::~ConvolutionMatrixStock()
   cleanStock();
 }
 
-SharedPtr<ConvolutionMatrix> ConvolutionMatrixStock::getByName(const char* name)
+base::SharedPtr<ConvolutionMatrix> ConvolutionMatrixStock::getByName(const char* name)
 {
   for (const_iterator it = begin(), end = this->end(); it != end; ++it) {
-    if (strcmp((*it)->getName(), name) == 0)
+    if (std::strcmp((*it)->getName(), name) == 0)
       return *it;
   }
-  return SharedPtr<ConvolutionMatrix>(0);
+  return base::SharedPtr<ConvolutionMatrix>(0);
 }
 
 void ConvolutionMatrixStock::reloadStock()
@@ -66,8 +55,8 @@ void ConvolutionMatrixStock::reloadStock()
                           "convmatr.gen",
                           "convmatr.def", NULL };
   char *s, buf[256], leavings[4096];
-  int i, c, x, y, w, h, div, bias;
-  SharedPtr<ConvolutionMatrix> matrix;
+  int i, x, y, w, h, div, bias;
+  base::SharedPtr<ConvolutionMatrix> matrix;
   std::string name;
 
   cleanStock();
@@ -78,13 +67,14 @@ void ConvolutionMatrixStock::reloadStock()
 
     while (rf.next()) {
       // Open matrices stock file
-      base::FileHandle f = base::open_file(rf.filename(), "r");
+      base::FileHandle handle(base::open_file(rf.filename(), "r"));
+      FILE* f = handle.get();
       if (!f)
         continue;
 
       tok_reset_line_num();
 
-      strcpy(leavings, "");
+      std::strcpy(leavings, "");
 
       // Read the matrix name
       while (tok_read(f, buf, leavings, sizeof(leavings))) {
@@ -119,12 +109,11 @@ void ConvolutionMatrixStock::reloadStock()
         if (*buf != '{')
           break;
 
-        c = 0;
         div = 0;
         for (y=0; y<h; ++y) {
           for (x=0; x<w; ++x) {
             READ_TOK();
-            int value = strtod(buf, NULL) * ConvolutionMatrix::Precision;
+            int value = int(strtod(buf, NULL) * ConvolutionMatrix::Precision);
             div += value;
 
             matrix->value(x, y) = value;
@@ -148,15 +137,15 @@ void ConvolutionMatrixStock::reloadStock()
 
         // Div
         READ_TOK();
-        if (strcmp(buf, "auto") != 0)
-          div = strtod(buf, NULL) * ConvolutionMatrix::Precision;
+        if (std::strcmp(buf, "auto") != 0)
+          div = int(strtod(buf, NULL) * ConvolutionMatrix::Precision);
 
         matrix->setDiv(div);
 
         // Bias
         READ_TOK();
-        if (strcmp(buf, "auto") != 0)
-          bias = strtod(buf, NULL);
+        if (std::strcmp(buf, "auto") != 0)
+          bias = int(strtod(buf, NULL));
 
         matrix->setBias(bias);
 

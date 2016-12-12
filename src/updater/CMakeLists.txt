@@ -1,5 +1,5 @@
 # ASEPRITE
-# Copyright (C) 2001-2013  David Capello
+# Copyright (C) 2001-2015  David Capello
 
 set(UPDATER_LIB_SOURCES
   check_update.cpp
@@ -12,3 +12,7 @@ elseif(APPLE)
 endif()
 
 add_library(updater-lib ${UPDATER_LIB_SOURCES})
+
+target_link_libraries(updater-lib
+  net-lib
+  ${TINYXML_LIBRARY})

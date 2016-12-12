@@ -1,26 +1,16 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include "app/app.h"
+#include "app/cmd/set_palette.h"
+#include "app/cmd_sequence.h"
 #include "app/color.h"
 #include "app/color_utils.h"
 #include "app/commands/command.h"
@@ -33,8 +23,8 @@
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
-#include "app/settings/settings.h"
-#include "app/settings/settings.h"
+#include "app/pref/preferences.h"
+#include "app/transaction.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/color_sliders.h"
 #include "app/ui/editor/editor.h"
@@ -44,18 +34,14 @@
 #include "app/ui/status_bar.h"
 #include "app/ui/toolbar.h"
 #include "app/ui_context.h"
-#include "app/undo_transaction.h"
-#include "app/undoers/set_palette_colors.h"
 #include "base/bind.h"
 #include "base/fs.h"
-#include "base/path.h"
 #include "doc/image.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
 #include "gfx/hsv.h"
 #include "gfx/rgb.h"
 #include "gfx/size.h"
-#include "render/quantization.h"
 #include "ui/graphics.h"
 #include "ui/ui.h"
 
@@ -68,6 +54,9 @@ namespace app {
 using namespace gfx;
 using namespace ui;
 
+enum { RGB_MODE, HSV_MODE };
+enum { ABS_MODE, REL_MODE };
+
 class PaletteEntryEditor : public Window {
 public:
   PaletteEntryEditor();
@@ -79,39 +68,35 @@ protected:
 
   void onExit();
   void onCloseWindow();
-  void onFgBgColorChange(const app::Color& color);
+  void onFgBgColorChange(const app::Color& _color);
   void onColorSlidersChange(ColorSlidersChangeEvent& ev);
   void onColorHexEntryChange(const app::Color& color);
-  void onColorTypeButtonClick(Event& ev);
-  void onMoreOptionsClick(Event& ev);
-  void onCopyColorsClick(Event& ev);
-  void onPasteColorsClick(Event& ev);
-  void onRampClick(Event& ev);
-  void onQuantizeClick(Event& ev);
+  void onColorTypeClick();
+  void onChangeModeClick();
 
 private:
   void selectColorType(app::Color::Type type);
   void setPaletteEntry(const app::Color& color);
-  void setPaletteEntryChannel(const app::Color& color, ColorSliders::Channel channel);
+  void setAbsolutePaletteEntryChannel(ColorSliders::Channel channel, const app::Color& color);
+  void setRelativePaletteEntryChannel(ColorSliders::Channel channel, int delta);
   void setNewPalette(Palette* palette, const char* operationName);
   void updateCurrentSpritePalette(const char* operationName);
   void updateColorBar();
+  void updateWidgetsFromSelectedEntries();
   void onPalChange();
+  void resetRelativeInfo();
+  void getPicks(PalettePicks& picks);
 
+  app::Color::Type m_type;
   Box m_vbox;
   Box m_topBox;
   Box m_bottomBox;
-  RadioButton m_rgbButton;
-  RadioButton m_hsvButton;
+  ButtonSet m_colorType;
+  ButtonSet m_changeMode;
   HexColorEntry m_hexColorEntry;
   Label m_entryLabel;
-  Button m_moreOptions;
   RgbSliders m_rgbSliders;
   HsvSliders m_hsvSliders;
-  Button m_copyButton;
-  Button m_pasteButton;
-  Button m_rampButton;
-  Button m_quantizeButton;
 
   // This variable is used to avoid updating the m_hexColorEntry text
   // when the color change is generated from a
@@ -131,11 +116,11 @@ private:
   // PaletteEntryEditor instance.
   bool m_selfPalChange;
 
-  ScopedConnection m_palChangeConn;
+  obs::scoped_connection m_palChangeConn;
 
-  // Internal-clipboard to copy & paste colors between palettes. It's
-  // used in onCopy/PasteColorsClick.
-  std::vector<uint32_t> m_clipboardColors;
+  // Palette used for relative changes.
+  Palette m_fromPalette;
+  std::map<ColorSliders::Channel, int> m_relDeltas;
 };
 
 static PaletteEntryEditor* g_window = NULL;
@@ -146,8 +131,9 @@ public:
   Command* clone() const override { return new PaletteEditorCommand(*this); }
 
 protected:
-  void onLoadParams(Params* params) override;
+  void onLoadParams(const Params& params) override;
   void onExecute(Context* context) override;
+  bool onChecked(Context* context) override;
 
 private:
   bool m_open;
@@ -167,21 +153,21 @@ PaletteEditorCommand::PaletteEditorCommand()
   m_background = false;
 }
 
-void PaletteEditorCommand::onLoadParams(Params* params)
+void PaletteEditorCommand::onLoadParams(const Params& params)
 {
-  std::string target = params->get("target");
+  std::string target = params.get("target");
   if (target == "foreground") m_background = false;
   else if (target == "background") m_background = true;
 
-  std::string open_str = params->get("open");
+  std::string open_str = params.get("open");
   if (open_str == "true") m_open = true;
   else m_open = false;
 
-  std::string close_str = params->get("close");
+  std::string close_str = params.get("close");
   if (close_str == "true") m_close = true;
   else m_close = false;
 
-  std::string switch_str = params->get("switch");
+  std::string switch_str = params.get("switch");
   if (switch_str == "true") m_switch = true;
   else m_switch = false;
 }
@@ -210,11 +196,11 @@ void PaletteEditorCommand::onExecute(Context* context)
       // Default bounds
       g_window->remapWindow();
 
-      int width = MAX(g_window->getBounds().w, ui::display_w()/2);
+      int width = MAX(g_window->bounds().w, ui::display_w()/2);
       g_window->setBounds(Rect(
-          ui::display_w() - width - ToolBar::instance()->getBounds().w,
-          ui::display_h() - g_window->getBounds().h - StatusBar::instance()->getBounds().h,
-          width, g_window->getBounds().h));
+          ui::display_w() - width - ToolBar::instance()->bounds().w,
+          ui::display_h() - g_window->bounds().h - StatusBar::instance()->bounds().h,
+          width, g_window->bounds().h));
 
       // Load window configuration
       load_window_pos(g_window, "PaletteEditor");
@@ -228,67 +214,60 @@ void PaletteEditorCommand::onExecute(Context* context)
   // Show the specified target color
   {
     app::Color color =
-      (m_background ? context->settings()->getBgColor():
-                      context->settings()->getFgColor());
+      (m_background ? Preferences::instance().colorBar.bgColor():
+                      Preferences::instance().colorBar.fgColor());
 
     g_window->setColor(color);
   }
 }
 
+bool PaletteEditorCommand::onChecked(Context* context)
+{
+  if(!g_window)
+  {
+    return false;
+  }
+  return g_window->isVisible();
+}
+
 //////////////////////////////////////////////////////////////////////
 // PaletteEntryEditor implementation
 //
-// Based on ColorSelector class.
+// Based on ColorPopup class.
 
 PaletteEntryEditor::PaletteEntryEditor()
   : Window(WithTitleBar, "Palette Editor (F4)")
-  , m_vbox(JI_VERTICAL)
-  , m_topBox(JI_HORIZONTAL)
-  , m_bottomBox(JI_HORIZONTAL)
-  , m_rgbButton("RGB", 1, kButtonWidget)
-  , m_hsvButton("HSB", 1, kButtonWidget)
+  , m_type(app::Color::MaskType)
+  , m_vbox(VERTICAL)
+  , m_topBox(HORIZONTAL)
+  , m_bottomBox(HORIZONTAL)
+  , m_colorType(2)
+  , m_changeMode(2)
   , m_entryLabel("")
-  , m_moreOptions("+")
-  , m_copyButton("Copy")
-  , m_pasteButton("Paste")
-  , m_rampButton("Ramp")
-  , m_quantizeButton("Quantize")
   , m_disableHexUpdate(false)
   , m_redrawTimer(250, this)
   , m_redrawAll(false)
   , m_implantChange(false)
   , m_selfPalChange(false)
+  , m_fromPalette(0, 0)
 {
+  m_colorType.addItem("RGB")->setFocusStop(false);
+  m_colorType.addItem("HSB")->setFocusStop(false);
+  m_changeMode.addItem("Abs")->setFocusStop(false);
+  m_changeMode.addItem("Rel")->setFocusStop(false);
+
   m_topBox.setBorder(gfx::Border(0));
-  m_topBox.child_spacing = 0;
+  m_topBox.setChildSpacing(0);
   m_bottomBox.setBorder(gfx::Border(0));
 
-  setup_mini_look(&m_rgbButton);
-  setup_mini_look(&m_hsvButton);
-  setup_mini_look(&m_moreOptions);
-  setup_mini_look(&m_copyButton);
-  setup_mini_look(&m_pasteButton);
-  setup_mini_look(&m_rampButton);
-  setup_mini_look(&m_quantizeButton);
-
   // Top box
-  m_topBox.addChild(&m_rgbButton);
-  m_topBox.addChild(&m_hsvButton);
+  m_topBox.addChild(&m_colorType);
+  m_topBox.addChild(new Separator("", VERTICAL));
+  m_topBox.addChild(&m_changeMode);
+  m_topBox.addChild(new Separator("", VERTICAL));
   m_topBox.addChild(&m_hexColorEntry);
   m_topBox.addChild(&m_entryLabel);
   m_topBox.addChild(new BoxFiller);
-  m_topBox.addChild(&m_moreOptions);
-
-  // Bottom box
-  {
-    Box* box = new Box(JI_HORIZONTAL);
-    box->child_spacing = 0;
-    box->addChild(&m_copyButton);
-    box->addChild(&m_pasteButton);
-    m_bottomBox.addChild(box);
-  }
-  m_bottomBox.addChild(&m_rampButton);
-  m_bottomBox.addChild(&m_quantizeButton);
 
   // Main vertical box
   m_vbox.addChild(&m_topBox);
@@ -297,29 +276,24 @@ PaletteEntryEditor::PaletteEntryEditor()
   m_vbox.addChild(&m_bottomBox);
   addChild(&m_vbox);
 
-  // Hide (or show) the "More Options" depending the saved value in .cfg file
-  m_bottomBox.setVisible(get_config_bool("PaletteEditor", "ShowMoreOptions", false));
-
-  m_rgbButton.Click.connect(&PaletteEntryEditor::onColorTypeButtonClick, this);
-  m_hsvButton.Click.connect(&PaletteEntryEditor::onColorTypeButtonClick, this);
-  m_moreOptions.Click.connect(&PaletteEntryEditor::onMoreOptionsClick, this);
-  m_copyButton.Click.connect(&PaletteEntryEditor::onCopyColorsClick, this);
-  m_pasteButton.Click.connect(&PaletteEntryEditor::onPasteColorsClick, this);
-  m_rampButton.Click.connect(&PaletteEntryEditor::onRampClick, this);
-  m_quantizeButton.Click.connect(&PaletteEntryEditor::onQuantizeClick, this);
+  m_colorType.ItemChange.connect(base::Bind<void>(&PaletteEntryEditor::onColorTypeClick, this));
+  m_changeMode.ItemChange.connect(base::Bind<void>(&PaletteEntryEditor::onChangeModeClick, this));
 
   m_rgbSliders.ColorChange.connect(&PaletteEntryEditor::onColorSlidersChange, this);
   m_hsvSliders.ColorChange.connect(&PaletteEntryEditor::onColorSlidersChange, this);
   m_hexColorEntry.ColorChange.connect(&PaletteEntryEditor::onColorHexEntryChange, this);
 
+  m_changeMode.setSelectedItem(ABS_MODE);
   selectColorType(app::Color::RgbType);
 
   // We hook fg/bg color changes (by eyedropper mainly) to update the selected entry color
-  ColorBar::instance()->FgColorChange.connect(&PaletteEntryEditor::onFgBgColorChange, this);
-  ColorBar::instance()->BgColorChange.connect(&PaletteEntryEditor::onFgBgColorChange, this);
+  Preferences::instance().colorBar.fgColor.AfterChange.connect(
+    &PaletteEntryEditor::onFgBgColorChange, this);
+  Preferences::instance().colorBar.bgColor.AfterChange.connect(
+    &PaletteEntryEditor::onFgBgColorChange, this);
 
   // We hook the Window::Close event to save the frame position before closing it.
-  this->Close.connect(Bind<void>(&PaletteEntryEditor::onCloseWindow, this));
+  this->Close.connect(base::Bind<void>(&PaletteEntryEditor::onCloseWindow, this));
 
   // We hook App::Exit signal to destroy the g_window singleton at exit.
   App::instance()->Exit.connect(&PaletteEntryEditor::onExit, this);
@@ -338,9 +312,8 @@ void PaletteEntryEditor::setColor(const app::Color& color)
   if (!m_disableHexUpdate)
     m_hexColorEntry.setColor(color);
 
-  PaletteView* palette_editor = ColorBar::instance()->getPaletteView();
-  PaletteView::SelectedEntries entries;
-  palette_editor->getSelectedEntries(entries);
+  PalettePicks entries;
+  getPicks(entries);
   int i, j, i2;
 
   // Find the first selected entry
@@ -364,7 +337,7 @@ void PaletteEntryEditor::setColor(const app::Color& color)
   else if (j-i+1 == i2-i) {
     m_entryLabel.setTextf(" Range: %d-%d", i, j);
   }
-  else if (i == entries.size()) {
+  else if (i == int(entries.size())) {
     m_entryLabel.setText(" No Entry");
   }
   else {
@@ -424,17 +397,37 @@ void PaletteEntryEditor::onCloseWindow()
   ColorBar::instance()->setPaletteEditorButtonState(false);
 }
 
-void PaletteEntryEditor::onFgBgColorChange(const app::Color& color)
+void PaletteEntryEditor::onFgBgColorChange(const app::Color& _color)
 {
-  if (color.isValid() && color.getType() == app::Color::IndexType) {
+  app::Color color = _color;
+
+  if (!color.isValid())
+    return;
+
+  if (color.getType() != app::Color::IndexType) {
+    PaletteView* paletteView = ColorBar::instance()->getPaletteView();
+    int index = paletteView->getSelectedEntry();
+    if (index < 0)
+      return;
+
+    color = app::Color::fromIndex(index);
+  }
+
+  if (color.getType() == app::Color::IndexType) {
     setColor(color);
+    resetRelativeInfo();
   }
 }
 
 void PaletteEntryEditor::onColorSlidersChange(ColorSlidersChangeEvent& ev)
 {
-  setColor(ev.getColor());
-  setPaletteEntryChannel(ev.getColor(), ev.getModifiedChannel());
+  setColor(ev.color());
+
+  if (ev.mode() == ColorSliders::Absolute)
+    setAbsolutePaletteEntryChannel(ev.channel(), ev.color());
+  else
+    setRelativePaletteEntryChannel(ev.channel(), ev.delta());
+
   updateCurrentSpritePalette("Color Change");
   updateColorBar();
 }
@@ -453,156 +446,43 @@ void PaletteEntryEditor::onColorHexEntryChange(const app::Color& color)
   m_disableHexUpdate = false;
 }
 
-void PaletteEntryEditor::onColorTypeButtonClick(Event& ev)
+void PaletteEntryEditor::onColorTypeClick()
 {
-  RadioButton* source = static_cast<RadioButton*>(ev.getSource());
-
-  if (source == &m_rgbButton) selectColorType(app::Color::RgbType);
-  else if (source == &m_hsvButton) selectColorType(app::Color::HsvType);
+  switch (m_colorType.selectedItem()) {
+    case RGB_MODE:
+      selectColorType(app::Color::RgbType);
+      break;
+    case HSV_MODE:
+      selectColorType(app::Color::HsvType);
+      break;
+  }
 }
 
-void PaletteEntryEditor::onMoreOptionsClick(Event& ev)
+void PaletteEntryEditor::onChangeModeClick()
 {
-  Size reqSize;
-
-  if (m_bottomBox.isVisible()) {
-    set_config_bool("PaletteEditor", "ShowMoreOptions", false);
-    m_bottomBox.setVisible(false);
-
-    // Get the required size of the "More options" panel
-    reqSize = m_bottomBox.getPreferredSize();
-    reqSize.h += 4;
-
-    // Remove the space occupied by the "More options" panel
-    moveWindow(gfx::Rect(getOrigin(), getSize() - gfx::Size(0, reqSize.h)));
-  }
-  else {
-    set_config_bool("PaletteEditor", "ShowMoreOptions", true);
-    m_bottomBox.setVisible(true);
-
-    // Get the required size of the whole window
-    reqSize = getPreferredSize();
-
-    // Add space for the "more_options" panel
-    if (getBounds().h < reqSize.h) {
-      gfx::Rect rect(getOrigin(), gfx::Size(getBounds().w, reqSize.h));
-
-      // Show the expanded area inside the screen
-      if (rect.y2() > ui::display_h())
-        rect.offset(0, ui::display_h() - rect.y2());
-
-      moveWindow(rect);
-    }
-    else
-      setBounds(getBounds()); // TODO layout() method is missing
+  switch (m_changeMode.selectedItem()) {
+    case ABS_MODE:
+      m_rgbSliders.setMode(ColorSliders::Absolute);
+      m_hsvSliders.setMode(ColorSliders::Absolute);
+      break;
+    case REL_MODE:
+      m_rgbSliders.setMode(ColorSliders::Relative);
+      m_hsvSliders.setMode(ColorSliders::Relative);
+      break;
   }
 
-  // Redraw the window
-  invalidate();
-}
-
-void PaletteEntryEditor::onCopyColorsClick(Event& ev)
-{
-  // Get the selected entries in the palette view.
-  PaletteView* palette_editor = ColorBar::instance()->getPaletteView();
-  PaletteView::SelectedEntries selectedEntries;
-  palette_editor->getSelectedEntries(selectedEntries);
-
-  // Copy all selected entries into "m_clipboardColors" vector. These
-  // entries then are copied back to the palette in the "paste"
-  // operation (onPasteColorsClick).
-  Palette* palette = get_current_palette();
-  m_clipboardColors.clear();
-  for (int i=0; i<(int)selectedEntries.size(); ++i)
-    if (selectedEntries[i])
-      m_clipboardColors.push_back(palette->getEntry(i));
-}
-
-void PaletteEntryEditor::onPasteColorsClick(Event& ev)
-{
-  // Get the selected entries in the palette view.
-  PaletteView* palette_editor = ColorBar::instance()->getPaletteView();
-  PaletteView::SelectedEntries selectedEntries;
-  palette_editor->getSelectedEntries(selectedEntries);
-
-  // Count how many colors are selected so we can continue pasting
-  // colors even if the current number of selected colors is less than
-  // the number of colors into the clipboard.
-  int selectedEntriesCount = 0;
-  for (int i=0; i<(int)selectedEntries.size(); ++i)
-    if (selectedEntries[i])
-      selectedEntriesCount++;
-
-  Palette* palette = get_current_palette();
-  for (int i=0, j=0; i<(int)selectedEntries.size() && j<(int)m_clipboardColors.size(); ++i) {
-    // The color is pasted if the entry is selected or if the
-    // clipboard contains more entries than the current number of
-    // selected palette entries.
-    if (selectedEntries[i] || j >= selectedEntriesCount)
-      palette->setEntry(i, m_clipboardColors[j++]);
-  }
-
-  updateCurrentSpritePalette("Paste Colors");
-  updateColorBar();
-
-  // Generate onPalChange() event so we update all sliders to the new
-  // values.
-  onPalChange();
-}
-
-void PaletteEntryEditor::onRampClick(Event& ev)
-{
-  PaletteView* palette_editor = ColorBar::instance()->getPaletteView();
-  int index1, index2;
-
-  if (!palette_editor->getSelectedRange(index1, index2))
-    return;
-
-  Palette* src_palette = get_current_palette();
-  Palette* dst_palette = new Palette(frame_t(0), 256);
-
-  src_palette->copyColorsTo(dst_palette);
-  dst_palette->makeHorzRamp(index1, index2);
-
-  setNewPalette(dst_palette, "Color Ramp");
-  delete dst_palette;
-}
-
-void PaletteEntryEditor::onQuantizeClick(Event& ev)
-{
-  Palette* palette = NULL;
-
-  {
-    const ContextReader reader(UIContext::instance());
-    const Sprite* sprite(reader.sprite());
-
-    if (sprite == NULL) {
-      Alert::show("Error<<There is no sprite selected to quantize.||&OK");
-      return;
-    }
-
-    if (sprite->pixelFormat() != IMAGE_RGB) {
-      Alert::show("Error<<You can use this command only for RGB sprites||&OK");
-      return;
-    }
-
-    palette = render::create_palette_from_rgb(
-      sprite, reader.frame(), NULL);
-  }
-
-  setNewPalette(palette, "Quantize Palette");
-  delete palette;
+  // Update sliders, entries, etc.
+  updateWidgetsFromSelectedEntries();
 }
 
 void PaletteEntryEditor::setPaletteEntry(const app::Color& color)
 {
-  PaletteView* palView = ColorBar::instance()->getPaletteView();
-  PaletteView::SelectedEntries entries;
-  palView->getSelectedEntries(entries);
+  PalettePicks entries;
+  getPicks(entries);
 
   color_t new_pal_color = doc::rgba(color.getRed(),
-                                       color.getGreen(),
-                                       color.getBlue(), 255);
+                                    color.getGreen(),
+                                    color.getBlue(), 255);
 
   Palette* palette = get_current_palette();
   for (int c=0; c<palette->size(); c++) {
@@ -611,123 +491,179 @@ void PaletteEntryEditor::setPaletteEntry(const app::Color& color)
   }
 }
 
-void PaletteEntryEditor::setPaletteEntryChannel(const app::Color& color, ColorSliders::Channel channel)
+void PaletteEntryEditor::setAbsolutePaletteEntryChannel(ColorSliders::Channel channel, const app::Color& color)
 {
-  PaletteView* palView = ColorBar::instance()->getPaletteView();
-  PaletteView::SelectedEntries entries;
-  palView->getSelectedEntries(entries);
-
-  int begSel, endSel;
-  if (!palView->getSelectedRange(begSel, endSel))
-    return;
+  PalettePicks entries;
+  getPicks(entries);
+  int picksCount = entries.picks();
 
   uint32_t src_color;
-  int r, g, b;
+  int r, g, b, a;
 
   Palette* palette = get_current_palette();
   for (int c=0; c<palette->size(); c++) {
-    if (entries[c]) {
-      // Get the current RGB values of the palette entry
-      src_color = palette->getEntry(c);
-      r = rgba_getr(src_color);
-      g = rgba_getg(src_color);
-      b = rgba_getb(src_color);
+    if (!entries[c])
+      continue;
 
-      switch (color.getType()) {
+    // Get the current RGB values of the palette entry
+    src_color = palette->getEntry(c);
+    r = rgba_getr(src_color);
+    g = rgba_getg(src_color);
+    b = rgba_getb(src_color);
+    a = rgba_geta(src_color);
 
-        case app::Color::RgbType:
+    switch (m_type) {
+
+      case app::Color::RgbType:
+        // Modify one entry
+        if (picksCount == 1) {
+          r = color.getRed();
+          g = color.getGreen();
+          b = color.getBlue();
+          a = color.getAlpha();
+        }
+        // Modify one channel a set of entries
+        else {
+          // Setup the new RGB values depending of the modified channel.
+          switch (channel) {
+            case ColorSliders::Red:
+              r = color.getRed();
+            case ColorSliders::Green:
+              g = color.getGreen();
+              break;
+            case ColorSliders::Blue:
+              b = color.getBlue();
+              break;
+            case ColorSliders::Alpha:
+              a = color.getAlpha();
+              break;
+          }
+        }
+        break;
+
+      case app::Color::HsvType:
+        {
+          Hsv hsv;
+
           // Modify one entry
-          if (begSel == endSel) {
-            r = color.getRed();
-            g = color.getGreen();
-            b = color.getBlue();
+          if (picksCount == 1) {
+            hsv.hue(color.getHue());
+            hsv.saturation(double(color.getSaturation()) / 100.0);
+            hsv.value(double(color.getValue()) / 100.0);
+            a = color.getAlpha();
           }
           // Modify one channel a set of entries
           else {
-            // Setup the new RGB values depending of the modified channel.
+            // Convert RGB to HSV
+            hsv = Hsv(Rgb(r, g, b));
+
+            // Only modify the desired HSV channel
             switch (channel) {
-              case ColorSliders::Red:
-                r = color.getRed();
-              case ColorSliders::Green:
-                g = color.getGreen();
+              case ColorSliders::Hue:
+                hsv.hue(color.getHue());
                 break;
-              case ColorSliders::Blue:
-                b = color.getBlue();
+              case ColorSliders::Saturation:
+                hsv.saturation(double(color.getSaturation()) / 100.0);
+                break;
+              case ColorSliders::Value:
+                hsv.value(double(color.getValue()) / 100.0);
+                break;
+              case ColorSliders::Alpha:
+                a = color.getAlpha();
                 break;
             }
           }
-          break;
 
-        case app::Color::HsvType:
-          {
-            Hsv hsv;
+          // Convert HSV back to RGB
+          Rgb rgb(hsv);
+          r = rgb.red();
+          g = rgb.green();
+          b = rgb.blue();
+        }
+        break;
+    }
 
-            // Modify one entry
-            if (begSel == endSel) {
-              hsv.hue(color.getHue());
-              hsv.saturation(double(color.getSaturation()) / 100.0);
-              hsv.value(double(color.getValue()) / 100.0);
-            }
-            // Modify one channel a set of entries
-            else {
-              // Convert RGB to HSV
-              hsv = Hsv(Rgb(r, g, b));
+    palette->setEntry(c, doc::rgba(r, g, b, a));
+  }
+}
 
-              // Only modify the desired HSV channel
-              switch (channel) {
-                case ColorSliders::Hue:
-                  hsv.hue(color.getHue());
-                  break;
-                case ColorSliders::Saturation:
-                  hsv.saturation(double(color.getSaturation()) / 100.0);
-                  break;
-                case ColorSliders::Value:
-                  hsv.value(double(color.getValue()) / 100.0);
-                  break;
-              }
-            }
+void PaletteEntryEditor::setRelativePaletteEntryChannel(ColorSliders::Channel channel, int delta)
+{
+  PalettePicks entries;
+  getPicks(entries);
 
-            // Convert HSV back to RGB
-            Rgb rgb(hsv);
-            r = rgb.red();
-            g = rgb.green();
-            b = rgb.blue();
-          }
-          break;
+  // Update modified delta
+  m_relDeltas[channel] = delta;
+
+  uint32_t src_color;
+  int r, g, b, a;
+
+  Palette* palette = get_current_palette();
+  for (int c=0; c<palette->size(); c++) {
+    if (!entries[c])
+      continue;
+
+    // Get the current RGB values of the palette entry
+    src_color = m_fromPalette.getEntry(c);
+    r = rgba_getr(src_color);
+    g = rgba_getg(src_color);
+    b = rgba_getb(src_color);
+    a = rgba_geta(src_color);
+
+    switch (m_type) {
+
+      case app::Color::RgbType:
+        r = MID(0, r+m_relDeltas[ColorSliders::Red], 255);
+        g = MID(0, g+m_relDeltas[ColorSliders::Green], 255);
+        b = MID(0, b+m_relDeltas[ColorSliders::Blue], 255);
+        a = MID(0, a+m_relDeltas[ColorSliders::Alpha], 255);
+        break;
+
+      case app::Color::HsvType: {
+        // Convert RGB to HSV
+        Hsv hsv(Rgb(r, g, b));
+
+        double h = hsv.hue()+m_relDeltas[ColorSliders::Hue];
+        double s = 100.0*hsv.saturation()+m_relDeltas[ColorSliders::Saturation];
+        double v = 100.0*hsv.value()+m_relDeltas[ColorSliders::Value];
+
+        if (h < 0.0) h += 360.0;
+        else if (h > 360.0) h -= 360.0;
+
+        hsv.hue       (MID(0.0, h, 360.0));
+        hsv.saturation(MID(0.0, s, 100.0) / 100.0);
+        hsv.value     (MID(0.0, v, 100.0) / 100.0);
+
+        // Convert HSV back to RGB
+        Rgb rgb(hsv);
+        r = rgb.red();
+        g = rgb.green();
+        b = rgb.blue();
+        a = MID(0, a+m_relDeltas[ColorSliders::Alpha], 255);
+        break;
       }
 
-      palette->setEntry(c, doc::rgba(r, g, b, 255));
     }
+
+    palette->setEntry(c, doc::rgba(r, g, b, a));
   }
 }
 
 void PaletteEntryEditor::selectColorType(app::Color::Type type)
 {
+  m_type = type;
   m_rgbSliders.setVisible(type == app::Color::RgbType);
   m_hsvSliders.setVisible(type == app::Color::HsvType);
 
+  resetRelativeInfo();
+
   switch (type) {
-    case app::Color::RgbType: m_rgbButton.setSelected(true); break;
-    case app::Color::HsvType: m_hsvButton.setSelected(true); break;
+    case app::Color::RgbType: m_colorType.setSelectedItem(RGB_MODE); break;
+    case app::Color::HsvType: m_colorType.setSelectedItem(HSV_MODE); break;
   }
 
   m_vbox.layout();
   m_vbox.invalidate();
-}
-
-void PaletteEntryEditor::setNewPalette(Palette* palette, const char* operationName)
-{
-  // Copy the palette
-  palette->copyColorsTo(get_current_palette());
-
-  // Set the palette calling the hooks
-  set_current_palette(palette, false);
-
-  // Update the sprite palette
-  updateCurrentSpritePalette(operationName);
-
-  // Redraw the entire screen
-  ui::Manager::getDefault()->invalidate();
 }
 
 void PaletteEntryEditor::updateCurrentSpritePalette(const char* operationName)
@@ -748,28 +684,24 @@ void PaletteEntryEditor::updateCurrentSpritePalette(const char* operationName)
       currentSpritePalette->countDiff(newPalette, &from, &to);
 
       if (from >= 0 && to >= from) {
-        DocumentUndo* undo = document->getUndo();
+        DocumentUndo* undo = document->undoHistory();
+        Cmd* cmd = new cmd::SetPalette(sprite, frame, newPalette);
 
         // Add undo information to save the range of pal entries that will be modified.
-        if (undo->isEnabled()) {
-          if (m_implantChange && strcmp(undo->getNextUndoLabel(), operationName) == 0) {
-            undo->implantUndoerInLastGroup
-              (new undoers::SetPaletteColors(undo->getObjects(),
-                                             sprite, currentSpritePalette,
-                                             frame, from, to));
-          }
-          else {
-            UndoTransaction undoTransaction(writer.context(), operationName, undo::ModifyDocument);
-            undoTransaction.pushUndoer
-              (new undoers::SetPaletteColors(undoTransaction.getObjects(),
-                                             sprite, currentSpritePalette,
-                                             frame, from, to));
-            undoTransaction.commit();
-          }
+        if (m_implantChange &&
+            undo->lastExecutedCmd() &&
+            undo->lastExecutedCmd()->label() == operationName) {
+          // Implant the cmd in the last CmdSequence if it's
+          // related about color palette modifications
+          ASSERT(dynamic_cast<CmdSequence*>(undo->lastExecutedCmd()));
+          static_cast<CmdSequence*>(undo->lastExecutedCmd())->add(cmd);
+          cmd->execute(UIContext::instance());
         }
-
-        // Change the sprite palette
-        sprite->setPalette(newPalette, false);
+        else {
+          Transaction transaction(writer.context(), operationName, ModifyDocument);
+          transaction.execute(cmd);
+          transaction.commit();
+        }
       }
     }
     catch (base::Exception& e) {
@@ -792,16 +724,41 @@ void PaletteEntryEditor::updateColorBar()
   ColorBar::instance()->invalidate();
 }
 
+void PaletteEntryEditor::updateWidgetsFromSelectedEntries()
+{
+  PaletteView* palette_editor = ColorBar::instance()->getPaletteView();
+  int index = palette_editor->getSelectedEntry();
+  if (index >= 0)
+    setColor(app::Color::fromIndex(index));
+
+  resetRelativeInfo();
+
+  // Redraw the window
+  invalidate();
+}
+
 void PaletteEntryEditor::onPalChange()
 {
-  if (!m_selfPalChange) {
-    PaletteView* palette_editor = ColorBar::instance()->getPaletteView();
-    int index = palette_editor->getSelectedEntry();
-    if (index >= 0)
-      setColor(app::Color::fromIndex(index));
+  if (!m_selfPalChange)
+    updateWidgetsFromSelectedEntries();
+}
 
-    // Redraw the window
-    invalidate();
+void PaletteEntryEditor::resetRelativeInfo()
+{
+  m_rgbSliders.resetRelativeSliders();
+  m_hsvSliders.resetRelativeSliders();
+  get_current_palette()->copyColorsTo(&m_fromPalette);
+  m_relDeltas.clear();
+}
+
+void PaletteEntryEditor::getPicks(PalettePicks& picks)
+{
+  PaletteView* palView = ColorBar::instance()->getPaletteView();
+  palView->getSelectedEntries(picks);
+  if (picks.picks() == 0) {
+    int i = palView->getSelectedEntry();
+    if (i >= 0 && i < picks.size())
+      picks[i] = true;
   }
 }
 

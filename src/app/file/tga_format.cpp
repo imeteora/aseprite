@@ -1,23 +1,11 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * tga.c - Based on the code of Tim Gunn, Michal Mertl, Salvador
- *         Eduardo Tropea and Peter Wang.
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
+//
+// tga.c - Based on the code of Tim Gunn, Michal Mertl, Salvador
+//         Eduardo Tropea and Peter Wang.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -35,9 +23,10 @@ namespace app {
 using namespace base;
 
 class TgaFormat : public FileFormat {
-  const char* onGetName() const { return "tga"; }
-  const char* onGetExtensions() const { return "tga"; }
-  int onGetFlags() const {
+  const char* onGetName() const override { return "tga"; }
+  const char* onGetExtensions() const override { return "tga"; }
+  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::TARGA_IMAGE; }
+  int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
       FILE_SUPPORT_SAVE |
@@ -203,21 +192,22 @@ bool TgaFormat::onLoad(FileOp* fop)
   unsigned char image_id[256], image_palette[256][3], rgb[4];
   unsigned char id_length, palette_type, image_type, palette_entry_size;
   unsigned char bpp, descriptor_bits;
-  short unsigned int first_color, palette_colors;
-  short unsigned int left, top, image_width, image_height;
+  short unsigned int palette_colors;
+  short unsigned int image_width, image_height;
   unsigned int c, i, x, y, yc;
   int compressed;
 
-  FileHandle f(open_file_with_exception(fop->filename, "rb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "rb"));
+  FILE* f = handle.get();
 
   id_length = fgetc(f);
   palette_type = fgetc(f);
   image_type = fgetc(f);
-  first_color = fgetw(f);
+  fgetw(f);                     // first_color
   palette_colors  = fgetw(f);
   palette_entry_size = fgetc(f);
-  left = fgetw(f);
-  top = fgetw(f);
+  fgetw(f);                     // "left" field
+  fgetw(f);                     // "top" field
   image_width = fgetw(f);
   image_height = fgetw(f);
   bpp = fgetc(f);
@@ -274,10 +264,10 @@ bool TgaFormat::onLoad(FileOp* fop)
       }
 
       for (i=0; i<palette_colors; i++) {
-        fop_sequence_set_color(fop, i,
-                               image_palette[i][2],
-                               image_palette[i][1],
-                               image_palette[i][0]);
+        fop->sequenceSetColor(i,
+                              image_palette[i][2],
+                              image_palette[i][1],
+                              image_palette[i][0]);
       }
 
       pixelFormat = IMAGE_INDEXED;
@@ -301,7 +291,7 @@ bool TgaFormat::onLoad(FileOp* fop)
       }
 
       for (i=0; i<256; i++)
-        fop_sequence_set_color(fop, i, i, i, i);
+        fop->sequenceSetColor(i, i, i, i);
 
       pixelFormat = IMAGE_GRAYSCALE;
       break;
@@ -311,7 +301,7 @@ bool TgaFormat::onLoad(FileOp* fop)
       return false;
   }
 
-  Image* image = fop_sequence_image(fop, pixelFormat, image_width, image_height);
+  Image* image = fop->sequenceImage(pixelFormat, image_width, image_height);
   if (!image)
     return false;
 
@@ -372,14 +362,14 @@ bool TgaFormat::onLoad(FileOp* fop)
     }
 
     if (image_height > 1) {
-      fop_progress(fop, (float)(image_height-y) / (float)(image_height));
-      if (fop_is_stop(fop))
+      fop->setProgress((float)(image_height-y) / (float)(image_height));
+      if (fop->isStop())
         break;
     }
   }
 
   if (ferror(f)) {
-    fop_error(fop, "Error reading file.\n");
+    fop->setError("Error reading file.\n");
     return false;
   }
   else {
@@ -392,13 +382,14 @@ bool TgaFormat::onLoad(FileOp* fop)
 // should be an array of at least 256 RGB structures).
 bool TgaFormat::onSave(FileOp* fop)
 {
-  Image *image = fop->seq.image;
+  const Image* image = fop->sequenceImage();
   unsigned char image_palette[256][3];
   int x, y, c, r, g, b;
   int depth = (image->pixelFormat() == IMAGE_RGB) ? 32 : 8;
   bool need_pal = (image->pixelFormat() == IMAGE_INDEXED)? true: false;
 
-  FileHandle f(open_file_with_exception(fop->filename, "wb"));
+  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FILE* f = handle.get();
 
   fputc(0, f);                          /* id length (no id saved) */
   fputc((need_pal) ? 1 : 0, f);         /* palette type */
@@ -420,7 +411,7 @@ bool TgaFormat::onSave(FileOp* fop)
 
   if (need_pal) {
     for (y=0; y<256; y++) {
-      fop_sequence_get_color(fop, y, &r, &g, &b);
+      fop->sequenceGetColor(y, &r, &g, &b);
       image_palette[y][2] = r;
       image_palette[y][1] = g;
       image_palette[y][0] = b;
@@ -440,7 +431,7 @@ bool TgaFormat::onSave(FileOp* fop)
           fputc(rgba_geta(c), f);
         }
 
-        fop_progress(fop, (float)(image->height()-y) / (float)(image->height()));
+        fop->setProgress((float)(image->height()-y) / (float)(image->height()));
       }
       break;
 
@@ -449,7 +440,7 @@ bool TgaFormat::onSave(FileOp* fop)
         for (x=0; x<image->width(); x++)
           fputc(graya_getv(get_pixel(image, x, y)), f);
 
-        fop_progress(fop, (float)(image->height()-y) / (float)(image->height()));
+        fop->setProgress((float)(image->height()-y) / (float)(image->height()));
       }
       break;
 
@@ -458,13 +449,13 @@ bool TgaFormat::onSave(FileOp* fop)
         for (x=0; x<image->width(); x++)
           fputc(get_pixel(image, x, y), f);
 
-        fop_progress(fop, (float)(image->height()-y) / (float)(image->height()));
+        fop->setProgress((float)(image->height()-y) / (float)(image->height()));
       }
       break;
   }
 
   if (ferror(f)) {
-    fop_error(fop, "Error writing file.\n");
+    fop->setError("Error writing file.\n");
     return false;
   }
   else {

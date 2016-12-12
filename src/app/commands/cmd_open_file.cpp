@@ -1,24 +1,14 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+
+#include "app/commands/cmd_open_file.h"
 
 #include "app/app.h"
 #include "app/commands/command.h"
@@ -34,6 +24,7 @@
 #include "app/ui/status_bar.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
+#include "base/fs.h"
 #include "base/thread.h"
 #include "base/unique_ptr.h"
 #include "doc/sprite.h"
@@ -43,21 +34,7 @@
 
 namespace app {
 
-class OpenFileCommand : public Command {
-public:
-  OpenFileCommand();
-  Command* clone() const override { return new OpenFileCommand(*this); }
-
-protected:
-  void onLoadParams(Params* params) override;
-  void onExecute(Context* context) override;
-
-private:
-  std::string m_filename;
-};
-
-class OpenFileJob : public Job, public IFileOpProgress
-{
+class OpenFileJob : public Job, public IFileOpProgress {
 public:
   OpenFileJob(FileOp* fop)
     : Job("Loading file")
@@ -69,7 +46,7 @@ public:
     startJob();
 
     if (isCanceled())
-      fop_stop(m_fop);
+      m_fop->stop();
 
     waitJob();
   }
@@ -78,18 +55,16 @@ private:
   // Thread to do the hard work: load the file from the disk.
   virtual void onJob() override {
     try {
-      fop_operate(m_fop, this);
+      m_fop->operate(this);
     }
     catch (const std::exception& e) {
-      fop_error(m_fop, "Error loading file:\n%s", e.what());
+      m_fop->setError("Error loading file:\n%s", e.what());
     }
 
-    if (fop_is_stop(m_fop) && m_fop->document) {
-      delete m_fop->document;
-      m_fop->document = NULL;
-    }
+    if (m_fop->isStop() && m_fop->document())
+      delete m_fop->releaseDocument();
 
-    fop_done(m_fop);
+    m_fop->done();
   }
 
   virtual void ackFileOpProgress(double progress) override {
@@ -103,59 +78,104 @@ OpenFileCommand::OpenFileCommand()
   : Command("OpenFile",
             "Open Sprite",
             CmdRecordableFlag)
+  , m_repeatCheckbox(false)
+  , m_seqDecision(SequenceDecision::Ask)
 {
-  m_filename = "";
 }
 
-void OpenFileCommand::onLoadParams(Params* params)
+void OpenFileCommand::onLoadParams(const Params& params)
 {
-  m_filename = params->get("filename");
+  m_filename = params.get("filename");
+  m_folder = params.get("folder"); // Initial folder
+  m_repeatCheckbox = (params.get("repeat_checkbox") == "true");
 }
 
 void OpenFileCommand::onExecute(Context* context)
 {
   Console console;
 
+  m_usedFiles.clear();
+
   // interactive
-  if (context->isUiAvailable() && m_filename.empty()) {
-    char exts[4096];
-    get_readable_extensions(exts, sizeof(exts));
-    m_filename = app::show_file_selector("Open", "", exts);
+  if (context->isUIAvailable() && m_filename.empty()) {
+    std::string exts = get_readable_extensions();
+
+    // Add backslash as show_file_selector() expected a filename as
+    // initial path (and the file part is removed from the path).
+    if (!m_folder.empty() && !base::is_path_separator(m_folder[m_folder.size()-1]))
+      m_folder.push_back(base::path_separator);
+
+    m_filename = app::show_file_selector("Open", m_folder, exts,
+      FileSelectorType::Open);
   }
 
   if (!m_filename.empty()) {
-    base::UniquePtr<FileOp> fop(fop_to_load_document(context, m_filename.c_str(), FILE_LOAD_SEQUENCE_ASK));
+    int flags = (m_repeatCheckbox ? FILE_LOAD_SEQUENCE_ASK_CHECKBOX: 0);
+
+    switch (m_seqDecision) {
+      case SequenceDecision::Ask:
+        flags |= FILE_LOAD_SEQUENCE_ASK;
+        break;
+      case SequenceDecision::Agree:
+        flags |= FILE_LOAD_SEQUENCE_YES;
+        break;
+      case SequenceDecision::Skip:
+        flags |= FILE_LOAD_SEQUENCE_NONE;
+        break;
+    }
+
+    base::UniquePtr<FileOp> fop(
+      FileOp::createLoadDocumentOperation(
+        context, m_filename.c_str(), flags));
     bool unrecent = false;
 
     if (fop) {
-      if (fop->has_error()) {
-        console.printf(fop->error.c_str());
+      if (fop->hasError()) {
+        console.printf(fop->error().c_str());
         unrecent = true;
       }
       else {
+        if (fop->isSequence()) {
+
+          if (fop->sequenceFlags() & FILE_LOAD_SEQUENCE_YES) {
+            m_seqDecision = SequenceDecision::Agree;
+          }
+          else if (fop->sequenceFlags() & FILE_LOAD_SEQUENCE_NONE) {
+            m_seqDecision = SequenceDecision::Skip;
+          }
+
+          m_usedFiles = fop->filenames();
+        }
+        else {
+          m_usedFiles.push_back(fop->filename());
+        }
+
         OpenFileJob task(fop);
         task.showProgressWindow();
 
         // Post-load processing, it is called from the GUI because may require user intervention.
-        fop_post_load(fop);
+        fop->postLoad();
 
         // Show any error
-        if (fop->has_error())
-          console.printf(fop->error.c_str());
+        if (fop->hasError() && !fop->isStop())
+          console.printf(fop->error().c_str());
 
-        Document* document = fop->document;
+        Document* document = fop->document();
         if (document) {
-          App::instance()->getRecentFiles()->addRecentFile(fop->filename.c_str());
+          if (context->isUIAvailable())
+            App::instance()->recentFiles()->addRecentFile(fop->filename().c_str());
+
           document->setContext(context);
         }
-        else if (!fop_is_stop(fop))
+        else if (!fop->isStop())
           unrecent = true;
       }
 
       // The file was not found or was loaded loaded with errors,
       // so we can remove it from the recent-file list
       if (unrecent) {
-        App::instance()->getRecentFiles()->removeRecentFile(m_filename.c_str());
+        if (context->isUIAvailable())
+          App::instance()->recentFiles()->removeRecentFile(m_filename.c_str());
       }
     }
     else {

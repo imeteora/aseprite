@@ -1,32 +1,21 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_SKIN_SKIN_THEME_H_INCLUDED
 #define APP_UI_SKIN_SKIN_THEME_H_INCLUDED
 #pragma once
 
 #include "app/ui/skin/skin_part.h"
-#include "app/ui/skin/skin_parts.h"
 #include "app/ui/skin/style_sheet.h"
 #include "gfx/color.h"
 #include "gfx/fwd.h"
 #include "ui/manager.h"
 #include "ui/theme.h"
+
+#include "skin.xml.h"
 
 #include <map>
 #include <string>
@@ -44,134 +33,69 @@ namespace she {
 namespace app {
   namespace skin {
 
-    namespace ThemeColor {
-      enum Type {
-        Text,
-        Disabled,
-        Face,
-        HotFace,
-        Selected,
-        Background,
-        TextBoxText,
-        TextBoxFace,
-        EntrySuffix,
-        LinkText,
-        ButtonNormalText,
-        ButtonNormalFace,
-        ButtonHotText,
-        ButtonHotFace,
-        ButtonSelectedText,
-        ButtonSelectedFace,
-        CheckHotFace,
-        CheckFocusFace,
-        RadioHotFace,
-        RadioFocusFace,
-        MenuItemNormalText,
-        MenuItemNormalFace,
-        MenuItemHotText,
-        MenuItemHotFace,
-        MenuItemHighlightText,
-        MenuItemHighlightFace,
-        EditorFace,
-        EditorSpriteBorder,
-        EditorSpriteBottomBorder,
-        ListItemNormalText,
-        ListItemNormalFace,
-        ListItemSelectedText,
-        ListItemSelectedFace,
-        SliderEmptyText,
-        SliderEmptyFace,
-        SliderFullText,
-        SliderFullFace,
-        TabNormalText,
-        TabNormalFace,
-        TabSelectedText,
-        TabSelectedFace,
-        SplitterNormalFace,
-        ScrollBarBgFace,
-        ScrollBarThumbFace,
-        PopupWindowBorder,
-        TooltipText,
-        TooltipFace,
-        FileListEvenRowText,
-        FileListEvenRowFace,
-        FileListOddRowText,
-        FileListOddRowFace,
-        FileListSelectedRowText,
-        FileListSelectedRowFace,
-        FileListDisabledRowText,
-        Workspace,
-        MaxColors
-      };
-    } 
-
-    extern const char* kWindowFaceColorId;
-
     // This is the GUI theme used by Aseprite (which use images from
     // data/skins directory).
-    class SkinTheme : public ui::Theme {
+    class SkinTheme : public ui::Theme
+                    , public app::gen::SkinFile<SkinTheme> {
     public:
       static const char* kThemeCloseButtonId;
+
+      static SkinTheme* instance();
 
       SkinTheme();
       ~SkinTheme();
 
-      gfx::Color getColor(ThemeColor::Type k) const {
-        return m_colors[k];
-      }
+      she::Font* getDefaultFont() const override { return m_defaultFont; }
+      she::Font* getWidgetFont(const ui::Widget* widget) const override;
+      she::Font* getMiniFont() const { return m_miniFont; }
 
-      she::Font* getMiniFont() const { return m_minifont; }
+      ui::Cursor* getCursor(ui::CursorType type) override;
+      void initWidget(ui::Widget* widget) override;
+      void getWindowMask(ui::Widget* widget, gfx::Region& region) override;
+      void setDecorativeWidgetBounds(ui::Widget* widget) override;
+      int getScrollbarSize() override;
 
-      void reload_skin();
-      void reload_fonts();
-
-      ui::Cursor* getCursor(ui::CursorType type);
-      void initWidget(ui::Widget* widget);
-      void getWindowMask(ui::Widget* widget, gfx::Region& region);
-      void setDecorativeWidgetBounds(ui::Widget* widget);
-
-      void paintDesktop(ui::PaintEvent& ev);
-      void paintBox(ui::PaintEvent& ev);
-      void paintButton(ui::PaintEvent& ev);
-      void paintCheckBox(ui::PaintEvent& ev);
-      void paintEntry(ui::PaintEvent& ev);
-      void paintGrid(ui::PaintEvent& ev);
-      void paintLabel(ui::PaintEvent& ev);
-      void paintLinkLabel(ui::PaintEvent& ev);
-      void paintListBox(ui::PaintEvent& ev);
-      void paintListItem(ui::PaintEvent& ev);
-      void paintMenu(ui::PaintEvent& ev);
-      void paintMenuItem(ui::PaintEvent& ev);
-      void paintSplitter(ui::PaintEvent& ev);
-      void paintRadioButton(ui::PaintEvent& ev);
-      void paintSeparator(ui::PaintEvent& ev);
-      void paintSlider(ui::PaintEvent& ev);
-      void paintComboBoxEntry(ui::PaintEvent& ev);
-      void paintComboBoxButton(ui::PaintEvent& ev);
-      void paintTextBox(ui::PaintEvent& ev);
-      void paintView(ui::PaintEvent& ev);
-      void paintViewScrollbar(ui::PaintEvent& ev);
-      void paintViewViewport(ui::PaintEvent& ev);
-      void paintWindow(ui::PaintEvent& ev);
-      void paintPopupWindow(ui::PaintEvent& ev);
+      void paintDesktop(ui::PaintEvent& ev) override;
+      void paintBox(ui::PaintEvent& ev) override;
+      void paintButton(ui::PaintEvent& ev) override;
+      void paintCheckBox(ui::PaintEvent& ev) override;
+      void paintEntry(ui::PaintEvent& ev) override;
+      void paintGrid(ui::PaintEvent& ev) override;
+      void paintLabel(ui::PaintEvent& ev) override;
+      void paintLinkLabel(ui::PaintEvent& ev) override;
+      void paintListBox(ui::PaintEvent& ev) override;
+      void paintListItem(ui::PaintEvent& ev) override;
+      void paintMenu(ui::PaintEvent& ev) override;
+      void paintMenuItem(ui::PaintEvent& ev) override;
+      void paintSplitter(ui::PaintEvent& ev) override;
+      void paintRadioButton(ui::PaintEvent& ev) override;
+      void paintSeparator(ui::PaintEvent& ev) override;
+      void paintSlider(ui::PaintEvent& ev) override;
+      void paintComboBoxEntry(ui::PaintEvent& ev) override;
+      void paintComboBoxButton(ui::PaintEvent& ev) override;
+      void paintTextBox(ui::PaintEvent& ev) override;
+      void paintView(ui::PaintEvent& ev) override;
+      void paintViewScrollbar(ui::PaintEvent& ev) override;
+      void paintViewViewport(ui::PaintEvent& ev) override;
+      void paintWindow(ui::PaintEvent& ev) override;
+      void paintPopupWindow(ui::PaintEvent& ev) override;
+      void paintTooltip(ui::PaintEvent& ev) override;
       void paintWindowButton(ui::PaintEvent& ev);
-      void paintTooltip(ui::PaintEvent& ev);
 
       int get_button_selected_offset() const { return 0; } // TODO Configurable in xml
 
-      she::Surface* get_part(int part_i) const { return m_part[part_i]; }
-      she::Surface* get_part(const std::string& id) const;
-      she::Surface* get_toolicon(const char* tool_id) const;
-      gfx::Size get_part_size(int part_i) const;
+      she::Surface* getToolIcon(const char* toolId) const;
 
       // Helper functions to draw bounds/hlines with sheet parts
-      void draw_bounds_array(ui::Graphics* g, const gfx::Rect& rc, int parts[8]);
-      void draw_bounds_nw(ui::Graphics* g, const gfx::Rect& rc, int nw, gfx::Color bg = gfx::ColorNone);
-      void draw_bounds_nw(ui::Graphics* g, const gfx::Rect& rc, const SkinPartPtr skinPart, gfx::Color bg = gfx::ColorNone);
-      void draw_bounds_nw2(ui::Graphics* g, const gfx::Rect& rc, int x_mid, int nw1, int nw2, gfx::Color bg1, gfx::Color bg2);
-      void draw_part_as_hline(ui::Graphics* g, const gfx::Rect& rc, int part);
-      void draw_part_as_vline(ui::Graphics* g, const gfx::Rect& rc, int part);
-      void paintProgressBar(ui::Graphics* g, const gfx::Rect& rc, float progress);
+      void drawRect(ui::Graphics* g, const gfx::Rect& rc,
+                    she::Surface* nw, she::Surface* n, she::Surface* ne,
+                    she::Surface* e, she::Surface* se, she::Surface* s,
+                    she::Surface* sw, she::Surface* w);
+      void drawRect(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart, gfx::Color bg = gfx::ColorNone);
+      void drawRect2(ui::Graphics* g, const gfx::Rect& rc, int x_mid, SkinPart* nw1, SkinPart* nw2, gfx::Color bg1, gfx::Color bg2);
+      void drawHline(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart);
+      void drawVline(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart);
+      void paintProgressBar(ui::Graphics* g, const gfx::Rect& rc, double progress);
 
       Style* getStyle(const std::string& id) {
         return m_stylesheet.getStyle(id);
@@ -181,7 +105,14 @@ namespace app {
         return m_parts_by_id[id];
       }
 
+      int getDimensionById(const std::string& id) {
+        // Warning! Don't use ui::guiscale(), as CurrentTheme::get()
+        // is still nullptr when we use this getDimensionById()
+        return m_dimensions_by_id[id] * this->guiscale();
+      }
+
       gfx::Color getColorById(const std::string& id) {
+        ASSERT(m_colors_by_id.find(id) != m_colors_by_id.end());
         return m_colors_by_id[id];
       }
 
@@ -189,13 +120,10 @@ namespace app {
       void onRegenerate() override;
 
     private:
-      void draw_bounds_template(ui::Graphics* g, const gfx::Rect& rc,
-                                int nw, int n, int ne, int e, int se, int s, int sw, int w);
-      void draw_bounds_template(ui::Graphics* g, const gfx::Rect& rc, const SkinPartPtr& skinPart);
-      void draw_bounds_template(ui::Graphics* g, const gfx::Rect& rc,
-        she::Surface* nw, she::Surface* n, she::Surface* ne,
-        she::Surface* e, she::Surface* se, she::Surface* s,
-        she::Surface* sw, she::Surface* w);
+      void loadAll(const std::string& skinId);
+      void loadSheet(const std::string& skinId);
+      void loadFonts(const std::string& skinId);
+      void loadXml(const std::string& skinId);
 
       she::Surface* sliceSheet(she::Surface* sur, const gfx::Rect& bounds);
       gfx::Color getWidgetBgColor(ui::Widget* widget);
@@ -206,30 +134,25 @@ namespace app {
 
       void paintIcon(ui::Widget* widget, ui::Graphics* g, ui::IButtonIcon* iconInterface, int x, int y);
 
-      she::Font* loadFont(const char* userFont, const std::string& path);
+      she::Font* loadFont(const std::string& userFont, const std::string& themeFont);
 
-      std::string m_selected_skin;
       she::Surface* m_sheet;
-      std::vector<she::Surface*> m_part;
       std::map<std::string, SkinPartPtr> m_parts_by_id;
       std::map<std::string, she::Surface*> m_toolicon;
       std::map<std::string, gfx::Color> m_colors_by_id;
+      std::map<std::string, int> m_dimensions_by_id;
       std::vector<ui::Cursor*> m_cursors;
-      std::vector<gfx::Color> m_colors;
       StyleSheet m_stylesheet;
-      she::Font* m_minifont;
+      she::Font* m_defaultFont;
+      she::Font* m_miniFont;
     };
 
-    inline Style* get_style(const std::string& id) {
-      return static_cast<SkinTheme*>(ui::Manager::getDefault()->getTheme())->getStyle(id);
-    }
-
     inline SkinPartPtr get_part_by_id(const std::string& id) {
-      return static_cast<SkinTheme*>(ui::Manager::getDefault()->getTheme())->getPartById(id);
+      return static_cast<SkinTheme*>(ui::Manager::getDefault()->theme())->getPartById(id);
     }
 
     inline gfx::Color get_color_by_id(const std::string& id) {
-      return static_cast<SkinTheme*>(ui::Manager::getDefault()->getTheme())->getColorById(id);
+      return static_cast<SkinTheme*>(ui::Manager::getDefault()->theme())->getColorById(id);
     }
 
   } // namespace skin

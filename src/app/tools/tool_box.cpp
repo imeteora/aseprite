@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -27,14 +15,17 @@
 #include "app/tools/ink.h"
 #include "app/tools/intertwine.h"
 #include "app/tools/point_shape.h"
+#include "app/tools/stroke.h"
 #include "app/tools/tool_group.h"
 #include "app/tools/tool_loop.h"
+#include "base/bind.h"
 #include "base/exception.h"
 #include "doc/algo.h"
 #include "doc/algorithm/floodfill.h"
 #include "doc/algorithm/polygon.h"
 #include "doc/brush.h"
-#include "doc/image.h"
+#include "doc/compressed_image.h"
+#include "doc/image_impl.h"
 #include "doc/mask.h"
 #include "fixmath/fixmath.h"
 
@@ -49,17 +40,19 @@ namespace app {
 namespace tools {
 
 using namespace gfx;
-  
+
 const char* WellKnownTools::RectangularMarquee = "rectangular_marquee";
+const char* WellKnownTools::Lasso = "lasso";
+const char* WellKnownTools::Pencil = "pencil";
 const char* WellKnownTools::Eraser = "eraser";
 const char* WellKnownTools::Eyedropper = "eyedropper";
+const char* WellKnownTools::Hand = "hand";
 
 const char* WellKnownInks::Selection = "selection";
 const char* WellKnownInks::Paint = "paint";
 const char* WellKnownInks::PaintFg = "paint_fg";
 const char* WellKnownInks::PaintBg = "paint_bg";
-const char* WellKnownInks::PaintOpaque = "paint_opaque";
-const char* WellKnownInks::PaintSetAlpha = "paint_set_alpha";
+const char* WellKnownInks::PaintCopy = "paint_copy";
 const char* WellKnownInks::PaintLockAlpha = "paint_lock_alpha";
 const char* WellKnownInks::Shading = "shading";
 const char* WellKnownInks::Eraser = "eraser";
@@ -81,16 +74,19 @@ const char* WellKnownIntertwiners::AsEllipses = "as_ellipses";
 const char* WellKnownIntertwiners::AsBezier = "as_bezier";
 const char* WellKnownIntertwiners::AsPixelPerfect = "as_pixel_perfect";
 
+const char* WellKnownPointShapes::None = "none";
+const char* WellKnownPointShapes::Pixel = "pixel";
+const char* WellKnownPointShapes::Brush = "brush";
+const char* WellKnownPointShapes::FloodFill = "floodfill";
+const char* WellKnownPointShapes::Spray = "spray";
+
 ToolBox::ToolBox()
 {
-  PRINTF("Toolbox module: installing\n");
-
   m_inks[WellKnownInks::Selection]       = new SelectionInk();
-  m_inks[WellKnownInks::Paint]           = new PaintInk(PaintInk::Merge);
+  m_inks[WellKnownInks::Paint]           = new PaintInk(PaintInk::Simple);
   m_inks[WellKnownInks::PaintFg]         = new PaintInk(PaintInk::WithFg);
   m_inks[WellKnownInks::PaintBg]         = new PaintInk(PaintInk::WithBg);
-  m_inks[WellKnownInks::PaintOpaque]     = new PaintInk(PaintInk::Opaque);
-  m_inks[WellKnownInks::PaintSetAlpha]   = new PaintInk(PaintInk::SetAlpha);
+  m_inks[WellKnownInks::PaintCopy]       = new PaintInk(PaintInk::Copy);
   m_inks[WellKnownInks::PaintLockAlpha]  = new PaintInk(PaintInk::LockAlpha);
   m_inks[WellKnownInks::Shading]         = new ShadingInk();
   m_inks[WellKnownInks::Eraser]          = new EraserInk(EraserInk::Eraser);
@@ -111,11 +107,11 @@ ToolBox::ToolBox()
   m_controllers["two_points"]            = new TwoPointsController();
   m_controllers["four_points"]           = new FourPointsController();
 
-  m_pointshapers["none"]                 = new NonePointShape();
-  m_pointshapers["pixel"]                = new PixelPointShape();
-  m_pointshapers["brush"]                = new BrushPointShape();
-  m_pointshapers["floodfill"]            = new FloodFillPointShape();
-  m_pointshapers["spray"]                = new SprayPointShape();
+  m_pointshapers[WellKnownPointShapes::None] = new NonePointShape();
+  m_pointshapers[WellKnownPointShapes::Pixel] = new PixelPointShape();
+  m_pointshapers[WellKnownPointShapes::Brush] = new BrushPointShape();
+  m_pointshapers[WellKnownPointShapes::FloodFill] = new FloodFillPointShape();
+  m_pointshapers[WellKnownPointShapes::Spray] = new SprayPointShape();
 
   m_intertwiners[WellKnownIntertwiners::None] = new IntertwineNone();
   m_intertwiners[WellKnownIntertwiners::AsLines] = new IntertwineAsLines();
@@ -125,8 +121,6 @@ ToolBox::ToolBox()
   m_intertwiners[WellKnownIntertwiners::AsPixelPerfect] = new IntertwineAsPixelPerfect();
 
   loadTools();
-
-  PRINTF("Toolbox module: installed\n");
 }
 
 struct deleter {
@@ -139,16 +133,12 @@ struct deleter {
 
 ToolBox::~ToolBox()
 {
-  PRINTF("Toolbox module: uninstalling\n");
-
   std::for_each(m_tools.begin(), m_tools.end(), deleter());
   std::for_each(m_groups.begin(), m_groups.end(), deleter());
   std::for_each(m_intertwiners.begin(), m_intertwiners.end(), deleter());
   std::for_each(m_pointshapers.begin(), m_pointshapers.end(), deleter());
   std::for_each(m_controllers.begin(), m_controllers.end(), deleter());
   std::for_each(m_inks.begin(), m_inks.end(), deleter());
-
-  PRINTF("Toolbox module: uninstalled\n");
 }
 
 Tool* ToolBox::getToolById(const std::string& id)
@@ -158,9 +148,7 @@ Tool* ToolBox::getToolById(const std::string& id)
     if (tool->getId() == id)
       return tool;
   }
-  // PRINTF("Error get_tool_by_name() with '%s'\n", name.c_str());
-  // ASSERT(false);
-  return NULL;
+  return nullptr;
 }
 
 Ink* ToolBox::getInkById(const std::string& id)
@@ -173,12 +161,17 @@ Intertwine* ToolBox::getIntertwinerById(const std::string& id)
   return m_intertwiners[id];
 }
 
+PointShape* ToolBox::getPointShapeById(const std::string& id)
+{
+  return m_pointshapers[id];
+}
+
 void ToolBox::loadTools()
 {
-  PRINTF("Loading Aseprite tools\n");
+  LOG("TOOL: Loading tools...\n");
 
   XmlDocumentRef doc(GuiXml::instance()->doc());
-  TiXmlHandle handle(doc);
+  TiXmlHandle handle(doc.get());
 
   // For each group
   TiXmlElement* xmlGroup = handle.FirstChild("gui").FirstChild("tools").FirstChild("group").ToElement();
@@ -186,10 +179,10 @@ void ToolBox::loadTools()
     const char* group_id = xmlGroup->Attribute("id");
     const char* group_text = xmlGroup->Attribute("text");
 
-    PRINTF(" - New group '%s'\n", group_id);
-
     if (!group_id || !group_text)
       throw base::Exception("The configuration file has a <group> without 'id' or 'text' attributes.");
+
+    LOG(VERBOSE) << "TOOL: Group " << group_id << "\n";
 
     ToolGroup* tool_group = new ToolGroup(group_id, group_text);
 
@@ -205,7 +198,7 @@ void ToolBox::loadTools()
       Tool* tool = new Tool(tool_group, tool_id, tool_text, tool_tips,
         default_brush_size ? strtol(default_brush_size, NULL, 10): 1);
 
-      PRINTF(" - New tool '%s' in group '%s' found\n", tool_id, group_id);
+      LOG(VERBOSE) << "TOOL: Tool " << tool_id << " in group " << group_id << " found\n";
 
       loadToolProperties(xmlTool, tool, 0, "left");
       loadToolProperties(xmlTool, tool, 1, "right");
@@ -218,6 +211,8 @@ void ToolBox::loadTools()
     m_groups.push_back(tool_group);
     xmlGroup = xmlGroup->NextSiblingElement();
   }
+
+  LOG("TOOL: Done. %d tools, %d groups.\n", m_tools.size(), m_groups.size());
 }
 
 void ToolBox::loadToolProperties(TiXmlElement* xmlTool, Tool* tool, int button, const std::string& suffix)

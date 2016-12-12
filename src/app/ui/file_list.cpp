@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2016  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -26,6 +14,7 @@
 #include "app/thumbnail_generator.h"
 #include "app/ui/skin/skin_theme.h"
 #include "base/string.h"
+#include "base/time.h"
 #include "she/font.h"
 #include "she/surface.h"
 #include "ui/ui.h"
@@ -46,6 +35,7 @@ FileList::FileList()
   : Widget(kGenericWidget)
   , m_generateThumbnailTimer(200, this)
   , m_monitoringTimer(50, this)
+  , m_thumbnail(nullptr)
 {
   setFocusStop(true);
   setDoubleBuffered(true);
@@ -77,6 +67,10 @@ FileList::~FileList()
 void FileList::setExtensions(const char* extensions)
 {
   m_exts = extensions;
+
+  // Refresh
+  if (isVisible())
+    setCurrentFolder(m_currentFolder);
 }
 
 void FileList::setCurrentFolder(IFileItem* folder)
@@ -99,14 +93,12 @@ void FileList::setCurrentFolder(IFileItem* folder)
 
   invalidate();
   View::getView(this)->updateView();
-
-  requestFocus();
 }
 
 void FileList::goUp()
 {
   IFileItem* folder = m_currentFolder;
-  IFileItem* parent = folder->getParent();
+  IFileItem* parent = folder->parent();
   if (parent) {
     setCurrentFolder(parent);
     m_selected = folder;
@@ -126,8 +118,8 @@ bool FileList::onProcessMessage(Message* msg)
     case kMouseMoveMessage:
       if (hasCapture()) {
         MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-        int th = getTextHeight();
-        int y = getBounds().y;
+        int th = textHeight();
+        int y = bounds().y;
         IFileItem* old_selected = m_selected;
         m_selected = NULL;
 
@@ -203,19 +195,19 @@ bool FileList::onProcessMessage(Message* msg)
           case kKeyPageUp:
           case kKeyPageDown: {
             int sgn = (scancode == kKeyPageUp) ? -1: 1;
-            gfx::Rect vp = view->getViewportBounds();
+            gfx::Rect vp = view->viewportBounds();
             if (select < 0)
               select = 0;
-            select += sgn * vp.h / (getTextHeight()+4*guiscale());
+            select += sgn * vp.h / (textHeight()+4*guiscale());
             break;
           }
 
           case kKeyLeft:
           case kKeyRight:
             if (select >= 0) {
-              gfx::Rect vp = view->getViewportBounds();
+              gfx::Rect vp = view->viewportBounds();
               int sgn = (scancode == kKeyLeft) ? -1: 1;
-              gfx::Point scroll = view->getViewScroll();
+              gfx::Point scroll = view->viewScroll();
               scroll.x += vp.w/2*sgn;
               view->setViewScroll(scroll);
             }
@@ -251,7 +243,7 @@ bool FileList::onProcessMessage(Message* msg)
                  std::tolower(unicodeChar) <= 'z') ||
                 (unicodeChar >= '0' &&
                  unicodeChar <= '9')) {
-              if (ui::clock() - m_isearchClock > ISEARCH_KEYPRESS_INTERVAL_MSECS)
+              if ((base::current_tick() - m_isearchClock) > ISEARCH_KEYPRESS_INTERVAL_MSECS)
                 m_isearch.clear();
 
               m_isearch.push_back(unicodeChar);
@@ -262,12 +254,12 @@ bool FileList::onProcessMessage(Message* msg)
 
               for (i=MAX(select, 0); i<bottom; ++i, ++link) {
                 IFileItem* fi = *link;
-                if (base::utf8_icmp(fi->getDisplayName(), m_isearch, chrs) == 0) {
+                if (base::utf8_icmp(fi->displayName(), m_isearch, chrs) == 0) {
                   select = i;
                   break;
                 }
               }
-              m_isearchClock = ui::clock();
+              m_isearchClock = base::current_tick();
               // Go to selectIndex...
             }
             else
@@ -284,8 +276,13 @@ bool FileList::onProcessMessage(Message* msg)
     case kMouseWheelMessage: {
       View* view = View::getView(this);
       if (view) {
-        gfx::Point scroll = view->getViewScroll();
-        scroll += static_cast<MouseMessage*>(msg)->wheelDelta() * 3*(getTextHeight()+4*guiscale());
+        gfx::Point scroll = view->viewScroll();
+
+        if (static_cast<MouseMessage*>(msg)->preciseWheel())
+          scroll += static_cast<MouseMessage*>(msg)->wheelDelta();
+        else
+          scroll += static_cast<MouseMessage*>(msg)->wheelDelta() * 3*(textHeight()+4*guiscale());
+
         view->setViewScroll(scroll);
       }
       break;
@@ -309,41 +306,52 @@ bool FileList::onProcessMessage(Message* msg)
   return Widget::onProcessMessage(msg);
 }
 
+int FileList::thumbnailY()
+{
+  int y = 0;
+  for (IFileItem* fi : m_list) {
+    gfx::Size itemSize = getFileItemSize(fi);
+    if (fi == m_selected) {
+      if (fi->getThumbnail())
+        return y + itemSize.h/2;
+      else
+        break;
+    }
+    y += itemSize.h;
+  }
+  return 0;
+}
+
 void FileList::onPaint(ui::PaintEvent& ev)
 {
-  Graphics* g = ev.getGraphics();
-  SkinTheme* theme = static_cast<SkinTheme*>(getTheme());
-  View* view = View::getView(this);
-  gfx::Rect vp = view->getViewportBounds();
-  gfx::Rect bounds = getClientBounds();
+  Graphics* g = ev.graphics();
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  gfx::Rect bounds = clientBounds();
   int x, y = bounds.y;
   int evenRow = 0;
   gfx::Color bgcolor;
   gfx::Color fgcolor;
-  she::Surface* thumbnail = NULL;
-  int thumbnail_y = 0;
 
-  g->fillRect(theme->getColor(ThemeColor::Background), bounds);
+  g->fillRect(theme->colors.background(), bounds);
 
   // rows
-  for (FileItemList::iterator
-         it=m_list.begin(), end=m_list.end(); it!=end; ++it) {
-    IFileItem* fi = *it;
+  m_thumbnail = nullptr;
+  for (IFileItem* fi : m_list) {
     gfx::Size itemSize = getFileItemSize(fi);
 
     if (fi == m_selected) {
-      fgcolor = theme->getColor(ThemeColor::FileListSelectedRowText);
-      bgcolor = theme->getColor(ThemeColor::FileListSelectedRowFace);
+      fgcolor = theme->colors.filelistSelectedRowText();
+      bgcolor = theme->colors.filelistSelectedRowFace();
     }
     else {
-      bgcolor = evenRow ? theme->getColor(ThemeColor::FileListEvenRowFace):
-                          theme->getColor(ThemeColor::FileListOddRowFace);
+      bgcolor = evenRow ? theme->colors.filelistEvenRowFace():
+                          theme->colors.filelistOddRowFace();
 
       if (fi->isFolder() && !fi->isBrowsable())
-        fgcolor = theme->getColor(ThemeColor::FileListDisabledRowText);
+        fgcolor = theme->colors.filelistDisabledRowText();
       else
-        fgcolor = evenRow ? theme->getColor(ThemeColor::FileListEvenRowText):
-                            theme->getColor(ThemeColor::FileListOddRowText);
+        fgcolor = evenRow ? theme->colors.filelistEvenRowText():
+                            theme->colors.filelistOddRowText();
     }
 
     x = bounds.x+2*guiscale();
@@ -352,15 +360,15 @@ void FileList::onPaint(ui::PaintEvent& ev)
     g->fillRect(bgcolor, gfx::Rect(bounds.x, y, bounds.w, itemSize.h));
 
     if (fi->isFolder()) {
-      int icon_w = getFont()->textLength("[+]");
+      int icon_w = font()->textLength("[+]");
 
-      g->drawUIString("[+]", fgcolor, bgcolor, gfx::Point(x, y+2*guiscale()));
+      g->drawString("[+]", fgcolor, bgcolor, gfx::Point(x, y+2*guiscale()));
       x += icon_w+2*guiscale();
     }
 
     // item name
     g->drawString(
-      fi->getDisplayName().c_str(),
+      fi->displayName().c_str(),
       fgcolor, bgcolor, gfx::Point(x, y+2*guiscale()));
 
     // draw progress bars
@@ -380,31 +388,39 @@ void FileList::onPaint(ui::PaintEvent& ev)
     }
 
     // Thumbnail position
-    if (fi == m_selected) {
-      thumbnail = fi->getThumbnail();
-      if (thumbnail)
-        thumbnail_y = y + itemSize.h/2;
-    }
+    if (fi == m_selected)
+      m_thumbnail = fi->getThumbnail();
 
     y += itemSize.h;
     evenRow ^= 1;
   }
 
   // Draw the thumbnail
-  if (thumbnail) {
-    x = vp.x+vp.w - 2*guiscale() - thumbnail->width();
-    y = thumbnail_y - thumbnail->height()/2 + getBounds().y;
-    y = MID(vp.y+2*guiscale(), y, vp.y+vp.h-3*guiscale()-thumbnail->height());
-    x -= getBounds().x;
-    y -= getBounds().y;
-
-    g->blit(thumbnail, 0, 0, x, y, thumbnail->width(), thumbnail->height());
-    g->drawRect(gfx::rgba(0, 0, 0),
-      gfx::Rect(x-1, y-1, thumbnail->width()+1, thumbnail->height()+1));
+  if (m_thumbnail) {
+    gfx::Rect tbounds = thumbnailBounds();
+    g->blit(m_thumbnail, 0, 0, tbounds.x, tbounds.y, tbounds.w, tbounds.h);
+    g->drawRect(gfx::rgba(0, 0, 0), tbounds.enlarge(1));
   }
 }
 
-void FileList::onPreferredSize(PreferredSizeEvent& ev)
+gfx::Rect FileList::thumbnailBounds()
+{
+  if (!m_selected ||
+      !m_selected->getThumbnail())
+    return gfx::Rect();
+
+  she::Surface* thumbnail = m_selected->getThumbnail();
+  View* view = View::getView(this);
+  gfx::Rect vp = view->viewportBounds();
+  int x = vp.x+vp.w - 2*guiscale() - thumbnail->width();
+  int y = thumbnailY() - thumbnail->height()/2 + bounds().y;
+  y = MID(vp.y+2*guiscale(), y, vp.y+vp.h-3*guiscale()-thumbnail->height());
+  x -= bounds().x;
+  y -= bounds().y;
+  return gfx::Rect(x, y, thumbnail->width(), thumbnail->height());
+}
+
+void FileList::onSizeHint(SizeHintEvent& ev)
 {
   if (!m_req_valid) {
     gfx::Size reqSize(0, 0);
@@ -423,7 +439,7 @@ void FileList::onPreferredSize(PreferredSizeEvent& ev)
     m_req_w = reqSize.w;
     m_req_h = reqSize.h;
   }
-  ev.setPreferredSize(Size(m_req_w, m_req_h));
+  ev.setSizeHint(Size(m_req_w, m_req_h));
 }
 
 void FileList::onFileSelected()
@@ -461,20 +477,20 @@ gfx::Size FileList::getFileItemSize(IFileItem* fi) const
   int len = 0;
 
   if (fi->isFolder())
-    len += getFont()->textLength("[+]") + 2*guiscale();
+    len += font()->textLength("[+]") + 2*guiscale();
 
-  len += getFont()->textLength(fi->getDisplayName().c_str());
+  len += font()->textLength(fi->displayName().c_str());
 
-  return gfx::Size(len+4*guiscale(), getTextHeight()+4*guiscale());
+  return gfx::Size(len+4*guiscale(), textHeight()+4*guiscale());
 }
 
 void FileList::makeSelectedFileitemVisible()
 {
   View* view = View::getView(this);
-  gfx::Rect vp = view->getViewportBounds();
-  gfx::Point scroll = view->getViewScroll();
-  int th = getTextHeight();
-  int y = getBounds().y;
+  gfx::Rect vp = view->viewportBounds();
+  gfx::Point scroll = view->viewScroll();
+  int th = textHeight();
+  int y = bounds().y;
 
   // rows
   for (FileItemList::iterator
@@ -485,9 +501,9 @@ void FileList::makeSelectedFileitemVisible()
 
     if (fi == m_selected) {
       if (y < vp.y)
-        scroll.y = y - getBounds().y;
+        scroll.y = y - bounds().y;
       else if (y > vp.y + vp.h - (th+4*guiscale()))
-        scroll.y = y - getBounds().y - vp.h + (th+4*guiscale());
+        scroll.y = y - bounds().y - vp.h + (th+4*guiscale());
 
       view->setViewScroll(scroll);
       break;
@@ -500,7 +516,7 @@ void FileList::makeSelectedFileitemVisible()
 void FileList::regenerateList()
 {
   // get the children of the current folder
-  m_list = m_currentFolder->getChildren();
+  m_list = m_currentFolder->children();
 
   // filter the list by the available extensions
   if (!m_exts.empty()) {
@@ -508,7 +524,9 @@ void FileList::regenerateList()
            it=m_list.begin();
          it!=m_list.end(); ) {
       IFileItem* fileitem = *it;
-      if (!fileitem->isFolder() &&
+      if (fileitem->isHidden())
+        it = m_list.erase(it);
+      else if (!fileitem->isFolder() &&
           !fileitem->hasExtension(m_exts.c_str())) {
         it = m_list.erase(it);
       }

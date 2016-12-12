@@ -1,20 +1,8 @@
-/* Aseprite
- * Copyright (C) 2001-2013  David Capello
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- */
+// Aseprite
+// Copyright (C) 2001-2015  David Capello
+//
+// This program is distributed under the terms of
+// the End-User License Agreement for Aseprite.
 
 #ifndef APP_UI_SKIN_SKIN_PROPERTY_H_INCLUDED
 #define APP_UI_SKIN_SKIN_PROPERTY_H_INCLUDED
@@ -49,6 +37,9 @@ namespace app {
       LookType getLook() const { return m_look; }
       void setLook(LookType look) { m_look = look; }
 
+      bool hasMiniFont() const { return m_miniFont; }
+      void setMiniFont() { m_miniFont = true; }
+
       int getUpperLeft() const { return m_upperLeft; }
       int getUpperRight() const { return m_upperRight; }
       int getLowerLeft() const { return m_lowerLeft; }
@@ -61,13 +52,14 @@ namespace app {
 
     private:
       LookType m_look;
+      bool m_miniFont;
       int m_upperLeft;
       int m_upperRight;
       int m_lowerLeft;
       int m_lowerRight;
     };
 
-    typedef SharedPtr<SkinProperty> SkinPropertyPtr;
+    typedef base::SharedPtr<SkinProperty> SkinPropertyPtr;
 
     SkinPropertyPtr get_skin_property(ui::Widget* widget);
 

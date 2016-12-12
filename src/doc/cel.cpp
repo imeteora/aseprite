@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2015 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -21,24 +21,33 @@ Cel::Cel(frame_t frame, const ImageRef& image)
   : Object(ObjectType::Cel)
   , m_layer(NULL)
   , m_frame(frame)
-  , m_image(image)
-  , m_position(0, 0)
-  , m_opacity(255)
+  , m_data(new CelData(image))
 {
 }
 
-Cel::Cel(const Cel& cel)
-  : Object(cel)
+Cel::Cel(frame_t frame, const CelDataRef& celData)
+  : Object(ObjectType::Cel)
   , m_layer(NULL)
-  , m_frame(cel.m_frame)
-  , m_image(cel.m_image)
-  , m_position(cel.m_position)
-  , m_opacity(cel.m_opacity)
+  , m_frame(frame)
+  , m_data(celData)
 {
 }
 
-Cel::~Cel()
+// static
+Cel* Cel::createCopy(const Cel* other)
 {
+  Cel* cel = new Cel(other->frame(),
+    ImageRef(Image::createCopy(other->image())));
+
+  cel->setPosition(other->position());
+  cel->setOpacity(other->opacity());
+  return cel;
+}
+
+// static
+Cel* Cel::createLink(const Cel* other)
+{
+  return new Cel(other->frame(), other->dataRef());
 }
 
 void Cel::setFrame(frame_t frame)
@@ -47,10 +56,34 @@ void Cel::setFrame(frame_t frame)
   m_frame = frame;
 }
 
-void Cel::setImage(const ImageRef& image)
+void Cel::setDataRef(const CelDataRef& celData)
 {
-  m_image = image;
-  fixupImage();
+  ASSERT(celData);
+  m_data = celData;
+}
+
+void Cel::setPosition(int x, int y)
+{
+  setPosition(gfx::Point(x, y));
+}
+
+void Cel::setPosition(const gfx::Point& pos)
+{
+  m_data->setPosition(pos);
+}
+
+void Cel::setOpacity(int opacity)
+{
+  m_data->setOpacity(opacity);
+}
+
+Document* Cel::document() const
+{
+  ASSERT(m_layer);
+  if (m_layer && m_layer->sprite())
+    return m_layer->sprite()->document();
+  else
+    return NULL;
 }
 
 Sprite* Cel::sprite() const
@@ -64,18 +97,33 @@ Sprite* Cel::sprite() const
 
 Cel* Cel::link() const
 {
-  if (m_image.get() == NULL)
+  ASSERT(m_data);
+  if (m_data.get() == NULL)
     return NULL;
 
-  if (!m_image.unique()) {
+  if (!m_data.unique()) {
     for (frame_t fr=0; fr<m_frame; ++fr) {
       Cel* possible = m_layer->cel(fr);
-      if (possible && possible->imageRef().get() == m_image.get())
+      if (possible && possible->dataRef().get() == m_data.get())
         return possible;
     }
   }
 
   return NULL;
+}
+
+std::size_t Cel::links() const
+{
+  std::size_t links = 0;
+
+  Sprite* sprite = this->sprite();
+  for (frame_t fr=0; fr<sprite->totalFrames(); ++fr) {
+    Cel* cel = m_layer->cel(fr);
+    if (cel && cel != this && cel->dataRef().get() == m_data.get())
+      ++links;
+  }
+
+  return links;
 }
 
 gfx::Rect Cel::bounds() const
@@ -84,7 +132,7 @@ gfx::Rect Cel::bounds() const
   ASSERT(image);
   if (image)
     return gfx::Rect(
-      m_position.x, m_position.y,
+      position().x, position().y,
       image->width(), image->height());
   else
     return gfx::Rect();
@@ -99,8 +147,8 @@ void Cel::setParentLayer(LayerImage* layer)
 void Cel::fixupImage()
 {
   // Change the mask color to the sprite mask color
-  if (m_layer && m_image.get())
-    m_image->setMaskColor(m_layer->sprite()->transparentColor());
+  if (m_layer && image())
+    image()->setMaskColor(m_layer->sprite()->transparentColor());
 }
 
 } // namespace doc

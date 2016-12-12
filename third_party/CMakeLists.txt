@@ -1,5 +1,5 @@
 # ASEPRITE
-# Copyright (C) 2001-2013  David Capello
+# Copyright (C) 2001-2016  David Capello
 
 include_directories(.)
 
@@ -12,12 +12,30 @@ if(NOT USE_SHARED_JPEGLIB)
 endif()
 
 if(NOT USE_SHARED_ZLIB)
-  include_directories(zlib)
+  set(SKIP_INSTALL_ALL on)
+  set(ZLIB_LIBRARY zlibstatic)
+  # Don't build zlib tests
+  set(ZLIB_TESTS OFF CACHE BOOL "Build zlib tests")
   add_subdirectory(zlib)
 endif()
 
 if(NOT USE_SHARED_LIBPNG)
+  set(SKIP_INSTALL_ALL ON)
+  # We only need the static version of libpng
+  set(PNG_SHARED OFF CACHE BOOL "Build shared lib")
+  set(PNG_STATIC ON CACHE BOOL "Build static lib")
+  set(PNG_TESTS OFF CACHE BOOL "Build libpng tests")
+  set(ZLIB_INCLUDE_DIR "${ZLIB_INCLUDE_DIRS}")
   add_subdirectory(libpng)
+endif()
+
+if(WITH_WEBP_SUPPORT)
+  if(NOT USE_SHARED_LIBWEBP)
+    # Skia already includes webp library
+    if(NOT USE_SKIA_BACKEND)
+      add_subdirectory(libwebp-cmake)
+    endif()
+  endif()
 endif()
 
 if(NOT USE_SHARED_GIFLIB)
@@ -28,25 +46,61 @@ if(NOT USE_SHARED_TINYXML)
   add_subdirectory(tinyxml)
 endif()
 
-if(NOT USE_SHARED_GTEST)
-  add_subdirectory(gtest)
-endif()
-
-if(ENABLE_UPDATER AND NOT USE_SHARED_CURL)
-  set(BUILD_RELEASE_DEBUG_DIRS 1)
+if(NOT USE_SHARED_CURL)
+  set(BUILD_RELEASE_DEBUG_DIRS ON BOOL)
+  set(CMAKE_USE_OPENSSL OFF CACHE BOOL "Use OpenSSL code. Experimental")
   add_subdirectory(curl)
 endif()
 
-if(NOT USE_SHARED_LIBLOADPNG)
- add_subdirectory(loadpng)
-endif()
-
-if(ENABLE_WEBSERVER)
-  add_subdirectory(mongoose)
+if(USE_ALLEG4_BACKEND AND NOT USE_SHARED_LIBLOADPNG)
+  add_subdirectory(loadpng)
 endif()
 
 if(NOT USE_SHARED_PIXMAN)
   add_subdirectory(pixman-cmake)
 endif()
 
+if(NOT USE_SHARED_FREETYPE)
+  set(SKIP_INSTALL_ALL on)
+
+  # If we don't do this, the compilation fails because it looks like
+  # ftgzip.c includes our zlib.h, but uses the zconf.h in the
+  # freetype2 library.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/freetype2/src/gzip/zlib.h)
+    file(RENAME
+      ${CMAKE_CURRENT_SOURCE_DIR}/freetype2/src/gzip/zlib.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/freetype2/src/gzip/zlib.h.included)
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/freetype2/src/gzip/zconf.h)
+    file(RENAME
+      ${CMAKE_CURRENT_SOURCE_DIR}/freetype2/src/gzip/zconf.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/freetype2/src/gzip/zconf.h.included)
+  endif()
+
+  add_subdirectory(freetype2)
+
+  if(NOT USE_SHARED_LIBPNG)
+    add_dependencies(freetype png_static)
+  endif()
+endif()
+
 add_subdirectory(simpleini)
+
+# Add cmark without tests
+set(CMARK_TESTS OFF CACHE BOOL "Build cmark tests and enable testing")
+add_subdirectory(cmark)
+set(cmark_headers
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmark/src/cmark.h
+  ${CMAKE_CURRENT_BINARY_DIR}/cmark/src/cmark_export.h
+  ${CMAKE_CURRENT_BINARY_DIR}/cmark/src/cmark_version.h)
+foreach(fn ${cmark_headers})
+  get_filename_component(fn_name "${fn}" NAME)
+  add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/cmark/${fn_name}
+    COMMAND ${CMAKE_COMMAND} -E copy ${fn} ${CMAKE_CURRENT_BINARY_DIR}/cmark/${fn_name}
+    MAIN_DEPENDENCY ${fn})
+  list(APPEND copy_cmark_headers ${CMAKE_CURRENT_BINARY_DIR}/cmark/${fn_name})
+endforeach()
+add_custom_target(copy_cmark_headers DEPENDS ${copy_cmark_headers})
+add_dependencies(libcmark_static copy_cmark_headers)
