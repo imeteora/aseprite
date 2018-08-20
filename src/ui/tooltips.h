@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2013, 2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,16 +8,17 @@
 #define UI_TOOLTIPS_H_INCLUDED
 #pragma once
 
-#include "base/unique_ptr.h"
 #include "ui/base.h"
 #include "ui/popup_window.h"
 #include "ui/timer.h"
 #include "ui/window.h"
 
 #include <map>
+#include <memory>
 
 namespace ui {
 
+  class TextBox;
   class TipWindow;
 
   class TooltipManager : public Widget {
@@ -30,6 +31,7 @@ namespace ui {
 
   protected:
     bool onProcessMessage(Message* msg) override;
+    void onInitTheme(InitThemeEvent& ev) override;
 
   private:
     void onTick();
@@ -46,8 +48,8 @@ namespace ui {
 
     typedef std::map<Widget*, TipInfo> Tips;
     Tips m_tips;                      // All tips.
-    base::UniquePtr<TipWindow> m_tipWindow; // Frame to show tooltips.
-    base::UniquePtr<Timer> m_timer;         // Timer to control the tooltip delay.
+    std::unique_ptr<TipWindow> m_tipWindow; // Frame to show tooltips.
+    std::unique_ptr<Timer> m_timer;         // Timer to control the tooltip delay.
     struct {
       Widget* widget;
       TipInfo tipInfo;
@@ -58,6 +60,9 @@ namespace ui {
   public:
     TipWindow(const std::string& text = "");
 
+    Style* arrowStyle() { return m_arrowStyle; }
+    void setArrowStyle(Style* style) { m_arrowStyle = style; }
+
     int arrowAlign() const { return m_arrowAlign; }
     const gfx::Rect& target() const { return m_target; }
 
@@ -67,16 +72,19 @@ namespace ui {
     // window.
     bool pointAt(int arrowAlign, const gfx::Rect& target);
 
+    TextBox* textBox() const { return m_textBox; }
+
   protected:
     bool onProcessMessage(Message* msg) override;
-    void onSizeHint(SizeHintEvent& ev) override;
-    void onInitTheme(InitThemeEvent& ev) override;
     void onPaint(PaintEvent& ev) override;
+    void onBuildTitleLabel() override;
 
   private:
+    Style* m_arrowStyle;
     int m_arrowAlign;
     gfx::Rect m_target;
     bool m_closeOnKeyDown;
+    TextBox* m_textBox;
   };
 
 } // namespace ui

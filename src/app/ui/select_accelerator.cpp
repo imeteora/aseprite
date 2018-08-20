@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,9 +10,12 @@
 
 #include "app/ui/select_accelerator.h"
 
+#include "app/ui/key.h"
 #include "app/ui/keyboard_shortcuts.h"
 #include "base/bind.h"
 #include "obs/signal.h"
+#include "ui/entry.h"
+#include "ui/message.h"
 
 #include <cctype>
 
@@ -83,10 +86,14 @@ protected:
   Accelerator m_accel;
 };
 
-SelectAccelerator::SelectAccelerator(const ui::Accelerator& accel, KeyContext keyContext)
+SelectAccelerator::SelectAccelerator(const ui::Accelerator& accel,
+                                     const KeyContext keyContext,
+                                     const KeyboardShortcuts& currentKeys)
   : m_keyField(new KeyField(accel))
   , m_keyContext(keyContext)
+  , m_currentKeys(currentKeys)
   , m_accel(accel)
+  , m_ok(false)
   , m_modified(false)
 {
   updateModifiers();
@@ -147,6 +154,7 @@ void SelectAccelerator::onClear()
 
 void SelectAccelerator::onOK()
 {
+  m_ok = true;
   m_modified = (m_origAccel != m_accel);
   closeWindow(NULL);
 }
@@ -179,7 +187,7 @@ void SelectAccelerator::updateAssignedTo()
 {
   std::string res = "None";
 
-  for (Key* key : *KeyboardShortcuts::instance()) {
+  for (const KeyPtr& key : m_currentKeys) {
     if (key->keycontext() == m_keyContext &&
         key->hasAccel(m_accel)) {
       res = key->triggerString();

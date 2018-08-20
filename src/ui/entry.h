@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -18,21 +18,26 @@ namespace ui {
 
   class Entry : public Widget {
   public:
-    Entry(std::size_t maxsize, const char *format, ...);
+    Entry(const int maxsize, const char *format, ...);
     ~Entry();
 
-    bool isPassword() const;
+    void setMaxTextLength(const int maxsize);
+
     bool isReadOnly() const;
     void setReadOnly(bool state);
-    void setPassword(bool state);
 
     void showCaret();
     void hideCaret();
 
+    int caretPos() const { return m_caret; }
+    int lastCaretPos() const;
+
     void setCaretPos(int pos);
+    void setCaretToEnd();
     void selectText(int from, int to);
     void selectAllText();
     void deselectText();
+    std::string selectedText() const;
 
     void setSuffix(const std::string& suffix);
     const std::string& getSuffix() { return m_suffix; }
@@ -41,7 +46,7 @@ namespace ui {
 
     // for themes
     void getEntryThemeInfo(int* scroll, int* caret, int* state,
-                           int* selbeg, int* selend);
+                           int* selbeg, int* selend) const;
     gfx::Rect getEntryTextBounds() const;
 
     // Signals
@@ -82,19 +87,30 @@ namespace ui {
     void executeCmd(EntryCmd cmd, int ascii, bool shift_pressed);
     void forwardWord();
     void backwardWord();
-    int getAvailableTextLength();
     bool isPosInSelection(int pos);
     void showEditPopupMenu(const gfx::Point& pt);
+    void recalcCharBoxes(const std::string& text);
 
+    class CalcBoxesTextDelegate;
+
+    struct CharBox {
+      int codepoint;
+      int from, to;
+      int width;
+      CharBox() { codepoint = from = to = width = 0; }
+    };
+
+    typedef std::vector<CharBox> CharBoxes;
+
+    CharBoxes m_boxes;
     Timer m_timer;
-    std::size_t m_maxsize;
+    int m_maxsize;
     int m_caret;
     int m_scroll;
     int m_select;
     bool m_hidden;
     bool m_state;             // show or not the text caret
     bool m_readonly;
-    bool m_password;
     bool m_recent_focused;
     bool m_lock_selection;
     bool m_translate_dead_keys;

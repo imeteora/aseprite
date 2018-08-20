@@ -1,20 +1,18 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
-// This source file is ditributed under a BSD-like license, please
-// read LICENSE.txt for more information.
+// This file is released under the terms of the MIT license.
+// Read LICENSE.txt for more information.
 
 #ifndef SHE_EVENT_H_INCLUDED
 #define SHE_EVENT_H_INCLUDED
 #pragma once
 
+#include "base/paths.h"
 #include "gfx/point.h"
 #include "gfx/size.h"
 #include "she/keys.h"
 #include "she/pointer_type.h"
-
-#include <string>
-#include <vector>
 
 #pragma push_macro("None")
 #undef None // Undefine the X11 None macro
@@ -46,10 +44,10 @@ namespace she {
       NoneButton,
       LeftButton,
       RightButton,
-      MiddleButton
+      MiddleButton,
+      X1Button,
+      X2Button,
     };
-
-    typedef std::vector<std::string> Files;
 
     Event() : m_type(None),
               m_display(nullptr),
@@ -67,7 +65,12 @@ namespace she {
 
     Type type() const { return m_type; }
     Display* display() const { return m_display; }
-    const Files& files() const { return m_files; }
+    const base::paths& files() const { return m_files; }
+    // TODO Rename this to virtualKey(), which is the real
+    // meaning. Then we need another kind of "scan code" with the
+    // position in the keyboard, which might be useful to identify
+    // keys by its position (e.g. WASD keys in other keyboard
+    // layouts).
     KeyScancode scancode() const { return m_scancode; }
     KeyModifiers modifiers() const { return m_modifiers; }
     int unicodeChar() const { return m_unicodeChar; }
@@ -79,7 +82,6 @@ namespace she {
     // We suppose that if we are receiving precise scrolling deltas,
     // it means that the user is using a touch-like surface (trackpad,
     // magic mouse scrolling, touch wacom tablet, etc.)
-    // TODO change this with the new PointerType::Multitouch
     bool preciseWheel() const { return m_preciseWheel; }
 
     PointerType pointerType() const { return m_pointerType; }
@@ -89,7 +91,7 @@ namespace she {
 
     void setType(Type type) { m_type = type; }
     void setDisplay(Display* display) { m_display = display; }
-    void setFiles(const Files& files) { m_files = files; }
+    void setFiles(const base::paths& files) { m_files = files; }
 
     void setScancode(KeyScancode scancode) { m_scancode = scancode; }
     void setModifiers(KeyModifiers modifiers) { m_modifiers = modifiers; }
@@ -107,7 +109,7 @@ namespace she {
   private:
     Type m_type;
     Display* m_display;
-    Files m_files;
+    base::paths m_files;
     KeyScancode m_scancode;
     KeyModifiers m_modifiers;
     int m_unicodeChar;

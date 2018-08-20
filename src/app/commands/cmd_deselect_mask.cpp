@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-42017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -29,9 +29,7 @@ protected:
 };
 
 DeselectMaskCommand::DeselectMaskCommand()
-  : Command("DeselectMask",
-            "Deselect Mask",
-            CmdRecordableFlag)
+  : Command(CommandId::DeselectMask(), CmdRecordableFlag)
 {
 }
 
@@ -44,7 +42,7 @@ bool DeselectMaskCommand::onEnabled(Context* context)
 void DeselectMaskCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   {
     Transaction transaction(writer.context(), "Deselect", DoesntModifyDocument);
     transaction.execute(new cmd::DeselectMask(document));

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -26,19 +26,27 @@ namespace doc {
   class Remap;
 }
 
+namespace render {
+  class DitheringAlgorithmBase;
+  class DitheringMatrix;
+}
+
 namespace ui {
   class Box;
   class Button;
   class Label;
-}
-
-namespace tools {
-  class Tool;
+  class TooltipManager;
 }
 
 namespace app {
 
+  namespace tools {
+    class Ink;
+    class Tool;
+  }
+
   class BrushSlot;
+  class DitheringSelector;
 
   class ContextBar : public ui::Box
                    , public obs::observable<ContextBarObserver>
@@ -51,13 +59,14 @@ namespace app {
     void updateForTool(tools::Tool* tool);
     void updateForMovingPixels();
     void updateForSelectingBox(const std::string& text);
-    void updateToolLoopModifiersIndicators(app::tools::ToolLoopModifiers modifiers);
+    void updateToolLoopModifiersIndicators(tools::ToolLoopModifiers modifiers);
     void updateAutoSelectLayer(bool state);
     bool isAutoSelectLayer() const;
 
     void setActiveBrush(const doc::BrushRef& brush);
     void setActiveBrushBySlot(tools::Tool* tool, int slot);
-    doc::BrushRef activeBrush(tools::Tool* tool = nullptr) const;
+    doc::BrushRef activeBrush(tools::Tool* tool = nullptr,
+                              tools::Ink* ink = nullptr) const;
     void discardActiveBrush();
 
     BrushSlot createBrushSlotFromPreferences();
@@ -70,13 +79,19 @@ namespace app {
 
     void setInkType(tools::InkType type);
 
+    // For gradients
+    render::DitheringMatrix ditheringMatrix();
+    render::DitheringAlgorithmBase* ditheringAlgorithm();
+
     // Signals
     obs::signal<void()> BrushChange;
 
   protected:
+    void onInitTheme(ui::InitThemeEvent& ev) override;
     void onSizeHint(ui::SizeHintEvent& ev) override;
     void onToolSetOpacity(const int& newOpacity);
     void onToolSetFreehandAlgorithm();
+    void onToolSetContiguous();
 
   private:
     void onBrushSizeChange();
@@ -88,7 +103,12 @@ namespace app {
     // ActiveToolObserver impl
     void onActiveToolChange(tools::Tool* tool) override;
 
+    void setupTooltips(ui::TooltipManager* tooltipManager);
+    void registerCommands();
+    void showBrushes();
+
     class ZoomButtons;
+    class BrushBackField;
     class BrushTypeField;
     class BrushAngleField;
     class BrushSizeField;
@@ -112,6 +132,7 @@ namespace app {
     class SymmetryField;
 
     ZoomButtons* m_zoomButtons;
+    BrushBackField* m_brushBack;
     BrushTypeField* m_brushType;
     BrushAngleField* m_brushAngle;
     BrushSizeField* m_brushSize;
@@ -133,6 +154,7 @@ namespace app {
     SprayWidthField* m_sprayWidth;
     SpraySpeedField* m_spraySpeed;
     ui::Box* m_selectionOptionsBox;
+    DitheringSelector* m_ditheringSelector;
     SelectionModeField* m_selectionMode;
     TransparentColorField* m_transparentColor;
     PivotField* m_pivot;
@@ -145,6 +167,7 @@ namespace app {
     obs::scoped_connection m_angleConn;
     obs::scoped_connection m_opacityConn;
     obs::scoped_connection m_freehandAlgoConn;
+    obs::scoped_connection m_contiguousConn;
   };
 
 } // namespace app

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,32 +9,50 @@
 #pragma once
 
 #include "app/cmd_sequence.h"
+#include "app/doc_range.h"
+#include "app/sprite_position.h"
+
+#include <memory>
+#include <sstream>
 
 namespace app {
 
   // Cmds created on each Transaction.
-  // The whole DocumentUndo contains a list of these CmdTransaction.
+  // The whole DocUndo contains a list of these CmdTransaction.
   class CmdTransaction : public CmdSequence {
   public:
     CmdTransaction(const std::string& label,
       bool changeSavedState, int* savedCounter);
 
+    void setNewDocRange(const DocRange& range);
     void commit();
 
-    doc::SpritePosition spritePositionBeforeExecute() const { return m_spritePositionBefore; }
-    doc::SpritePosition spritePositionAfterExecute() const { return m_spritePositionAfter; }
+    SpritePosition spritePositionBeforeExecute() const { return m_spritePositionBefore; }
+    SpritePosition spritePositionAfterExecute() const { return m_spritePositionAfter; }
+
+    std::istream* documentRangeBeforeExecute() const;
+    std::istream* documentRangeAfterExecute() const;
 
   protected:
     void onExecute() override;
     void onUndo() override;
     void onRedo() override;
     std::string onLabel() const override;
+    size_t onMemSize() const override;
 
   private:
-    doc::SpritePosition calcSpritePosition();
+    SpritePosition calcSpritePosition() const;
+    bool isDocRangeEnabled() const;
+    DocRange calcDocRange() const;
 
-    doc::SpritePosition m_spritePositionBefore;
-    doc::SpritePosition m_spritePositionAfter;
+    struct Ranges {
+      std::stringstream m_before;
+      std::stringstream m_after;
+    };
+
+    SpritePosition m_spritePositionBefore;
+    SpritePosition m_spritePositionAfter;
+    std::unique_ptr<Ranges> m_ranges;
     std::string m_label;
     bool m_changeSavedState;
     int* m_savedCounter;

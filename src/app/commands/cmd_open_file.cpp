@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,7 +14,7 @@
 #include "app/commands/command.h"
 #include "app/commands/params.h"
 #include "app/console.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/file/file.h"
 #include "app/file_selector.h"
 #include "app/job.h"
@@ -26,7 +26,6 @@
 #include "base/bind.h"
 #include "base/fs.h"
 #include "base/thread.h"
-#include "base/unique_ptr.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
@@ -75,10 +74,9 @@ private:
 };
 
 OpenFileCommand::OpenFileCommand()
-  : Command("OpenFile",
-            "Open Sprite",
-            CmdRecordableFlag)
+  : Command(CommandId::OpenFile(), CmdRecordableFlag)
   , m_repeatCheckbox(false)
+  , m_oneFrame(false)
   , m_seqDecision(SequenceDecision::Ask)
 {
 }
@@ -88,6 +86,15 @@ void OpenFileCommand::onLoadParams(const Params& params)
   m_filename = params.get("filename");
   m_folder = params.get("folder"); // Initial folder
   m_repeatCheckbox = (params.get("repeat_checkbox") == "true");
+  m_oneFrame = (params.get("oneframe") == "true");
+
+  std::string sequence = params.get("sequence");
+  if (m_oneFrame || sequence == "skip")
+    m_seqDecision = SequenceDecision::Skip;
+  else if (sequence == "agree")
+    m_seqDecision = SequenceDecision::Agree;
+  else
+    m_seqDecision = SequenceDecision::Ask;
 }
 
 void OpenFileCommand::onExecute(Context* context)
@@ -96,90 +103,109 @@ void OpenFileCommand::onExecute(Context* context)
 
   m_usedFiles.clear();
 
+  base::paths filenames;
+
   // interactive
+#ifdef ENABLE_UI
   if (context->isUIAvailable() && m_filename.empty()) {
-    std::string exts = get_readable_extensions();
+    base::paths exts = get_readable_extensions();
 
     // Add backslash as show_file_selector() expected a filename as
     // initial path (and the file part is removed from the path).
     if (!m_folder.empty() && !base::is_path_separator(m_folder[m_folder.size()-1]))
       m_folder.push_back(base::path_separator);
 
-    m_filename = app::show_file_selector("Open", m_folder, exts,
-      FileSelectorType::Open);
+    if (!app::show_file_selector("Open", m_folder, exts,
+                                 FileSelectorType::OpenMultiple,
+                                 filenames)) {
+      // The user cancelled the operation through UI
+      return;
+    }
+  }
+  else
+#endif // ENABLE_UI
+  if (!m_filename.empty()) {
+    filenames.push_back(m_filename);
   }
 
-  if (!m_filename.empty()) {
-    int flags = (m_repeatCheckbox ? FILE_LOAD_SEQUENCE_ASK_CHECKBOX: 0);
+  if (filenames.empty())
+    return;
 
-    switch (m_seqDecision) {
-      case SequenceDecision::Ask:
-        flags |= FILE_LOAD_SEQUENCE_ASK;
-        break;
-      case SequenceDecision::Agree:
-        flags |= FILE_LOAD_SEQUENCE_YES;
-        break;
-      case SequenceDecision::Skip:
-        flags |= FILE_LOAD_SEQUENCE_NONE;
-        break;
-    }
+  int flags =
+    FILE_LOAD_DATA_FILE |
+    (m_repeatCheckbox ? FILE_LOAD_SEQUENCE_ASK_CHECKBOX: 0);
 
-    base::UniquePtr<FileOp> fop(
+  switch (m_seqDecision) {
+    case SequenceDecision::Ask:
+      flags |= FILE_LOAD_SEQUENCE_ASK;
+      break;
+    case SequenceDecision::Agree:
+      flags |= FILE_LOAD_SEQUENCE_YES;
+      break;
+    case SequenceDecision::Skip:
+      flags |= FILE_LOAD_SEQUENCE_NONE;
+      break;
+  }
+
+  if (m_oneFrame)
+    flags |= FILE_LOAD_ONE_FRAME;
+
+  for (const auto& filename : filenames) {
+    std::unique_ptr<FileOp> fop(
       FileOp::createLoadDocumentOperation(
-        context, m_filename.c_str(), flags));
+        context, filename, flags));
     bool unrecent = false;
 
-    if (fop) {
-      if (fop->hasError()) {
-        console.printf(fop->error().c_str());
-        unrecent = true;
-      }
-      else {
-        if (fop->isSequence()) {
+    // Do nothing (the user cancelled or something like that)
+    if (!fop)
+      return;
 
-          if (fop->sequenceFlags() & FILE_LOAD_SEQUENCE_YES) {
-            m_seqDecision = SequenceDecision::Agree;
-          }
-          else if (fop->sequenceFlags() & FILE_LOAD_SEQUENCE_NONE) {
-            m_seqDecision = SequenceDecision::Skip;
-          }
-
-          m_usedFiles = fop->filenames();
-        }
-        else {
-          m_usedFiles.push_back(fop->filename());
-        }
-
-        OpenFileJob task(fop);
-        task.showProgressWindow();
-
-        // Post-load processing, it is called from the GUI because may require user intervention.
-        fop->postLoad();
-
-        // Show any error
-        if (fop->hasError() && !fop->isStop())
-          console.printf(fop->error().c_str());
-
-        Document* document = fop->document();
-        if (document) {
-          if (context->isUIAvailable())
-            App::instance()->recentFiles()->addRecentFile(fop->filename().c_str());
-
-          document->setContext(context);
-        }
-        else if (!fop->isStop())
-          unrecent = true;
-      }
-
-      // The file was not found or was loaded loaded with errors,
-      // so we can remove it from the recent-file list
-      if (unrecent) {
-        if (context->isUIAvailable())
-          App::instance()->recentFiles()->removeRecentFile(m_filename.c_str());
-      }
+    if (fop->hasError()) {
+      console.printf(fop->error().c_str());
+      unrecent = true;
     }
     else {
-      // Do nothing (the user cancelled or something like that)
+      if (fop->isSequence()) {
+
+        if (fop->sequenceFlags() & FILE_LOAD_SEQUENCE_YES) {
+          m_seqDecision = SequenceDecision::Agree;
+        }
+        else if (fop->sequenceFlags() & FILE_LOAD_SEQUENCE_NONE) {
+          m_seqDecision = SequenceDecision::Skip;
+        }
+
+        m_usedFiles = fop->filenames();
+      }
+      else {
+        m_usedFiles.push_back(fop->filename());
+      }
+
+      OpenFileJob task(fop.get());
+      task.showProgressWindow();
+
+      // Post-load processing, it is called from the GUI because may require user intervention.
+      fop->postLoad();
+
+      // Show any error
+      if (fop->hasError() && !fop->isStop())
+        console.printf(fop->error().c_str());
+
+      Doc* document = fop->document();
+      if (document) {
+        if (context->isUIAvailable())
+          App::instance()->recentFiles()->addRecentFile(fop->filename().c_str());
+
+        document->setContext(context);
+      }
+      else if (!fop->isStop())
+        unrecent = true;
+    }
+
+    // The file was not found or was loaded loaded with errors,
+    // so we can remove it from the recent-file list
+    if (unrecent) {
+      if (context->isUIAvailable())
+        App::instance()->recentFiles()->removeRecentFile(m_filename);
     }
   }
 }

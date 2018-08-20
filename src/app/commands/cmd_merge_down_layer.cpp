@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,11 +15,10 @@
 #include "app/cmd/unlink_cel.h"
 #include "app/commands/command.h"
 #include "app/context_access.h"
-#include "app/document.h"
-#include "app/document_api.h"
+#include "app/doc.h"
+#include "app/doc_api.h"
 #include "app/modules/gui.h"
 #include "app/transaction.h"
-#include "base/unique_ptr.h"
 #include "doc/blend_internals.h"
 #include "doc/cel.h"
 #include "doc/image.h"
@@ -42,9 +41,7 @@ protected:
 };
 
 MergeDownLayerCommand::MergeDownLayerCommand()
-  : Command("MergeDownLayer",
-            "Merge Down Layer",
-            CmdRecordableFlag)
+  : Command(CommandId::MergeDownLayer(), CmdRecordableFlag)
 {
 }
 
@@ -69,7 +66,7 @@ bool MergeDownLayerCommand::onEnabled(Context* context)
 void MergeDownLayerCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
   Transaction transaction(writer.context(), "Merge Down Layer", ModifyDocument);
   LayerImage* src_layer = static_cast<LayerImage*>(writer.layer());

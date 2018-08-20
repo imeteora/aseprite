@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,21 +10,21 @@
 
 #include "app/console.h"
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/file/file.h"
 #include "app/file/file_format.h"
 #include "app/file/format_options.h"
+#include "app/file/gif_format.h"
 #include "app/file/gif_options.h"
-#include "app/ini_file.h"
 #include "app/modules/gui.h"
+#include "app/pref/preferences.h"
 #include "app/util/autocrop.h"
 #include "base/file_handle.h"
 #include "base/fs.h"
-#include "base/unique_ptr.h"
 #include "doc/doc.h"
+#include "render/ordered_dither.h"
 #include "render/quantization.h"
 #include "render/render.h"
-#include "ui/alert.h"
 #include "ui/button.h"
 
 #include "gif_options.xml.h"
@@ -61,9 +61,18 @@ enum class DisposalMethod {
 
 class GifFormat : public FileFormat {
 
-  const char* onGetName() const override { return "gif"; }
-  const char* onGetExtensions() const override { return "gif"; }
-  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::GIF_ANIMATION; }
+  const char* onGetName() const override {
+    return "gif";
+  }
+
+  void onGetExtensions(base::paths& exts) const override {
+    exts.push_back("gif");
+  }
+
+  dio::FileFormat onGetDioFormat() const override {
+    return dio::FileFormat::GIF_ANIMATION;
+  }
+
   int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
@@ -92,6 +101,22 @@ FileFormat* CreateGifFormat()
 
 static int interlaced_offset[] = { 0, 4, 2, 1 };
 static int interlaced_jumps[] = { 8, 8, 4, 2 };
+
+// TODO this should be part of a GifEncoder instance
+// True if the GifEncoder should save the animation for Twitter:
+// * Frames duration >= 2, and
+// * Last frame 1/4 of its duration
+static bool fix_last_frame_duration = false;
+
+GifEncoderDurationFix::GifEncoderDurationFix(bool state)
+{
+  fix_last_frame_duration = state;
+}
+
+GifEncoderDurationFix::~GifEncoderDurationFix()
+{
+  fix_last_frame_duration = false;
+}
 
 struct GifFilePtr {
 public:
@@ -173,7 +198,7 @@ static inline doc::color_t colormap2rgba(ColorMapObject* colormap, int i) {
 // merged with new colormaps.
 class GifDecoder {
 public:
-  GifDecoder(FileOp* fop, GifFileType* gifFile, int fd, int filesize)
+  GifDecoder(FileOp* fop, GifFileType* gifFile, int fd, size_t filesize)
     : m_fop(fop)
     , m_gifFile(gifFile)
     , m_fd(fd)
@@ -307,7 +332,7 @@ private:
       m_sprite->addFrame(m_frameNum);
 
     // Create a temporary image loading the frame pixels from the GIF file
-    UniquePtr<Image> frameImage(
+    std::unique_ptr<Image> frameImage(
       readFrameIndexedImage(frameBounds));
 
     TRACE("GIF: Frame[%d] transparent index = %d\n", (int)m_frameNum, m_localTransparentIndex);
@@ -320,7 +345,7 @@ private:
     }
 
     // Merge this frame colors with the current palette
-    updatePalette(frameImage);
+    updatePalette(frameImage.get());
 
     // Convert the sprite to RGB if we have more than 256 colors
     if ((m_sprite->pixelFormat() == IMAGE_INDEXED) &&
@@ -333,10 +358,10 @@ private:
 
     // Composite frame with previous frame
     if (m_sprite->pixelFormat() == IMAGE_INDEXED) {
-      compositeIndexedImageToIndexed(frameBounds, frameImage);
+      compositeIndexedImageToIndexed(frameBounds, frameImage.get());
     }
     else {
-      compositeIndexedImageToRgb(frameBounds, frameImage);
+      compositeIndexedImageToRgb(frameBounds, frameImage.get());
     }
 
     // Create cel
@@ -366,7 +391,7 @@ private:
   }
 
   Image* readFrameIndexedImage(const gfx::Rect& frameBounds) {
-    UniquePtr<Image> frameImage(
+    std::unique_ptr<Image> frameImage(
       Image::create(IMAGE_INDEXED, frameBounds.w, frameBounds.h));
 
     IndexedTraits::address_t addr;
@@ -485,7 +510,7 @@ private:
       }
     }
 
-    UniquePtr<Palette> palette;
+    std::unique_ptr<Palette> palette;
     if (m_frameNum == 0)
       palette.reset(new Palette(m_frameNum, usedNColors + (needsExtraBgColor ? 1: 0)));
     else {
@@ -572,35 +597,56 @@ private:
     }
 
     ASSERT(base == palette->size());
-    m_sprite->setPalette(palette, false);
+    m_sprite->setPalette(palette.get(), false);
   }
 
   void compositeIndexedImageToIndexed(const gfx::Rect& frameBounds,
                                       const Image* frameImage) {
+    const LockImageBits<IndexedTraits> srcBits(
+      frameImage, gfx::Rect(0, 0, frameBounds.w, frameBounds.h));
+    LockImageBits<IndexedTraits> dstBits(
+      m_currentImage.get(), frameBounds);
+
+    auto srcIt = srcBits.begin();
+    auto dstIt = dstBits.begin();
+
     // Compose the frame image with the previous frame
     for (int y=0; y<frameBounds.h; ++y) {
-      for (int x=0; x<frameBounds.w; ++x) {
-        color_t i = get_pixel_fast<IndexedTraits>(frameImage, x, y);
-        if (i == m_localTransparentIndex)
+      for (int x=0; x<frameBounds.w; ++x, ++srcIt, ++dstIt) {
+        ASSERT(srcIt != srcBits.end());
+        ASSERT(dstIt != dstBits.end());
+
+        color_t i = *srcIt;
+        if (int(i) == m_localTransparentIndex)
           continue;
 
         i = m_remap[i];
-        put_pixel_fast<IndexedTraits>(m_currentImage.get(),
-                                      frameBounds.x + x,
-                                      frameBounds.y + y, i);
+
+        *dstIt = i;
       }
     }
   }
 
   void compositeIndexedImageToRgb(const gfx::Rect& frameBounds,
                                   const Image* frameImage) {
+    const LockImageBits<IndexedTraits> srcBits(
+      frameImage, gfx::Rect(0, 0, frameBounds.w, frameBounds.h));
+    LockImageBits<RgbTraits> dstBits(
+      m_currentImage.get(), frameBounds);
+
+    auto srcIt = srcBits.begin();
+    auto dstIt = dstBits.begin();
+
     ColorMapObject* colormap = getFrameColormap();
 
     // Compose the frame image with the previous frame
     for (int y=0; y<frameBounds.h; ++y) {
-      for (int x=0; x<frameBounds.w; ++x) {
-        color_t i = get_pixel_fast<IndexedTraits>(frameImage, x, y);
-        if (i == m_localTransparentIndex)
+      for (int x=0; x<frameBounds.w; ++x, ++srcIt, ++dstIt) {
+        ASSERT(srcIt != srcBits.end());
+        ASSERT(dstIt != dstBits.end());
+
+        color_t i = *srcIt;
+        if (int(i) == m_localTransparentIndex)
           continue;
 
         i = rgba(
@@ -608,9 +654,7 @@ private:
           colormap->Colors[i].Green,
           colormap->Colors[i].Blue, 255);
 
-        put_pixel_fast<RgbTraits>(m_currentImage.get(),
-                                  frameBounds.x + x,
-                                  frameBounds.y + y, i);
+        *dstIt = i;
       }
     }
   }
@@ -679,7 +723,7 @@ private:
     clear_image(m_previousImage.get(), m_bgIndex);
 
     m_layer = new LayerImage(m_sprite.get());
-    m_sprite->folder()->addLayer(m_layer);
+    m_sprite->root()->addLayer(m_layer);
   }
 
   void resetRemap(int ncolors) {
@@ -695,7 +739,9 @@ private:
       Image* oldImage = cel->image();
       ImageRef newImage(
         render::convert_pixel_format
-        (oldImage, NULL, IMAGE_RGB, DitheringMethod::NONE,
+        (oldImage, NULL, IMAGE_RGB,
+         render::DitheringAlgorithm::None,
+         render::DitheringMatrix(),
          nullptr,
          m_sprite->palette(cel->frame()),
          m_opaque,
@@ -706,7 +752,9 @@ private:
 
     m_currentImage.reset(
       render::convert_pixel_format
-      (m_currentImage.get(), NULL, IMAGE_RGB, DitheringMethod::NONE,
+      (m_currentImage.get(), NULL, IMAGE_RGB,
+       render::DitheringAlgorithm::None,
+       render::DitheringMatrix(),
        nullptr,
        m_sprite->palette(m_frameNum),
        m_opaque,
@@ -714,7 +762,9 @@ private:
 
     m_previousImage.reset(
       render::convert_pixel_format
-      (m_previousImage.get(), NULL, IMAGE_RGB, DitheringMethod::NONE,
+      (m_previousImage.get(), NULL, IMAGE_RGB,
+       render::DitheringAlgorithm::None,
+       render::DitheringMatrix(),
        nullptr,
        m_sprite->palette(MAX(0, m_frameNum-1)),
        m_opaque,
@@ -753,15 +803,15 @@ private:
     }
 
     Palette newPalette(0, 256);
-    optimizer.calculate(&newPalette, m_bgIndex, nullptr);
+    optimizer.calculate(&newPalette, m_bgIndex);
     m_sprite->setPalette(&newPalette, false);
   }
 
   FileOp* m_fop;
   GifFileType* m_gifFile;
   int m_fd;
-  int m_filesize;
-  UniquePtr<Sprite> m_sprite;
+  size_t m_filesize;
+  std::unique_ptr<Sprite> m_sprite;
   gfx::Rect m_spriteBounds;
   LayerImage* m_layer;
   int m_frameNum;
@@ -785,7 +835,7 @@ bool GifFormat::onLoad(FileOp* fop)
 {
   // The filesize is used only to report some progress when we decode
   // the GIF file.
-  int filesize = base::file_size(fop->filename());
+  size_t filesize = base::file_size(fop->filename());
 
 #if GIFLIB_MAJOR >= 5
   int errCode = 0;
@@ -815,6 +865,8 @@ bool GifFormat::onLoad(FileOp* fop)
 
 class GifEncoder {
 public:
+  typedef int gifframe_t;
+
   GifEncoder(FileOp* fop, GifFileType* gifFile)
     : m_fop(fop)
     , m_gifFile(gifFile)
@@ -838,9 +890,7 @@ public:
         m_sprite->getPalettes().size() == 1) {
       // If some layer has opacity < 255 or a different blend mode, we
       // need to create color palettes.
-      std::vector<Layer*> layers;
-      m_sprite->getLayersList(layers);
-      for (const Layer* layer : layers) {
+      for (const Layer* layer : m_sprite->allVisibleLayers()) {
         if (layer->isVisible() && layer->isImage()) {
           const LayerImage* imageLayer = static_cast<const LayerImage*>(layer);
           if (imageLayer->opacity() < 255 ||
@@ -870,7 +920,11 @@ public:
     else
       m_clearColor = rgba(0, 0, 0, 0);
 
-    const base::SharedPtr<GifOptions> gifOptions = fop->sequenceGetFormatOptions();
+    const base::SharedPtr<GifOptions> gifOptions = fop->formatOptions();
+
+    LOG("GIF: Saving with options: interlaced=%d loop=%d\n",
+        gifOptions->interlaced(), gifOptions->loop());
+
     m_interlaced = gifOptions->interlaced();
     m_loop = (gifOptions->loop() ? 0: -1);
 
@@ -897,27 +951,41 @@ public:
     m_currentImage = m_images[1].get();
     m_nextImage = m_images[2].get();
 
-    int nframes = m_sprite->totalFrames();
-    for (int frameNum=0; frameNum<nframes; ++frameNum) {
-      if (frameNum == 0)
-        renderFrame(0, m_nextImage);
-      else if (frameNum > 0)
+    auto frame_beg = m_fop->roi().selectedFrames().begin();
+#if _DEBUG
+    auto frame_end = m_fop->roi().selectedFrames().end();
+#endif
+    auto frame_it = frame_beg;
+
+    // In this code "gifFrame" will be the GIF frame, and "frame" will
+    // be the doc::Sprite frame.
+    gifframe_t nframes = totalFrames();
+    for (gifframe_t gifFrame=0; gifFrame<nframes; ++gifFrame) {
+      ASSERT(frame_it != frame_end);
+      frame_t frame = *frame_it;
+      ++frame_it;
+
+      if (gifFrame == 0)
+        renderFrame(frame, m_nextImage);
+      else
         std::swap(m_previousImage, m_currentImage);
 
+      // Render next frame
       std::swap(m_currentImage, m_nextImage);
-      if (frameNum+1 < nframes)
-        renderFrame(frameNum+1, m_nextImage);
+      if (gifFrame+1 < nframes)
+        renderFrame(*frame_it, m_nextImage);
 
       gfx::Rect frameBounds;
       DisposalMethod disposal;
-      calculateBestDisposalMethod(
-        frameNum, frameBounds, disposal);
+      calculateBestDisposalMethod(gifFrame, frameBounds, disposal);
 
       // TODO We could join both frames in a longer one (with more duration)
       if (frameBounds.isEmpty())
         frameBounds = gfx::Rect(0, 0, 1, 1);
 
-      writeImage(frameNum, frameBounds, disposal);
+      writeImage(gifFrame, frame, frameBounds, disposal,
+                 // Only the last frame in the animation needs the fix
+                 (fix_last_frame_duration && gifFrame == nframes-1));
 
       // Dispose/clear frame content
       process_disposal_method(m_previousImage,
@@ -926,12 +994,16 @@ public:
                               frameBounds,
                               m_clearColor);
 
-      m_fop->setProgress(double(frameNum+1) / double(nframes));
+      m_fop->setProgress(double(gifFrame+1) / double(nframes));
     }
     return true;
   }
 
 private:
+
+  doc::frame_t totalFrames() const {
+    return m_fop->roi().frames();
+  }
 
   void writeHeader() {
     if (EGifPutScreenDesc(m_gifFile,
@@ -981,9 +1053,21 @@ private:
 
   // Writes graphics extension record (to save the duration of the
   // frame and maybe the transparency index).
-  void writeExtension(int frameNum, int transparentIndex, DisposalMethod disposalMethod) {
+  void writeExtension(const gifframe_t gifFrame,
+                      const frame_t frame,
+                      const int transparentIndex,
+                      const DisposalMethod disposalMethod,
+                      const bool fixDuration) {
     unsigned char extension_bytes[5];
-    int frameDelay = m_sprite->frameDuration(frameNum) / 10;
+    int frameDelay = m_sprite->frameDuration(frame) / 10;
+
+    // Fix duration for Twitter. It looks like the last frame must be
+    // 1/4 of its duration for some strange reason in the Twitter
+    // conversion from GIF to video.
+    if (fixDuration)
+      frameDelay = MAX(2, frameDelay/4);
+    if (fix_last_frame_duration)
+      frameDelay = MAX(2, frameDelay);
 
     extension_bytes[0] = (((int(disposalMethod) & 7) << 2) |
                           (transparentIndex >= 0 ? 1: 0));
@@ -992,7 +1076,7 @@ private:
     extension_bytes[3] = (transparentIndex >= 0 ? transparentIndex: 0);
 
     if (EGifPutExtension(m_gifFile, GRAPHICS_EXT_FUNC_CODE, 4, extension_bytes) == GIF_ERROR)
-      throw Exception("Error writing GIF graphics extension record for frame %d.\n", (int)frameNum);
+      throw Exception("Error writing GIF graphics extension record for frame %d.\n", gifFrame);
   }
 
   static gfx::Rect calculateFrameBounds(Image* a, Image* b) {
@@ -1009,8 +1093,7 @@ private:
     return frameBounds;
   }
 
-  void calculateBestDisposalMethod(int frameNum,
-                                   gfx::Rect& frameBounds,
+  void calculateBestDisposalMethod(gifframe_t gifFrame, gfx::Rect& frameBounds,
                                    DisposalMethod& disposal) {
     if (m_hasBackground) {
       disposal = DisposalMethod::DO_NOT_DISPOSE;
@@ -1019,17 +1102,17 @@ private:
       disposal = DisposalMethod::RESTORE_BGCOLOR;
     }
 
-    if (frameNum == 0) {
+    if (gifFrame == 0) {
       frameBounds = m_spriteBounds;
     }
     else {
       gfx::Rect prev, next;
 
-      if (frameNum-1 >= 0)
+      if (gifFrame-1 >= 0)
         prev = calculateFrameBounds(m_currentImage, m_previousImage);
 
       if (!m_hasBackground &&
-          frameNum+1 < m_sprite->totalFrames())
+          gifFrame+1 < totalFrames())
         next = calculateFrameBounds(m_currentImage, m_nextImage);
 
       frameBounds = prev.createUnion(next);
@@ -1053,11 +1136,15 @@ private:
     }
   }
 
-  void writeImage(int frameNum, const gfx::Rect& frameBounds, DisposalMethod disposal) {
-    UniquePtr<Palette> framePaletteRef;
-    UniquePtr<RgbMap> rgbmapRef;
-    Palette* framePalette = m_sprite->palette(frameNum);
-    RgbMap* rgbmap = m_sprite->rgbMap(frameNum);
+  void writeImage(const gifframe_t gifFrame,
+                  const frame_t frame,
+                  const gfx::Rect& frameBounds,
+                  const DisposalMethod disposal,
+                  const bool fixDuration) {
+    std::unique_ptr<Palette> framePaletteRef;
+    std::unique_ptr<RgbMap> rgbmapRef;
+    Palette* framePalette = m_sprite->palette(frame);
+    RgbMap* rgbmap = m_sprite->rgbMap(frame);
 
     // Create optimized palette for RGB/Grayscale images
     if (m_quantizeColormaps) {
@@ -1096,13 +1183,19 @@ private:
     }
 
     {
-      LockImageBits<RgbTraits> bits(m_currentImage, frameBounds);
-      auto it = bits.begin();
-      for (int y=0; y<frameBounds.h; ++y) {
-        for (int x=0; x<frameBounds.w; ++x, ++it) {
-          ASSERT(it != bits.end());
+      const LockImageBits<RgbTraits> srcBits(m_currentImage, frameBounds);
+      LockImageBits<IndexedTraits> dstBits(
+        frameImage.get(), gfx::Rect(0, 0, frameBounds.w, frameBounds.h));
 
-          color_t color = *it;
+      auto srcIt = srcBits.begin();
+      auto dstIt = dstBits.begin();
+
+      for (int y=0; y<frameBounds.h; ++y) {
+        for (int x=0; x<frameBounds.w; ++x, ++srcIt, ++dstIt) {
+          ASSERT(srcIt != srcBits.end());
+          ASSERT(dstIt != dstBits.end());
+
+          color_t color = *srcIt;
           int i;
 
           if (rgba_geta(color) >= 128) {
@@ -1135,7 +1228,7 @@ private:
             usedColors.resize(i+1);
           usedColors[i] = true;
 
-          put_pixel_fast<IndexedTraits>(frameImage.get(), x, y, i);
+          *dstIt = i;
         }
       }
     }
@@ -1149,7 +1242,7 @@ private:
     int localTransparent = m_transparentIndex;
     ColorMapObject* colormap = m_globalColormap;
     if (!colormap) {
-      Palette reducedPalette(frameNum, usedNColors);
+      Palette reducedPalette(0, usedNColors);
 
       for (int i=0, j=0; i<framePalette->size(); ++i) {
         if (usedColors[i]) {
@@ -1168,7 +1261,8 @@ private:
       remap.map(m_transparentIndex, localTransparent);
 
     // Write extension record.
-    writeExtension(frameNum, localTransparent, disposal);
+    writeExtension(gifFrame, frame, localTransparent,
+                   disposal, fixDuration);
 
     // Write the image record.
     if (EGifPutImageDesc(m_gifFile,
@@ -1176,7 +1270,7 @@ private:
                          frameBounds.w, frameBounds.h,
                          m_interlaced ? 1: 0,
                          (colormap != m_globalColormap ? colormap: nullptr)) == GIF_ERROR) {
-      throw Exception("Error writing GIF frame %d.\n", (int)frameNum);
+      throw Exception("Error writing GIF frame %d.\n", gifFrame);
     }
 
     std::vector<uint8_t> scanline(frameBounds.w);
@@ -1193,7 +1287,7 @@ private:
             scanline[i] = remap[*addr];
 
           if (EGifPutLine(m_gifFile, &scanline[0], frameBounds.w) == GIF_ERROR)
-            throw Exception("Error writing GIF image scanlines for frame %d.\n", (int)frameNum);
+            throw Exception("Error writing GIF image scanlines for frame %d.\n", gifFrame);
         }
     }
     else {
@@ -1206,7 +1300,7 @@ private:
           scanline[i] = remap[*addr];
 
         if (EGifPutLine(m_gifFile, &scanline[0], frameBounds.w) == GIF_ERROR)
-          throw Exception("Error writing GIF image scanlines for frame %d.\n", (int)frameNum);
+          throw Exception("Error writing GIF image scanlines for frame %d.\n", gifFrame);
       }
     }
 
@@ -1227,15 +1321,15 @@ private:
     }
 
     Palette* palette = new Palette(0, 256);
-    optimizer.calculate(palette, m_transparentIndex, nullptr);
+    optimizer.calculate(palette, m_transparentIndex);
     return palette;
   }
 
-  void renderFrame(int frameNum, Image* dst) {
+  void renderFrame(frame_t frame, Image* dst) {
     render::Render render;
     render.setBgType(render::BgType::NONE);
     clear_image(dst, m_clearColor);
-    render.renderSprite(dst, m_sprite, frameNum);
+    render.renderSprite(dst, m_sprite, frame);
   }
 
 private:
@@ -1284,7 +1378,8 @@ bool GifFormat::onSave(FileOp* fop)
 #if GIFLIB_MAJOR >= 5
   int errCode = 0;
 #endif
-  GifFilePtr gif_file(EGifOpenFileHandle(open_file_descriptor_with_exception(fop->filename(), "wb")
+  int fd = base::open_file_descriptor_with_exception(fop->filename(), "wb");
+  GifFilePtr gif_file(EGifOpenFileHandle(fd
 #if GIFLIB_MAJOR >= 5
                                          , &errCode
 #endif
@@ -1294,7 +1389,10 @@ bool GifFormat::onSave(FileOp* fop)
     throw Exception("Error creating GIF file.\n");
 
   GifEncoder encoder(fop, gif_file);
-  return encoder.encode();
+  bool result = encoder.encode();
+  if (result)
+    base::sync_file_descriptor(fd);
+  return result;
 }
 
 #endif  // ENABLE_SAVE
@@ -1308,41 +1406,44 @@ base::SharedPtr<FormatOptions> GifFormat::onGetFormatOptions(FileOp* fop)
   if (!gif_options)
     gif_options.reset(new GifOptions);
 
-  // Non-interactive mode
-  if (!fop->context() ||
-      !fop->context()->isUIAvailable())
-    return gif_options;
+#ifdef ENABLE_UI
+  if (fop->context() && fop->context()->isUIAvailable()) {
+    try {
+      auto& pref = Preferences::instance();
 
-  try {
-    // Configuration parameters
-    gif_options->setInterlaced(get_config_bool("GIF", "Interlaced", gif_options->interlaced()));
-    gif_options->setLoop(get_config_bool("GIF", "Loop", gif_options->loop()));
+      if (pref.isSet(pref.gif.interlaced))
+        gif_options->setInterlaced(pref.gif.interlaced());
+      if (pref.isSet(pref.gif.loop))
+        gif_options->setLoop(pref.gif.loop());
 
-    // Load the window to ask to the user the GIF options he wants.
+      if (pref.gif.showAlert()) {
+        app::gen::GifOptions win;
+        win.interlaced()->setSelected(gif_options->interlaced());
+        win.loop()->setSelected(gif_options->loop());
 
-    app::gen::GifOptions win;
-    win.interlaced()->setSelected(gif_options->interlaced());
-    win.loop()->setSelected(gif_options->loop());
+        win.openWindowInForeground();
 
-    win.openWindowInForeground();
+        if (win.closer() == win.ok()) {
+          pref.gif.interlaced(win.interlaced()->isSelected());
+          pref.gif.loop(win.loop()->isSelected());
+          pref.gif.showAlert(!win.dontShow()->isSelected());
 
-    if (win.closer() == win.ok()) {
-      gif_options->setInterlaced(win.interlaced()->isSelected());
-      gif_options->setLoop(win.loop()->isSelected());
-
-      set_config_bool("GIF", "Interlaced", gif_options->interlaced());
-      set_config_bool("GIF", "Loop", gif_options->loop());
+          gif_options->setInterlaced(pref.gif.interlaced());
+          gif_options->setLoop(pref.gif.loop());
+        }
+        else {
+          gif_options.reset(nullptr);
+        }
+      }
     }
-    else {
-      gif_options.reset(NULL);
+    catch (std::exception& e) {
+      Console::showException(e);
+      return base::SharedPtr<GifOptions>(nullptr);
     }
+  }
+#endif // ENABLE_UI
 
-    return gif_options;
-  }
-  catch (std::exception& e) {
-    Console::showException(e);
-    return base::SharedPtr<GifOptions>(0);
-  }
+  return gif_options;
 }
 
 } // namespace app

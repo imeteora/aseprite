@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -18,9 +18,7 @@ namespace app {
 class ShowExtrasCommand : public Command {
 public:
   ShowExtrasCommand()
-    : Command("ShowExtras",
-              "Show Extras",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::ShowExtras(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new ShowExtrasCommand(*this); }
@@ -59,9 +57,7 @@ protected:
 class ShowLayerEdgesCommand : public Command {
 public:
   ShowLayerEdgesCommand()
-    : Command("ShowLayerEdges",
-              "Show Layer Edges",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::ShowLayerEdges(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new ShowLayerEdgesCommand(*this); }
@@ -81,9 +77,7 @@ protected:
 class ShowGridCommand : public Command {
 public:
   ShowGridCommand()
-    : Command("ShowGrid",
-              "Show Grid",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::ShowGrid(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new ShowGridCommand(*this); }
@@ -103,9 +97,7 @@ protected:
 class ShowPixelGridCommand : public Command {
 public:
   ShowPixelGridCommand()
-    : Command("ShowPixelGrid",
-              "Show Pixel Grid",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::ShowPixelGrid(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new ShowPixelGridCommand(*this); }
@@ -125,9 +117,7 @@ protected:
 class ShowSelectionEdgesCommand : public Command {
 public:
   ShowSelectionEdgesCommand()
-    : Command("ShowSelectionEdges",
-              "Show Selection Edges",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::ShowSelectionEdges(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new ShowSelectionEdgesCommand(*this); }
@@ -147,9 +137,7 @@ protected:
 class ShowBrushPreviewCommand : public Command {
 public:
   ShowBrushPreviewCommand()
-    : Command("ShowBrushPreview",
-              "Show Brush Preview",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::ShowBrushPreview(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new ShowBrushPreviewCommand(*this); }
@@ -168,6 +156,46 @@ protected:
     // Preview editor isn't being updated correctly when we change the
     // brush preview state.
     update_screen_for_document(ctx->activeDocument());
+  }
+};
+
+class ShowAutoGuidesCommand : public Command {
+public:
+  ShowAutoGuidesCommand()
+    : Command(CommandId::ShowAutoGuides(), CmdUIOnlyFlag) {
+  }
+
+  Command* clone() const override { return new ShowAutoGuidesCommand(*this); }
+
+protected:
+  bool onChecked(Context* ctx) override {
+    DocumentPreferences& docPref = Preferences::instance().document(ctx->activeDocument());
+    return docPref.show.autoGuides();
+  }
+
+  void onExecute(Context* ctx) override {
+    DocumentPreferences& docPref = Preferences::instance().document(ctx->activeDocument());
+    docPref.show.autoGuides(!docPref.show.autoGuides());
+  }
+};
+
+class ShowSlicesCommand : public Command {
+public:
+  ShowSlicesCommand()
+    : Command(CommandId::ShowSlices(), CmdUIOnlyFlag) {
+  }
+
+  Command* clone() const override { return new ShowSlicesCommand(*this); }
+
+protected:
+  bool onChecked(Context* ctx) override {
+    DocumentPreferences& docPref = Preferences::instance().document(ctx->activeDocument());
+    return docPref.show.slices();
+  }
+
+  void onExecute(Context* ctx) override {
+    DocumentPreferences& docPref = Preferences::instance().document(ctx->activeDocument());
+    docPref.show.slices(!docPref.show.slices());
   }
 };
 
@@ -199,6 +227,16 @@ Command* CommandFactory::createShowSelectionEdgesCommand()
 Command* CommandFactory::createShowBrushPreviewCommand()
 {
   return new ShowBrushPreviewCommand;
+}
+
+Command* CommandFactory::createShowAutoGuidesCommand()
+{
+  return new ShowAutoGuidesCommand;
+}
+
+Command* CommandFactory::createShowSlicesCommand()
+{
+  return new ShowSlicesCommand;
 }
 
 } // namespace app

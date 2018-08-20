@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,6 +14,7 @@
 #include "doc/frame.h"
 #include "filters/tiled_mode.h"
 #include "gfx/point.h"
+#include "gfx/rect.h"
 
 namespace gfx {
   class Region;
@@ -26,16 +27,18 @@ namespace doc {
   class Mask;
   class Remap;
   class RgbMap;
+  class Slice;
   class Sprite;
 }
 
 namespace render {
-  class Zoom;
+  class DitheringAlgorithmBase;
+  class DitheringMatrix;
 }
 
 namespace app {
   class Context;
-  class Document;
+  class Doc;
 
   namespace tools {
     class Controller;
@@ -59,7 +62,8 @@ namespace app {
       enum Button { Left = 0, Right = 1 };
 
       virtual ~ToolLoop() { }
-      virtual void dispose() = 0;
+
+      virtual void commitOrRollback() = 0;
 
       // Returns the tool to use to draw or use
       virtual Tool* getTool() = 0;
@@ -68,7 +72,7 @@ namespace app {
       virtual Brush* getBrush() = 0;
 
       // Returns the document to which belongs the sprite.
-      virtual Document* getDocument() = 0;
+      virtual Doc* getDocument() = 0;
 
       // Returns the sprite where we will draw on
       virtual Sprite* sprite() = 0;
@@ -121,11 +125,11 @@ namespace app {
       virtual Mask* getMask() = 0;
       virtual void setMask(Mask* newMask) = 0;
 
+      // Adds a new slice (only for slice ink)
+      virtual void addSlice(doc::Slice* newSlice) = 0;
+
       // Gets mask X,Y origin coordinates
       virtual gfx::Point getMaskOrigin() = 0;
-
-      // Returns the zoom
-      virtual const render::Zoom& zoom() = 0;
 
       // Return the mouse button which start the tool-loop. It can be used
       // by some tools that instead of using the primary/secondary color
@@ -225,6 +229,11 @@ namespace app {
       virtual void updateDirtyArea() = 0;
 
       virtual void updateStatusBar(const char* text) = 0;
+      virtual gfx::Point statusBarPositionOffset() = 0;
+
+      // For gradients
+      virtual render::DitheringMatrix getDitheringMatrix() = 0;
+      virtual render::DitheringAlgorithmBase* getDitheringAlgorithm() = 0;
     };
 
   } // namespace tools

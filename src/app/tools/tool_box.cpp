@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,6 +11,7 @@
 #include "app/tools/tool_box.h"
 
 #include "app/gui_xml.h"
+#include "app/i18n/strings.h"
 #include "app/tools/controller.h"
 #include "app/tools/ink.h"
 #include "app/tools/intertwine.h"
@@ -30,6 +31,7 @@
 #include "fixmath/fixmath.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "app/tools/controllers.h"
 #include "app/tools/inks.h"
@@ -55,6 +57,7 @@ const char* WellKnownInks::PaintBg = "paint_bg";
 const char* WellKnownInks::PaintCopy = "paint_copy";
 const char* WellKnownInks::PaintLockAlpha = "paint_lock_alpha";
 const char* WellKnownInks::Shading = "shading";
+const char* WellKnownInks::Gradient = "gradient";
 const char* WellKnownInks::Eraser = "eraser";
 const char* WellKnownInks::ReplaceFgWithBg = "replace_fg_with_bg";
 const char* WellKnownInks::ReplaceBgWithFg = "replace_bg_with_fg";
@@ -64,10 +67,19 @@ const char* WellKnownInks::Zoom = "zoom";
 const char* WellKnownInks::Scroll = "scroll";
 const char* WellKnownInks::Move = "move";
 const char* WellKnownInks::Slice = "slice";
+const char* WellKnownInks::MoveSlice = "move_slice";
 const char* WellKnownInks::Blur = "blur";
 const char* WellKnownInks::Jumble = "jumble";
 
+const char* WellKnownControllers::Freehand = "freehand";
+const char* WellKnownControllers::PointByPoint = "point_by_point";
+const char* WellKnownControllers::OnePoints = "one_point";
+const char* WellKnownControllers::TwoPoints = "two_points";
+const char* WellKnownControllers::FourPoints = "four_points";
+const char* WellKnownControllers::LineFreehand = "line_freehand";
+
 const char* WellKnownIntertwiners::None = "none";
+const char* WellKnownIntertwiners::FirstPoint = "first_point";
 const char* WellKnownIntertwiners::AsLines = "as_lines";
 const char* WellKnownIntertwiners::AsRectangles = "as_rectangles";
 const char* WellKnownIntertwiners::AsEllipses = "as_ellipses";
@@ -80,14 +92,29 @@ const char* WellKnownPointShapes::Brush = "brush";
 const char* WellKnownPointShapes::FloodFill = "floodfill";
 const char* WellKnownPointShapes::Spray = "spray";
 
+namespace {
+
+struct deleter {
+  template<typename T>
+  void operator()(T* p) { delete p; }
+
+  template<typename A, typename B>
+  void operator()(std::pair<A,B>& p) { delete p.second; }
+};
+
+} // anonymous namespace
+
 ToolBox::ToolBox()
 {
+  m_xmlTranslator.setStringIdPrefix("tools");
+
   m_inks[WellKnownInks::Selection]       = new SelectionInk();
   m_inks[WellKnownInks::Paint]           = new PaintInk(PaintInk::Simple);
   m_inks[WellKnownInks::PaintFg]         = new PaintInk(PaintInk::WithFg);
   m_inks[WellKnownInks::PaintBg]         = new PaintInk(PaintInk::WithBg);
   m_inks[WellKnownInks::PaintCopy]       = new PaintInk(PaintInk::Copy);
   m_inks[WellKnownInks::PaintLockAlpha]  = new PaintInk(PaintInk::LockAlpha);
+  m_inks[WellKnownInks::Gradient]        = new GradientInk();
   m_inks[WellKnownInks::Shading]         = new ShadingInk();
   m_inks[WellKnownInks::Eraser]          = new EraserInk(EraserInk::Eraser);
   m_inks[WellKnownInks::ReplaceFgWithBg] = new EraserInk(EraserInk::ReplaceFgWithBg);
@@ -101,11 +128,12 @@ ToolBox::ToolBox()
   m_inks[WellKnownInks::Blur]            = new BlurInk();
   m_inks[WellKnownInks::Jumble]          = new JumbleInk();
 
-  m_controllers["freehand"]              = new FreehandController();
-  m_controllers["point_by_point"]        = new PointByPointController();
-  m_controllers["one_point"]             = new OnePointController();
-  m_controllers["two_points"]            = new TwoPointsController();
-  m_controllers["four_points"]           = new FourPointsController();
+  m_controllers[WellKnownControllers::Freehand] = new FreehandController();
+  m_controllers[WellKnownControllers::PointByPoint] = new PointByPointController();
+  m_controllers[WellKnownControllers::OnePoints] = new OnePointController();
+  m_controllers[WellKnownControllers::TwoPoints] = new TwoPointsController();
+  m_controllers[WellKnownControllers::FourPoints] = new FourPointsController();
+  m_controllers[WellKnownControllers::LineFreehand] = new LineFreehandController();
 
   m_pointshapers[WellKnownPointShapes::None] = new NonePointShape();
   m_pointshapers[WellKnownPointShapes::Pixel] = new PixelPointShape();
@@ -114,6 +142,7 @@ ToolBox::ToolBox()
   m_pointshapers[WellKnownPointShapes::Spray] = new SprayPointShape();
 
   m_intertwiners[WellKnownIntertwiners::None] = new IntertwineNone();
+  m_intertwiners[WellKnownIntertwiners::FirstPoint] = new IntertwineFirstPoint();
   m_intertwiners[WellKnownIntertwiners::AsLines] = new IntertwineAsLines();
   m_intertwiners[WellKnownIntertwiners::AsRectangles] = new IntertwineAsRectangles();
   m_intertwiners[WellKnownIntertwiners::AsEllipses] = new IntertwineAsEllipses();
@@ -121,15 +150,11 @@ ToolBox::ToolBox()
   m_intertwiners[WellKnownIntertwiners::AsPixelPerfect] = new IntertwineAsPixelPerfect();
 
   loadTools();
+
+  // When the language is change, we reload the toolbox stirngs/tooltips.
+  Strings::instance()->LanguageChange.connect(
+    [this]{ loadTools(); });
 }
-
-struct deleter {
-  template<typename T>
-  void operator()(T* p) { delete p; }
-
-  template<typename A, typename B>
-  void operator()(std::pair<A,B>& p) { delete p.second; }
-};
 
 ToolBox::~ToolBox()
 {
@@ -156,6 +181,11 @@ Ink* ToolBox::getInkById(const std::string& id)
   return m_inks[id];
 }
 
+Controller* ToolBox::getControllerById(const std::string& id)
+{
+  return m_controllers[id];
+}
+
 Intertwine* ToolBox::getIntertwinerById(const std::string& id)
 {
   return m_intertwiners[id];
@@ -176,39 +206,60 @@ void ToolBox::loadTools()
   // For each group
   TiXmlElement* xmlGroup = handle.FirstChild("gui").FirstChild("tools").FirstChild("group").ToElement();
   while (xmlGroup) {
-    const char* group_id = xmlGroup->Attribute("id");
-    const char* group_text = xmlGroup->Attribute("text");
-
-    if (!group_id || !group_text)
+    const char* groupId = xmlGroup->Attribute("id");
+    if (!groupId)
       throw base::Exception("The configuration file has a <group> without 'id' or 'text' attributes.");
 
-    LOG(VERBOSE) << "TOOL: Group " << group_id << "\n";
+    LOG(VERBOSE) << "TOOL: Group " << groupId << "\n";
 
-    ToolGroup* tool_group = new ToolGroup(group_id, group_text);
+    // Find an existent ToolGroup (this is useful in case we are
+    // reloading tool text/tooltips).
+    ToolGroup* toolGroup = nullptr;
+    for (auto g : m_groups) {
+      if (g->id() == groupId) {
+        toolGroup = g;
+        break;
+      }
+    }
+    if (toolGroup == nullptr) {
+      toolGroup = new ToolGroup(groupId);
+      m_groups.push_back(toolGroup);
+    }
 
     // For each tool
     TiXmlNode* xmlToolNode = xmlGroup->FirstChild("tool");
     TiXmlElement* xmlTool = xmlToolNode ? xmlToolNode->ToElement(): NULL;
     while (xmlTool) {
-      const char* tool_id = xmlTool->Attribute("id");
-      const char* tool_text = xmlTool->Attribute("text");
-      const char* tool_tips = xmlTool->FirstChild("tooltip") ? ((TiXmlElement*)xmlTool->FirstChild("tooltip"))->GetText(): "";
-      const char* default_brush_size = xmlTool->Attribute("default_brush_size");
+      const char* toolId = xmlTool->Attribute("id");
+      std::string toolText = m_xmlTranslator(xmlTool, "text");
+      std::string toolTips = m_xmlTranslator(xmlTool, "tooltip");
+      const char* defaultBrushSize = xmlTool->Attribute("default_brush_size");
 
-      Tool* tool = new Tool(tool_group, tool_id, tool_text, tool_tips,
-        default_brush_size ? strtol(default_brush_size, NULL, 10): 1);
+      Tool* tool = nullptr;
+      for (auto t : m_tools) {
+        if (t->getId() == toolId) {
+          tool = t;
+          break;
+        }
+      }
+      if (tool == nullptr) {
+        tool = new Tool(toolGroup, toolId);
+        m_tools.push_back(tool);
+      }
 
-      LOG(VERBOSE) << "TOOL: Tool " << tool_id << " in group " << group_id << " found\n";
+      tool->setText(toolText);
+      tool->setTips(toolTips);
+      tool->setDefaultBrushSize(
+        defaultBrushSize ? std::strtol(defaultBrushSize, nullptr, 10): 1);
+
+      LOG(VERBOSE) << "TOOL: Tool " << toolId << " in group " << groupId << " found\n";
 
       loadToolProperties(xmlTool, tool, 0, "left");
       loadToolProperties(xmlTool, tool, 1, "right");
 
-      m_tools.push_back(tool);
-
       xmlTool = xmlTool->NextSiblingElement();
     }
 
-    m_groups.push_back(tool_group);
     xmlGroup = xmlGroup->NextSiblingElement();
   }
 

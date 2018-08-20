@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -19,7 +19,7 @@
 #include "app/cmd/set_cel_data.h"
 #include "app/cmd/set_cel_frame.h"
 #include "app/cmd/unlink_cel.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/util/create_cel_copy.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
@@ -119,7 +119,7 @@ void MoveCel::onExecute()
       executeAndAdd(new cmd::SetCelFrame(srcCel, m_dstFrame));
     }
     else {
-      dstCel = create_cel_copy(srcCel, dstSprite, m_dstFrame);
+      dstCel = create_cel_copy(srcCel, dstSprite, dstLayer, m_dstFrame);
 
       executeAndAdd(new cmd::AddCel(dstLayer, dstCel));
       executeAndAdd(new cmd::ClearCel(srcCel));
@@ -130,7 +130,7 @@ void MoveCel::onExecute()
 void MoveCel::onFireNotifications()
 {
   CmdSequence::onFireNotifications();
-  static_cast<app::Document*>(m_dstLayer.layer()->sprite()->document())
+  static_cast<Doc*>(m_dstLayer.layer()->sprite()->document())
     ->notifyCelMoved(
       m_srcLayer.layer(), m_srcFrame,
       m_dstLayer.layer(), m_dstFrame);

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,7 +10,7 @@
 
 #include "app/commands/command.h"
 #include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
 #include "app/modules/gui.h"
 #include "app/transaction.h"
 #include "doc/layer.h"
@@ -30,9 +30,7 @@ protected:
 };
 
 LayerFromBackgroundCommand::LayerFromBackgroundCommand()
-  : Command("LayerFromBackground",
-            "Layer From Background",
-            CmdRecordableFlag)
+  : Command(CommandId::LayerFromBackground(), CmdRecordableFlag)
 {
 }
 
@@ -44,13 +42,15 @@ bool LayerFromBackgroundCommand::onEnabled(Context* context)
                              ContextFlags::ActiveLayerIsVisible |
                              ContextFlags::ActiveLayerIsEditable |
                              ContextFlags::ActiveLayerIsImage |
-                             ContextFlags::ActiveLayerIsBackground);
+                             ContextFlags::ActiveLayerIsBackground) &&
+    // Isn't a reference layer
+    !context->checkFlags(ContextFlags::ActiveLayerIsReference);
 }
 
 void LayerFromBackgroundCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   {
     Transaction transaction(writer.context(), "Layer from Background");
     document->getApi(transaction).layerFromBackground(writer.layer());

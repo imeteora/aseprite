@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,7 +8,7 @@
 #include "config.h"
 #endif
 
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/file/file.h"
 #include "app/file/file_format.h"
 #include "app/file/format_options.h"
@@ -25,9 +25,20 @@ namespace app {
 using namespace base;
 
 class FliFormat : public FileFormat {
-  const char* onGetName() const override { return "flc"; }
-  const char* onGetExtensions() const  override{ return "flc,fli"; }
-  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::FLIC_ANIMATION; }
+
+  const char* onGetName() const override {
+    return "flc";
+  }
+
+  void onGetExtensions(base::paths& exts) const override {
+    exts.push_back("flc");
+    exts.push_back("fli");
+  }
+
+  dio::FileFormat onGetDioFormat() const override {
+    return dio::FileFormat::FLIC_ANIMATION;
+  }
+
   int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
@@ -74,7 +85,7 @@ bool FliFormat::onLoad(FileOp* fop)
   // Create the sprite
   Sprite* sprite = new Sprite(IMAGE_INDEXED, w, h, 256);
   LayerImage* layer = new LayerImage(sprite);
-  sprite->folder()->addLayer(layer);
+  sprite->root()->addLayer(layer);
   layer->configureAsBackground();
 
   // Set frames and speed
@@ -156,24 +167,31 @@ bool FliFormat::onLoad(FileOp* fop)
 
 #ifdef ENABLE_SAVE
 
-static int get_time_precision(const Sprite *sprite)
+static int get_time_precision(const Sprite* sprite,
+                              const doc::SelectedFrames& selFrames)
 {
   // Check if all frames have the same duration
   bool constantFrameRate = true;
-  for (frame_t c(1); c < sprite->totalFrames(); ++c) {
-    if (sprite->frameDuration(c-1) != sprite->frameDuration(c)) {
-      constantFrameRate = false;
-      break;
+  frame_t prevFrame = -1;
+  for (frame_t frame : selFrames) {
+    if (prevFrame >= 0) {
+      if (sprite->frameDuration(prevFrame) != sprite->frameDuration(frame)) {
+        constantFrameRate = false;
+        break;
+      }
     }
+    prevFrame = frame;
   }
   if (constantFrameRate)
     return sprite->frameDuration(0);
 
   int precision = 1000;
-  for (frame_t c(0); c < sprite->totalFrames() && precision > 1; ++c) {
-    int len = sprite->frameDuration(c);
+  for (frame_t frame : selFrames) {
+    int len = sprite->frameDuration(frame);
     while (len / precision == 0)
       precision /= 10;
+    if (precision <= 1)
+      break;
   }
   return precision;
 }
@@ -183,7 +201,7 @@ bool FliFormat::onSave(FileOp* fop)
   const Sprite* sprite = fop->document()->sprite();
 
   // Open the file to write in binary mode
-  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FileHandle handle(open_file_with_exception_sync_on_close(fop->filename(), "wb"));
   FILE* f = handle.get();
   flic::StdioFileInterface finterface(f);
   flic::Encoder encoder(&finterface);
@@ -192,7 +210,7 @@ bool FliFormat::onSave(FileOp* fop)
   header.frames = 0;
   header.width = sprite->width();
   header.height = sprite->height();
-  header.speed = get_time_precision(sprite);
+  header.speed = get_time_precision(sprite, fop->roi().selectedFrames());
   encoder.writeHeader(header);
 
   // Create the bitmaps
@@ -203,10 +221,16 @@ bool FliFormat::onSave(FileOp* fop)
   flic::Frame fliFrame;
   fliFrame.pixels = bmp->getPixelAddress(0, 0);
   fliFrame.rowstride = IndexedTraits::getRowStrideBytes(bmp->width());
-  for (frame_t frame_it=0;
-       frame_it <= sprite->totalFrames();
-       ++frame_it) {
-    frame_t frame = (frame_it % sprite->totalFrames());
+
+  auto frame_beg = fop->roi().selectedFrames().begin();
+  auto frame_end = fop->roi().selectedFrames().end();
+  auto frame_it = frame_beg;
+  frame_t nframes = fop->roi().frames();
+  for (frame_t f=0; f<=nframes; ++f, ++frame_it) {
+    if (frame_it == frame_end)
+      frame_it = frame_beg;
+
+    frame_t frame = *frame_it;
     const Palette* pal = sprite->palette(frame);
     int size = MIN(256, pal->size());
 
@@ -222,7 +246,7 @@ bool FliFormat::onSave(FileOp* fop)
 
     // How many times this frame should be written to get the same
     // time that it has in the sprite
-    if (frame_it < sprite->totalFrames()) {
+    if (f < nframes) {
       int times = sprite->frameDuration(frame) / header.speed;
       times = MAX(1, times);
       for (int c=0; c<times; c++)
@@ -233,7 +257,7 @@ bool FliFormat::onSave(FileOp* fop)
     }
 
     // Update progress
-    fop->setProgress((float)(frame_it+1) / (float)(sprite->totalFrames()+1));
+    fop->setProgress((float)(f+1) / (float)(nframes+1));
   }
 
   return true;

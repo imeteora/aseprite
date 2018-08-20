@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,9 +12,8 @@
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
 #include "app/context_access.h"
-#include "app/document_access.h"
 #include "app/modules/editors.h"
-#include "app/ui/document_view.h"
+#include "app/ui/doc_view.h"
 #include "app/ui/status_bar.h"
 #include "app/ui/workspace.h"
 #include "app/ui_context.h"
@@ -30,9 +29,7 @@ using namespace ui;
 class CloseFileCommand : public Command {
 public:
   CloseFileCommand()
-    : Command("CloseFile",
-              "Close File",
-              CmdUIOnlyFlag) {
+    : Command(CommandId::CloseFile(), CmdUIOnlyFlag) {
   }
 
   Command* clone() const override { return new CloseFileCommand(*this); }
@@ -56,9 +53,7 @@ protected:
 class CloseAllFilesCommand : public Command {
 public:
   CloseAllFilesCommand()
-    : Command("CloseAllFiles",
-              "Close All Files",
-              CmdRecordableFlag) {
+    : Command(CommandId::CloseAllFiles(), CmdRecordableFlag) {
     m_quitting = false;
   }
 
@@ -74,9 +69,9 @@ protected:
     Workspace* workspace = App::instance()->workspace();
 
     // Collect all document views
-    DocumentViews docViews;
+    DocViews docViews;
     for (auto view : *workspace) {
-      DocumentView* docView = dynamic_cast<DocumentView*>(view);
+      DocView* docView = dynamic_cast<DocView*>(view);
       if (docView)
         docViews.push_back(docView);
     }

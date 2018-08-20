@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2016  David Capello
+// Copyright (C) 2016-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,7 +8,7 @@
 #define SHE_COMMON_FREETYPE_FONT_H_INCLUDED
 #pragma once
 
-#include "ft/face.h"
+#include "ft/hb_face.h"
 #include "ft/lib.h"
 #include "she/font.h"
 
@@ -17,27 +17,32 @@ namespace she {
 
   class FreeTypeFont : public Font {
   public:
-    FreeTypeFont(const char* filename, int height);
+    typedef ft::Face Face;
+
+    FreeTypeFont(ft::Lib& lib,
+                 const char* filename,
+                 const int height);
     ~FreeTypeFont();
 
     bool isValid() const;
     void dispose() override;
     FontType type() override;
     int height() const override;
-    int charWidth(int chr) const override;
     int textLength(const std::string& str) const override;
     bool isScalable() const override;
     void setSize(int size) override;
     void setAntialias(bool antialias) override;
+    bool hasCodePoint(int codepoint) const override;
 
-    ft::Face& face() { return m_face; }
+    Face& face() { return m_face; }
 
   private:
-    mutable ft::Lib m_ft;
-    mutable ft::Face m_face;
+    mutable Face m_face;
   };
 
-  FreeTypeFont* loadFreeTypeFont(const char* filename, int height);
+  FreeTypeFont* load_free_type_font(ft::Lib& lib,
+                                    const char* filename,
+                                    const int height);
 
 } // namespace she
 

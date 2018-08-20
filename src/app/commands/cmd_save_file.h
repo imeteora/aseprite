@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,30 +9,41 @@
 #pragma once
 
 #include "app/commands/command.h"
+#include "doc/selected_frames.h"
 
 #include <string>
 
 namespace app {
-  class FileSelectorDelegate;
+  class Doc;
 
   class SaveFileBaseCommand : public Command {
   public:
-    SaveFileBaseCommand(const char* shortName, const char* friendlyName, CommandFlags flags);
-
-    std::string selectedFilename() const {
-      return m_selectedFilename;
-    }
+    SaveFileBaseCommand(const char* id, CommandFlags flags);
 
   protected:
     void onLoadParams(const Params& params) override;
     bool onEnabled(Context* context) override;
 
-    bool saveAsDialog(Context* context, const char* dlgTitle,
-                      FileSelectorDelegate* delegate = nullptr);
+    std::string saveAsDialog(
+      Context* context,
+      const std::string& dlgTitle,
+      const std::string& filename,
+      const bool markAsSaved,
+      const bool saveInBackground = true,
+      const std::string& forbiddenFilename = std::string());
+    void saveDocumentInBackground(
+      const Context* context,
+      Doc* document,
+      const std::string& filename,
+      const bool markAsSaved);
 
     std::string m_filename;
     std::string m_filenameFormat;
-    std::string m_selectedFilename;
+    std::string m_frameTag;
+    std::string m_aniDir;
+    std::string m_slice;
+    doc::SelectedFrames m_selFrames;
+    bool m_adjustFramesByFrameTag;
   };
 
 } // namespace app

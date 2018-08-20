@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,43 +14,86 @@
 #include "app/cmd/replace_image.h"
 #include "app/cmd/set_cel_opacity.h"
 #include "app/cmd/set_palette.h"
-#include "app/document.h"
-#include "base/unique_ptr.h"
+#include "app/doc.h"
+#include "app/doc_event.h"
 #include "doc/cel.h"
 #include "doc/cels_range.h"
 #include "doc/document.h"
-#include "doc/document_event.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
 #include "render/quantization.h"
+#include "render/task_delegate.h"
 
 namespace app {
 namespace cmd {
 
 using namespace doc;
 
+namespace {
+
+class SuperDelegate : public render::TaskDelegate {
+public:
+  SuperDelegate(int ncels, render::TaskDelegate* delegate)
+    : m_ncels(ncels)
+    , m_curCel(0)
+    , m_delegate(delegate) {
+  }
+
+  void notifyTaskProgress(double progress) override {
+    if (m_delegate)
+      m_delegate->notifyTaskProgress(
+        (progress + m_curCel) / m_ncels);
+  }
+
+  bool continueTask() override {
+    if (m_delegate)
+      return m_delegate->continueTask();
+    else
+      return true;
+  }
+
+  void nextCel() {
+    ++m_curCel;
+  }
+
+private:
+  int m_ncels;
+  int m_curCel;
+  TaskDelegate* m_delegate;
+};
+
+} // anonymous namespace
+
 SetPixelFormat::SetPixelFormat(Sprite* sprite,
-  PixelFormat newFormat, DitheringMethod dithering)
+                               const PixelFormat newFormat,
+                               const render::DitheringAlgorithm ditheringAlgorithm,
+                               const render::DitheringMatrix& ditheringMatrix,
+                               render::TaskDelegate* delegate)
   : WithSprite(sprite)
   , m_oldFormat(sprite->pixelFormat())
   , m_newFormat(newFormat)
-  , m_dithering(dithering)
 {
   if (sprite->pixelFormat() == newFormat)
     return;
+
+  SuperDelegate superDel(sprite->uniqueCels().size(), delegate);
 
   for (Cel* cel : sprite->uniqueCels()) {
     ImageRef old_image = cel->imageRef();
     ImageRef new_image(
       render::convert_pixel_format
-      (old_image.get(), NULL, newFormat, m_dithering,
+      (old_image.get(), nullptr, newFormat,
+       ditheringAlgorithm,
+       ditheringMatrix,
        sprite->rgbMap(cel->frame()),
        sprite->palette(cel->frame()),
        cel->layer()->isBackground(),
-       old_image->maskColor()));
+       old_image->maskColor(),
+       &superDel));
 
     m_seq.add(new cmd::ReplaceImage(sprite, old_image, new_image));
+    superDel.nextCel();
   }
 
   // Set all cels opacity to 100% if we are converting to indexed.
@@ -72,8 +115,9 @@ SetPixelFormat::SetPixelFormat(Sprite* sprite,
       if (pal->frame() != 0)
         m_seq.add(new cmd::RemovePalette(sprite, pal));
 
-    base::UniquePtr<Palette> graypal(Palette::createGrayscale());
-    m_seq.add(new cmd::SetPalette(sprite, 0, graypal));
+    std::unique_ptr<Palette> graypal(Palette::createGrayscale());
+    if (*graypal != *sprite->palette(0))
+      m_seq.add(new cmd::SetPalette(sprite, 0, graypal.get()));
   }
 }
 
@@ -103,13 +147,13 @@ void SetPixelFormat::setFormat(PixelFormat format)
   sprite->incrementVersion();
 
   // Regenerate extras
-  static_cast<app::Document*>(sprite->document())
-    ->setExtraCel(ExtraCelRef(nullptr));
+  Doc* doc = static_cast<Doc*>(sprite->document());
+  doc->setExtraCel(ExtraCelRef(nullptr));
 
   // Generate notification
-  DocumentEvent ev(sprite->document());
+  DocEvent ev(doc);
   ev.sprite(sprite);
-  sprite->document()->notify_observers<DocumentEvent&>(&DocumentObserver::onPixelFormatChanged, ev);
+  doc->notify_observers<DocEvent&>(&DocObserver::onPixelFormatChanged, ev);
 }
 
 } // namespace cmd

@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2016 David Capello
+// Copyright (c) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -13,25 +13,21 @@
 #include "base/base.h"
 #include "base/memory.h"
 #include "base/remove_from_container.h"
-#include "base/unique_ptr.h"
 #include "doc/cel.h"
 #include "doc/cels_range.h"
 #include "doc/frame_tag.h"
 #include "doc/image_impl.h"
 #include "doc/layer.h"
-#include "doc/layers_range.h"
 #include "doc/palette.h"
 #include "doc/primitives.h"
 #include "doc/remap.h"
 #include "doc/rgbmap.h"
 
 #include <cstring>
+#include <memory>
 #include <vector>
 
 namespace doc {
-
-static Layer* index2layer(const Layer* layer, const LayerIndex& index, int* index_count);
-static LayerIndex layer2index(const Layer* layer, const Layer* find_layer, int* index_count);
 
 //////////////////////////////////////////////////////////////////////
 // Constructors/Destructor
@@ -39,16 +35,16 @@ static LayerIndex layer2index(const Layer* layer, const Layer* find_layer, int* 
 Sprite::Sprite(PixelFormat format, int width, int height, int ncolors)
   : Object(ObjectType::Sprite)
   , m_document(NULL)
-  , m_format(format)
-  , m_width(width)
-  , m_height(height)
+  , m_spec((ColorMode)format, width, height, 0)
+  , m_pixelRatio(1, 1)
   , m_frames(1)
   , m_frameTags(this)
+  , m_slices(this)
 {
   ASSERT(width > 0 && height > 0);
 
   m_frlens.push_back(100);      // First frame with 100 msecs of duration
-  m_folder = new LayerFolder(this);
+  m_root = new LayerGroup(this);
 
   // Generate palette
   switch (format) {
@@ -74,16 +70,18 @@ Sprite::Sprite(PixelFormat format, int width, int height, int ncolors)
   // Initial RGB map
   m_rgbMap = NULL;
 
-  // The transparent color for indexed images is 0 by default
-  m_transparentColor = 0;
-
   setPalette(&pal, true);
+}
+
+Sprite::Sprite(const ImageSpec& spec, int ncolors)
+  : Sprite((PixelFormat)spec.colorMode(), spec.width(), spec.height(), ncolors)
+{
 }
 
 Sprite::~Sprite()
 {
   // Destroy layers
-  delete m_folder;
+  delete m_root;
 
   // Destroy palettes
   {
@@ -101,7 +99,7 @@ Sprite::~Sprite()
 Sprite* Sprite::createBasicSprite(doc::PixelFormat format, int width, int height, int ncolors)
 {
   // Create the sprite.
-  base::UniquePtr<doc::Sprite> sprite(new doc::Sprite(format, width, height, ncolors));
+  std::unique_ptr<doc::Sprite> sprite(new doc::Sprite(format, width, height, ncolors));
   sprite->setTotalFrames(doc::frame_t(1));
 
   // Create the main image.
@@ -110,21 +108,21 @@ Sprite* Sprite::createBasicSprite(doc::PixelFormat format, int width, int height
 
   // Create the first transparent layer.
   {
-    base::UniquePtr<doc::LayerImage> layer(new doc::LayerImage(sprite));
+    std::unique_ptr<doc::LayerImage> layer(new doc::LayerImage(sprite.get()));
     layer->setName("Layer 1");
 
     // Create the cel.
     {
-      base::UniquePtr<doc::Cel> cel(new doc::Cel(doc::frame_t(0), image));
+      std::unique_ptr<doc::Cel> cel(new doc::Cel(doc::frame_t(0), image));
       cel->setPosition(0, 0);
 
       // Add the cel in the layer.
-      layer->addCel(cel);
+      layer->addCel(cel.get());
       cel.release();            // Release the cel because it is in the layer
     }
 
     // Add the layer in the sprite.
-    sprite->folder()->addLayer(layer.release()); // Release the layer because it's owned by the sprite
+    sprite->root()->addLayer(layer.release()); // Release the layer because it's owned by the sprite
   }
 
   return sprite.release();
@@ -135,7 +133,12 @@ Sprite* Sprite::createBasicSprite(doc::PixelFormat format, int width, int height
 
 void Sprite::setPixelFormat(PixelFormat format)
 {
-  m_format = format;
+  m_spec.setColorMode((ColorMode)format);
+}
+
+void Sprite::setPixelRatio(const PixelRatio& pixelRatio)
+{
+  m_pixelRatio = pixelRatio;
 }
 
 void Sprite::setSize(int width, int height)
@@ -143,13 +146,12 @@ void Sprite::setSize(int width, int height)
   ASSERT(width > 0);
   ASSERT(height > 0);
 
-  m_width = width;
-  m_height = height;
+  m_spec.setSize(width, height);
 }
 
 bool Sprite::needAlpha() const
 {
-  switch (m_format) {
+  switch (pixelFormat()) {
     case IMAGE_RGB:
     case IMAGE_GRAYSCALE: {
       Layer* bg = backgroundLayer();
@@ -161,7 +163,7 @@ bool Sprite::needAlpha() const
 
 bool Sprite::supportAlpha() const
 {
-  switch (m_format) {
+  switch (pixelFormat()) {
     case IMAGE_RGB:
     case IMAGE_GRAYSCALE:
       return true;
@@ -171,7 +173,7 @@ bool Sprite::supportAlpha() const
 
 void Sprite::setTransparentColor(color_t color)
 {
-  m_transparentColor = color;
+  m_spec.setMaskColor(color);
 
   // Change the mask color of all images.
   std::vector<Image*> images;
@@ -195,15 +197,10 @@ int Sprite::getMemSize() const
 //////////////////////////////////////////////////////////////////////
 // Layers
 
-LayerFolder* Sprite::folder() const
-{
-  return m_folder;
-}
-
 LayerImage* Sprite::backgroundLayer() const
 {
-  if (folder()->getLayersCount() > 0) {
-    Layer* bglayer = *folder()->getLayerBegin();
+  if (root()->layersCount() > 0) {
+    Layer* bglayer = root()->layers().front();
 
     if (bglayer->isBackground()) {
       ASSERT(bglayer->isImage());
@@ -213,50 +210,22 @@ LayerImage* Sprite::backgroundLayer() const
   return NULL;
 }
 
-LayerIndex Sprite::countLayers() const
+Layer* Sprite::firstBrowsableLayer() const
 {
-  return LayerIndex(folder()->getLayersCount());
+  Layer* layer = root()->firstLayer();
+  while (layer->isBrowsable())
+    layer = static_cast<LayerGroup*>(layer)->firstLayer();
+  return layer;
 }
 
-LayerIndex Sprite::firstLayer() const
+layer_t Sprite::allLayersCount() const
 {
-  return LayerIndex(0);
+  return root()->allLayersCount();
 }
 
-LayerIndex Sprite::lastLayer() const
+bool Sprite::hasVisibleReferenceLayers() const
 {
-  return LayerIndex(folder()->getLayersCount()-1);
-}
-
-Layer* Sprite::layer(int layerIndex) const
-{
-  return indexToLayer(LayerIndex(layerIndex));
-}
-
-Layer* Sprite::indexToLayer(LayerIndex index) const
-{
-  if (index < LayerIndex(0))
-    return NULL;
-
-  int index_count = -1;
-  return index2layer(folder(), index, &index_count);
-}
-
-LayerIndex Sprite::layerToIndex(const Layer* layer) const
-{
-  int index_count = -1;
-  return layer2index(folder(), layer, &index_count);
-}
-
-void Sprite::getLayersList(std::vector<Layer*>& layers) const
-{
-  // TODO support subfolders
-  LayerConstIterator it = m_folder->getLayerBegin();
-  LayerConstIterator end = m_folder->getLayerEnd();
-
-  for (; it != end; ++it) {
-    layers.push_back(*it);
-  }
+  return root()->hasVisibleReferenceLayers();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -378,12 +347,12 @@ void Sprite::addFrame(frame_t newFrame)
   for (frame_t i=m_frames-1; i>=newFrame; --i)
     setFrameDuration(i, frameDuration(i-1));
 
-  folder()->displaceFrames(newFrame, +1);
+  root()->displaceFrames(newFrame, +1);
 }
 
 void Sprite::removeFrame(frame_t frame)
 {
-  folder()->displaceFrames(frame, -1);
+  root()->displaceFrames(frame, -1);
 
   frame_t newTotal = m_frames-1;
   for (frame_t i=frame; i<newTotal; ++i)
@@ -410,6 +379,14 @@ int Sprite::frameDuration(frame_t frame) const
     return m_frlens[frame];
   else
     return 0;
+}
+
+int Sprite::totalAnimationDuration() const
+{
+  int duration = 0;
+  for (frame_t frame=0; frame<m_frames; ++frame)
+    duration += frameDuration(frame);
+  return duration; // TODO cache this value
 }
 
 void Sprite::setFrameDuration(frame_t frame, int msecs)
@@ -471,7 +448,7 @@ void Sprite::getImages(std::vector<Image*>& images) const
 
 void Sprite::remapImages(frame_t frameFrom, frame_t frameTo, const Remap& remap)
 {
-  ASSERT(m_format == IMAGE_INDEXED);
+  ASSERT(pixelFormat() == IMAGE_INDEXED);
   //ASSERT(remap.size() == 256);
 
   for (const Cel* cel : uniqueCels()) {
@@ -486,31 +463,44 @@ void Sprite::remapImages(frame_t frameFrom, frame_t frameTo, const Remap& remap)
 //////////////////////////////////////////////////////////////////////
 // Drawing
 
-void Sprite::pickCels(int x, int y, frame_t frame, int opacityThreshold, CelList& cels) const
+void Sprite::pickCels(const double x,
+                      const double y,
+                      const frame_t frame,
+                      const int opacityThreshold,
+                      const LayerList& layers,
+                      CelList& cels) const
 {
-  std::vector<Layer*> layers;
-  getLayersList(layers);
+  gfx::PointF pos(x, y);
 
   for (int i=(int)layers.size()-1; i>=0; --i) {
-    Layer* layer = layers[i];
-    if (!layer->isImage() || !layer->isVisible())
+    const Layer* layer = layers[i];
+    if (!layer->isImage())
       continue;
 
     Cel* cel = layer->cel(frame);
     if (!cel)
       continue;
 
-    Image* image = cel->image();
+    const Image* image = cel->image();
     if (!image)
       continue;
 
-    if (!cel->bounds().contains(gfx::Point(x, y)))
+    gfx::RectF celBounds;
+    if (cel->layer()->isReference())
+      celBounds = cel->boundsF();
+    else
+      celBounds = cel->bounds();
+
+    if (!celBounds.contains(pos))
       continue;
 
-    color_t color = get_pixel(image,
-      x - cel->x(),
-      y - cel->y());
+    const gfx::Point ipos(
+      int((pos.x-celBounds.x)*image->width()/celBounds.w),
+      int((pos.y-celBounds.y)*image->height()/celBounds.h));
+    if (!image->bounds().contains(ipos))
+      continue;
 
+    const color_t color = get_pixel(image, ipos.x, ipos.y);
     bool isOpaque = true;
 
     switch (image->pixelFormat()) {
@@ -535,77 +525,58 @@ void Sprite::pickCels(int x, int y, frame_t frame, int opacityThreshold, CelList
 //////////////////////////////////////////////////////////////////////
 // Iterators
 
-LayersRange Sprite::layers() const
+LayerList Sprite::allLayers() const
 {
-  return LayersRange(this, LayerIndex(0), LayerIndex(countLayers()-1));
+  LayerList list;
+  m_root->allLayers(list);
+  return list;
+}
+
+LayerList Sprite::allVisibleLayers() const
+{
+  LayerList list;
+  m_root->allVisibleLayers(list);
+  return list;
+}
+
+LayerList Sprite::allVisibleReferenceLayers() const
+{
+  LayerList list;
+  m_root->allVisibleReferenceLayers(list);
+  return list;
+}
+
+LayerList Sprite::allBrowsableLayers() const
+{
+  LayerList list;
+  m_root->allBrowsableLayers(list);
+  return list;
 }
 
 CelsRange Sprite::cels() const
 {
-  return CelsRange(this, frame_t(0), lastFrame());
+  SelectedFrames selFrames;
+  selFrames.insert(0, lastFrame());
+  return CelsRange(this, selFrames);
 }
 
 CelsRange Sprite::cels(frame_t frame) const
 {
-  return CelsRange(this, frame, frame);
+  SelectedFrames selFrames;
+  selFrames.insert(frame);
+  return CelsRange(this, selFrames);
 }
 
 CelsRange Sprite::uniqueCels() const
 {
-  return CelsRange(this, frame_t(0), lastFrame(), CelsRange::UNIQUE);
+  SelectedFrames selFrames;
+  selFrames.insert(0, lastFrame());
+  return CelsRange(this, selFrames, CelsRange::UNIQUE);
 }
 
-CelsRange Sprite::uniqueCels(frame_t from, frame_t to) const
+CelsRange Sprite::uniqueCels(const SelectedFrames& selFrames) const
 {
-  return CelsRange(this, from, to, CelsRange::UNIQUE);
-}
-
-//////////////////////////////////////////////////////////////////////
-
-static Layer* index2layer(const Layer* layer, const LayerIndex& index, int* index_count)
-{
-  if (index == *index_count)
-    return (Layer*)layer;
-  else {
-    (*index_count)++;
-
-    if (layer->isFolder()) {
-      Layer *found;
-
-      LayerConstIterator it = static_cast<const LayerFolder*>(layer)->getLayerBegin();
-      LayerConstIterator end = static_cast<const LayerFolder*>(layer)->getLayerEnd();
-
-      for (; it != end; ++it) {
-        if ((found = index2layer(*it, index, index_count)))
-          return found;
-      }
-    }
-
-    return NULL;
-  }
-}
-
-static LayerIndex layer2index(const Layer* layer, const Layer* find_layer, int* index_count)
-{
-  if (layer == find_layer)
-    return LayerIndex(*index_count);
-  else {
-    (*index_count)++;
-
-    if (layer->isFolder()) {
-      int found;
-
-      LayerConstIterator it = static_cast<const LayerFolder*>(layer)->getLayerBegin();
-      LayerConstIterator end = static_cast<const LayerFolder*>(layer)->getLayerEnd();
-
-      for (; it != end; ++it) {
-        if ((found = layer2index(*it, find_layer, index_count)) >= 0)
-          return LayerIndex(found);
-      }
-    }
-
-    return LayerIndex(-1);
-  }
+  return CelsRange(this, selFrames, CelsRange::UNIQUE);
 }
 
 } // namespace doc

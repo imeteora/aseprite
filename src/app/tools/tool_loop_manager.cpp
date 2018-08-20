@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -18,6 +18,7 @@
 #include "app/tools/point_shape.h"
 #include "app/tools/symmetry.h"
 #include "app/tools/tool_loop.h"
+#include "doc/brush.h"
 #include "doc/image.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
@@ -54,6 +55,7 @@ void ToolLoopManager::prepareLoop(const Pointer& pointer)
 
   // Prepare the ink
   m_toolLoop->getInk()->prepareInk(m_toolLoop);
+  m_toolLoop->getController()->prepareController(m_toolLoop);
   m_toolLoop->getIntertwine()->prepareIntertwine();
   m_toolLoop->getPointShape()->preparePointShape(m_toolLoop);
 }
@@ -77,7 +79,7 @@ void ToolLoopManager::pressButton(const Pointer& pointer)
   // If the user pressed the other mouse button...
   if ((m_toolLoop->getMouseButton() == ToolLoop::Left && pointer.button() == Pointer::Right) ||
       (m_toolLoop->getMouseButton() == ToolLoop::Right && pointer.button() == Pointer::Left)) {
-    // Cancel the tool-loop (the destination image should be completelly discarded)
+    // Cancel the tool-loop (the destination image should be completely discarded)
     m_toolLoop->cancel();
     return;
   }
@@ -91,7 +93,7 @@ void ToolLoopManager::pressButton(const Pointer& pointer)
   m_toolLoop->getController()->pressButton(m_stroke, spritePoint);
 
   std::string statusText;
-  m_toolLoop->getController()->getStatusBarText(m_stroke, statusText);
+  m_toolLoop->getController()->getStatusBarText(m_toolLoop, m_stroke, statusText);
   m_toolLoop->updateStatusBar(statusText.c_str());
 
   doLoopStep(false);
@@ -109,7 +111,9 @@ bool ToolLoopManager::releaseButton(const Pointer& pointer)
 
   bool res = m_toolLoop->getController()->releaseButton(m_stroke, spritePoint);
 
-  if (!res && (m_toolLoop->getInk()->isSelection() || m_toolLoop->getFilled())) {
+  if (!res && (m_toolLoop->getInk()->isSelection() ||
+               m_toolLoop->getInk()->isSlice() ||
+               m_toolLoop->getFilled())) {
     m_toolLoop->getInk()->setFinalStep(m_toolLoop, true);
     doLoopStep(true);
     m_toolLoop->getInk()->setFinalStep(m_toolLoop, false);
@@ -135,7 +139,7 @@ void ToolLoopManager::movement(const Pointer& pointer)
   m_toolLoop->getController()->movement(m_toolLoop, m_stroke, spritePoint);
 
   std::string statusText;
-  m_toolLoop->getController()->getStatusBarText(m_stroke, statusText);
+  m_toolLoop->getController()->getStatusBarText(m_toolLoop, m_stroke, statusText);
   m_toolLoop->updateStatusBar(statusText.c_str());
 
   doLoopStep(false);
@@ -170,6 +174,8 @@ void ToolLoopManager::doLoopStep(bool last_step)
   else {
     m_toolLoop->validateSrcImage(m_dirtyArea);
   }
+
+  m_toolLoop->getInk()->prepareForStrokes(m_toolLoop, strokes);
 
   // Invalidate destionation image areas.
   if (m_toolLoop->getTracePolicy() == TracePolicy::Last) {
@@ -212,6 +218,7 @@ void ToolLoopManager::snapToGrid(Point& point)
 
   point = snap_to_grid(m_toolLoop->getGridBounds(), point,
                        PreferSnapTo::ClosestGridVertex);
+  point += m_toolLoop->getBrush()->center();
 }
 
 // Strokes are relative to sprite origin.
@@ -220,13 +227,15 @@ void ToolLoopManager::calculateDirtyArea(const Strokes& strokes)
   // Save the current dirty area if it's needed
   Region prevDirtyArea;
   if (m_toolLoop->getTracePolicy() == TracePolicy::Last)
-    prevDirtyArea = m_dirtyArea;
+    prevDirtyArea = m_nextDirtyArea;
 
   // Start with a fresh dirty area
   m_dirtyArea.clear();
 
   for (auto& stroke : strokes) {
-    gfx::Rect strokeBounds = stroke.bounds();
+    gfx::Rect strokeBounds =
+      m_toolLoop->getIntertwine()->getStrokeBounds(m_toolLoop, stroke);
+
     if (strokeBounds.isEmpty())
       continue;
 
@@ -249,8 +258,10 @@ void ToolLoopManager::calculateDirtyArea(const Strokes& strokes)
   // Merge new dirty area with the previous one (for tools like line
   // or rectangle it's needed to redraw the previous position and
   // the new one)
-  if (m_toolLoop->getTracePolicy() == TracePolicy::Last)
+  if (m_toolLoop->getTracePolicy() == TracePolicy::Last) {
+    m_nextDirtyArea = m_dirtyArea;
     m_dirtyArea.createUnion(m_dirtyArea, prevDirtyArea);
+  }
 
   // Apply tiled mode
   TiledMode tiledMode = m_toolLoop->getTiledMode();

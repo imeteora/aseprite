@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,22 +10,29 @@
 
 #include "app/commands/filters/filter_manager_impl.h"
 
+#include "app/app.h"
 #include "app/cmd/copy_region.h"
 #include "app/cmd/patch_cel.h"
+#include "app/cmd/set_palette.h"
 #include "app/cmd/unlink_cel.h"
 #include "app/context_access.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/ini_file.h"
-#include "app/modules/editors.h"
+#include "app/modules/palettes.h"
+#include "app/site.h"
 #include "app/transaction.h"
+#include "app/ui/color_bar.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/palette_view.h"
+#include "app/ui/timeline/timeline.h"
+#include "app/ui_context.h"
+#include "app/util/range_utils.h"
 #include "doc/algorithm/shrink_bounds.h"
 #include "doc/cel.h"
+#include "doc/cels_range.h"
 #include "doc/image.h"
-#include "doc/images_collector.h"
 #include "doc/layer.h"
 #include "doc/mask.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
 #include "filters/filter.h"
 #include "ui/manager.h"
@@ -48,25 +55,36 @@ FilterManagerImpl::FilterManagerImpl(Context* context, Filter* filter)
   , m_cel(nullptr)
   , m_src(nullptr)
   , m_dst(nullptr)
+  , m_row(0)
   , m_mask(nullptr)
   , m_previewMask(nullptr)
+  , m_targetOrig(TARGET_ALL_CHANNELS)
+  , m_target(TARGET_ALL_CHANNELS)
+  , m_celsTarget(CelsTarget::Selected)
+  , m_oldPalette(nullptr)
   , m_progressDelegate(NULL)
 {
-  m_row = 0;
-  m_targetOrig = TARGET_ALL_CHANNELS;
-  m_target = TARGET_ALL_CHANNELS;
-
   int x, y;
   Image* image = m_site.image(&x, &y);
-  if (!image)
+  if (!image
+      || (m_site.layer() &&
+          m_site.layer()->isReference()))
     throw NoImageException();
 
   init(m_site.cel());
 }
 
-app::Document* FilterManagerImpl::document()
+FilterManagerImpl::~FilterManagerImpl()
 {
-  return static_cast<app::Document*>(m_site.document());
+  if (m_oldPalette) {
+    restoreSpritePalette();
+    set_current_palette(m_oldPalette.get(), false);
+  }
+}
+
+Doc* FilterManagerImpl::document()
+{
+  return static_cast<Doc*>(m_site.document());
 }
 
 void FilterManagerImpl::setProgressDelegate(IProgressDelegate* progressDelegate)
@@ -90,9 +108,14 @@ void FilterManagerImpl::setTarget(int target)
     m_target &= ~TARGET_ALPHA_CHANNEL;
 }
 
+void FilterManagerImpl::setCelsTarget(CelsTarget celsTarget)
+{
+  m_celsTarget = celsTarget;
+}
+
 void FilterManagerImpl::begin()
 {
-  Document* document = static_cast<app::Document*>(m_site.document());
+  Doc* document = m_site.document();
 
   m_row = 0;
   m_mask = (document->isMaskVisible() ? document->mask(): nullptr);
@@ -101,7 +124,7 @@ void FilterManagerImpl::begin()
 
 void FilterManagerImpl::beginForPreview()
 {
-  Document* document = static_cast<app::Document*>(m_site.document());
+  Doc* document = m_site.document();
 
   if (document->isMaskVisible())
     m_previewMask.reset(new Mask(*document->mask()));
@@ -110,22 +133,23 @@ void FilterManagerImpl::beginForPreview()
     m_previewMask->replace(m_site.sprite()->bounds());
   }
 
-  m_row = 0;
-  m_mask = m_previewMask;
+  m_row = m_nextRowToFlush = 0;
+  m_mask = m_previewMask.get();
 
-  {
-    Editor* editor = current_editor;
-    Sprite* sprite = m_site.sprite();
-    gfx::Rect vp = View::getView(editor)->viewportBounds();
-    vp = editor->screenToEditor(vp);
-    vp = vp.createIntersection(sprite->bounds());
-
+  // If we have a tiled mode enabled, we'll apply the filter to the whole areaes
+  Editor* activeEditor = UIContext::instance()->activeEditor();
+  if (activeEditor->docPref().tiled.mode() == filters::TiledMode::NONE) {
+    gfx::Rect vp;
+    for (Editor* editor : UIContext::instance()->getAllEditorsIncludingPreview(document)) {
+      vp |= editor->screenToEditor(
+        View::getView(editor)->viewportBounds());
+    }
+    vp &= m_site.sprite()->bounds();
     if (vp.isEmpty()) {
       m_previewMask.reset(nullptr);
       m_row = -1;
       return;
     }
-
     m_previewMask->intersect(vp);
   }
 
@@ -170,7 +194,7 @@ bool FilterManagerImpl::applyStep()
   return true;
 }
 
-void FilterManagerImpl::apply(Transaction& transaction)
+void FilterManagerImpl::apply()
 {
   bool cancelled = false;
 
@@ -190,7 +214,7 @@ void FilterManagerImpl::apply(Transaction& transaction)
     if (algorithm::shrink_bounds2(m_src.get(), m_dst.get(),
                                   m_bounds, output)) {
       if (m_cel->layer()->isBackground()) {
-        transaction.execute(
+        m_transaction->execute(
           new cmd::CopyRegion(
             m_cel->image(),
             m_dst.get(),
@@ -199,7 +223,7 @@ void FilterManagerImpl::apply(Transaction& transaction)
       }
       else {
         // Patch "m_cel"
-        transaction.execute(
+        m_transaction->execute(
           new cmd::PatchCel(
             m_cel, m_dst.get(),
             gfx::Region(output),
@@ -211,37 +235,75 @@ void FilterManagerImpl::apply(Transaction& transaction)
 
 void FilterManagerImpl::applyToTarget()
 {
+  const bool paletteChange = paletteHasChanged();
   bool cancelled = false;
 
-  ImagesCollector images((m_target & TARGET_ALL_LAYERS ?
-                          m_site.sprite()->folder():
-                          m_site.layer()),
-                         m_site.frame(),
-                         (m_target & TARGET_ALL_FRAMES) == TARGET_ALL_FRAMES,
-                         true); // we will write in each image
-  if (images.empty())
+  CelList cels;
+
+  switch (m_celsTarget) {
+
+    case CelsTarget::Selected: {
+      auto range = App::instance()->timeline()->range();
+      if (range.enabled()) {
+        for (Cel* cel : get_unlocked_unique_cels(m_site.sprite(), range)) {
+          if (!cel->layer()->isReference())
+            cels.push_back(cel);
+        }
+      }
+      else if (m_site.cel() &&
+               m_site.layer() &&
+               m_site.layer()->isEditable() &&
+               !m_site.layer()->isReference()) {
+        cels.push_back(m_site.cel());
+      }
+      break;
+    }
+
+    case CelsTarget::All: {
+      for (Cel* cel : m_site.sprite()->uniqueCels()) {
+        if (cel->layer()->isEditable() &&
+            !cel->layer()->isReference())
+          cels.push_back(cel);
+      }
+      break;
+    }
+  }
+
+  if (cels.empty() && !paletteChange) {
+    // We don't have images/palette changes to do (there will not be a
+    // transaction).
     return;
+  }
 
   // Initialize writting operation
   ContextReader reader(m_context);
   ContextWriter writer(reader);
-  Transaction transaction(writer.context(), m_filter->getName(), ModifyDocument);
+  m_transaction.reset(new Transaction(writer.context(), m_filter->getName(), ModifyDocument));
 
   m_progressBase = 0.0f;
-  m_progressWidth = 1.0f / images.size();
+  m_progressWidth = (cels.size() > 0 ? 1.0f / cels.size(): 1.0f);
 
   std::set<ObjectId> visited;
 
+  // Palette change
+  if (paletteChange) {
+    Palette newPalette = *getNewPalette();
+    restoreSpritePalette();
+    m_transaction->execute(
+      new cmd::SetPalette(m_site.sprite(),
+                          m_site.frame(), &newPalette));
+  }
+
   // For each target image
-  for (auto it = images.begin();
-       it != images.end() && !cancelled;
+  for (auto it = cels.begin();
+       it != cels.end() && !cancelled;
        ++it) {
-    Image* image = it->image();
+    Image* image = (*it)->image();
 
     // Avoid applying the filter two times to the same image
     if (visited.find(image->id()) == visited.end()) {
       visited.insert(image->id());
-      applyToCel(transaction, it->cel());
+      applyToCel(*it);
     }
 
     // Is there a delegate to know if the process was cancelled by the user?
@@ -252,29 +314,70 @@ void FilterManagerImpl::applyToTarget()
     m_progressBase += m_progressWidth;
   }
 
-  transaction.commit();
+  // Reset m_oldPalette to avoid restoring the color palette
+  m_oldPalette.reset(nullptr);
+}
+
+bool FilterManagerImpl::isTransaction() const
+{
+  return m_transaction != nullptr;
+}
+
+// This must be executed in the main UI thread.
+// Check Transaction::commit() comments.
+void FilterManagerImpl::commitTransaction()
+{
+  ASSERT(m_transaction);
+  m_transaction->commit();
 }
 
 void FilterManagerImpl::flush()
 {
-  if (m_row >= 0) {
-    Editor* editor = current_editor;
-    gfx::Rect rect(
-      editor->editorToScreen(
-        gfx::Point(
-          m_bounds.x,
-          m_bounds.y+m_row-1)),
-      gfx::Size(
-        editor->zoom().apply(m_bounds.w),
-        (editor->zoom().scale() >= 1 ? editor->zoom().apply(1):
-                                       editor->zoom().remove(1))));
+  int h = m_row - m_nextRowToFlush;
 
-    gfx::Region reg1(rect);
-    gfx::Region reg2;
-    editor->getDrawableRegion(reg2, Widget::kCutTopWindows);
-    reg1.createIntersection(reg1, reg2);
+  if (m_row >= 0 && h > 0) {
+    // Redraw the color palette
+    if (m_nextRowToFlush == 0 && paletteHasChanged())
+      redrawColorPalette();
 
-    editor->invalidateRegion(reg1);
+    for (Editor* editor : UIContext::instance()->getAllEditorsIncludingPreview(document())) {
+      // We expand the region one pixel at the top and bottom of the
+      // region [m_row,m_nextRowToFlush) to be updated on the screen to
+      // avoid screen artifacts when we apply filters like convolution
+      // matrices.
+      gfx::Rect rect(
+        editor->editorToScreen(
+          gfx::Point(
+            m_bounds.x,
+            m_bounds.y+m_nextRowToFlush-1)),
+        gfx::Size(
+          editor->projection().applyX(m_bounds.w),
+          (editor->projection().scaleY() >= 1 ? editor->projection().applyY(h+2):
+                                                editor->projection().removeY(h+2))));
+
+      gfx::Region reg1(rect);
+      editor->expandRegionByTiledMode(reg1, true);
+
+      gfx::Region reg2;
+      editor->getDrawableRegion(reg2, Widget::kCutTopWindows);
+      reg1.createIntersection(reg1, reg2);
+
+      editor->invalidateRegion(reg1);
+    }
+
+    m_nextRowToFlush = m_row+1;
+  }
+}
+
+void FilterManagerImpl::disablePreview()
+{
+  for (Editor* editor : UIContext::instance()->getAllEditorsIncludingPreview(document()))
+    editor->invalidate();
+
+  // Redraw the color bar in case the filter modified the palette.
+  if (paletteHasChanged()) {
+    restoreSpritePalette();
+    redrawColorPalette();
   }
 }
 
@@ -302,20 +405,41 @@ bool FilterManagerImpl::skipPixel()
   return skip;
 }
 
-Palette* FilterManagerImpl::getPalette()
+const Palette* FilterManagerImpl::getPalette() const
 {
+  if (m_oldPalette)
+    return m_oldPalette.get();
+  else
+    return m_site.sprite()->palette(m_site.frame());
+}
+
+const RgbMap* FilterManagerImpl::getRgbMap() const
+{
+  return m_site.sprite()->rgbMap(m_site.frame());
+}
+
+Palette* FilterManagerImpl::getNewPalette()
+{
+  if (!m_oldPalette)
+    m_oldPalette.reset(new Palette(*getPalette()));
   return m_site.sprite()->palette(m_site.frame());
 }
 
-RgbMap* FilterManagerImpl::getRgbMap()
+doc::PalettePicks FilterManagerImpl::getPalettePicks()
 {
-  return m_site.sprite()->rgbMap(m_site.frame());
+  doc::PalettePicks picks;
+  ColorBar::instance()
+    ->getPaletteView()
+    ->getSelectedEntries(picks);
+  return picks;
 }
 
 void FilterManagerImpl::init(Cel* cel)
 {
   ASSERT(cel);
-  if (!updateBounds(static_cast<app::Document*>(m_site.document())->mask()))
+
+  Doc* doc = m_site.document();
+  if (!updateBounds(doc->isMaskVisible() ? doc->mask(): nullptr))
     throw InvalidAreaException();
 
   m_cel = cel;
@@ -336,10 +460,10 @@ void FilterManagerImpl::init(Cel* cel)
     m_target &= ~TARGET_ALPHA_CHANNEL;
 }
 
-void FilterManagerImpl::applyToCel(Transaction& transaction, Cel* cel)
+void FilterManagerImpl::applyToCel(Cel* cel)
 {
   init(cel);
-  apply(transaction);
+  apply();
 }
 
 bool FilterManagerImpl::updateBounds(doc::Mask* mask)
@@ -354,6 +478,31 @@ bool FilterManagerImpl::updateBounds(doc::Mask* mask)
   }
   m_bounds = bounds;
   return !m_bounds.isEmpty();
+}
+
+bool FilterManagerImpl::paletteHasChanged()
+{
+  return
+    (m_oldPalette &&
+     getPalette()->countDiff(getNewPalette(), nullptr, nullptr));
+}
+
+void FilterManagerImpl::restoreSpritePalette()
+{
+  // Restore the original palette to save the undoable "cmd"
+  if (m_oldPalette)
+    m_site.sprite()->setPalette(m_oldPalette.get(), false);
+}
+
+void FilterManagerImpl::redrawColorPalette()
+{
+  set_current_palette(getNewPalette(), false);
+  ColorBar::instance()->invalidate();
+}
+
+bool FilterManagerImpl::isMaskActive() const
+{
+  return m_site.document()->isMaskVisible();
 }
 
 } // namespace app

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2015, 2016  David Capello
+// Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,14 +12,17 @@
 #include "app/commands/command.h"
 #include "app/commands/params.h"
 #include "app/context_access.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/i18n/strings.h"
 #include "app/modules/gui.h"
 #include "app/pref/preferences.h"
 #include "app/transaction.h"
 #include "base/convert_to.h"
+#include "doc/algorithm/modify_selection.h"
 #include "doc/brush_type.h"
 #include "doc/mask.h"
 #include "filters/neighboring_pixels.h"
+#include "fmt/format.h"
 
 #include "modify_selection.xml.h"
 
@@ -28,14 +31,13 @@
 namespace app {
 
 using namespace doc;
+typedef doc::algorithm::SelectionModifier Modifier;
 
 class ModifySelectionWindow : public app::gen::ModifySelection {
 };
 
 class ModifySelectionCommand : public Command {
 public:
-  enum Modifier { Border, Expand, Contract };
-
   ModifySelectionCommand();
   Command* clone() const override { return new ModifySelectionCommand(*this); }
 
@@ -47,9 +49,6 @@ protected:
 
 private:
   std::string getActionName() const;
-  void applyModifier(const Mask* srcMask, Mask* dstMask,
-                     const int brushRadius,
-                     const doc::BrushType brushType) const;
 
   Modifier m_modifier;
   int m_quantity;
@@ -57,10 +56,8 @@ private:
 };
 
 ModifySelectionCommand::ModifySelectionCommand()
-  : Command("ModifySelection",
-            "Modify Selection",
-            CmdRecordableFlag)
-  , m_modifier(Expand)
+  : Command(CommandId::ModifySelection(), CmdRecordableFlag)
+  , m_modifier(Modifier::Expand)
   , m_quantity(0)
   , m_brushType(doc::kCircleBrushType)
 {
@@ -69,9 +66,9 @@ ModifySelectionCommand::ModifySelectionCommand()
 void ModifySelectionCommand::onLoadParams(const Params& params)
 {
   const std::string modifier = params.get("modifier");
-  if (modifier == "border") m_modifier = Border;
-  else if (modifier == "expand") m_modifier = Expand;
-  else if (modifier == "contract") m_modifier = Contract;
+  if (modifier == "border") m_modifier = Modifier::Border;
+  else if (modifier == "expand") m_modifier = Modifier::Expand;
+  else if (modifier == "contract") m_modifier = Modifier::Contract;
 
   const int quantity = params.get_as<int>("quantity");
   m_quantity = std::max<int>(0, quantity);
@@ -97,7 +94,7 @@ void ModifySelectionCommand::onExecute(Context* context)
     ModifySelectionWindow window;
 
     window.setText(getActionName() + " Selection");
-    if (m_modifier == Border)
+    if (m_modifier == Modifier::Border)
       window.byLabel()->setText("Width:");
     else
       window.byLabel()->setText(getActionName() + " By:");
@@ -128,22 +125,23 @@ void ModifySelectionCommand::onExecute(Context* context)
 
   // Lock sprite
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
 
-  base::UniquePtr<Mask> mask(new Mask());
+  std::unique_ptr<Mask> mask(new Mask);
   {
     mask->reserve(sprite->bounds());
     mask->freeze();
-    applyModifier(document->mask(), mask, quantity, brush);
+    doc::algorithm::modify_selection(
+       m_modifier, document->mask(), mask.get(), quantity, brush);
     mask->unfreeze();
   }
 
   // Set the new mask
   Transaction transaction(writer.context(),
-                          getActionName() + " Selection",
+                          friendlyName(),
                           DoesntModifyDocument);
-  transaction.execute(new cmd::SetMask(document, mask));
+  transaction.execute(new cmd::SetMask(document, mask.get()));
   transaction.commit();
 
   document->generateMaskBoundaries();
@@ -152,97 +150,22 @@ void ModifySelectionCommand::onExecute(Context* context)
 
 std::string ModifySelectionCommand::onGetFriendlyName() const
 {
-  std::string text;
+  std::string quantity;
+  if (m_quantity > 0)
+    quantity = fmt::format(Strings::commands_ModifySelection_Quantity(), m_quantity);
 
-  text += getActionName();
-  text += " Selection";
-
-  if (m_quantity > 0) {
-    text += " by ";
-    text += base::convert_to<std::string>(m_quantity);
-    text += " pixel";
-    if (m_quantity > 1)
-      text += "s";
-  }
-
-  return text;
+  return fmt::format(getBaseFriendlyName(),
+                     getActionName(),
+                     quantity);
 }
 
 std::string ModifySelectionCommand::getActionName() const
 {
   switch (m_modifier) {
-    case Border: return "Border";
-    case Expand: return "Expand";
-    case Contract: return "Contract";
-    default: return "Modify";
-  }
-}
-
-// TODO create morphological operators/functions in "doc" namespace
-// TODO the impl is not optimal, but is good enough as a first version
-void ModifySelectionCommand::applyModifier(const Mask* srcMask, Mask* dstMask,
-                                           const int radius,
-                                           const doc::BrushType brush) const
-{
-  const doc::Image* srcImage = srcMask->bitmap();
-  doc::Image* dstImage = dstMask->bitmap();
-
-  // Image bounds to clip get/put pixels
-  const gfx::Rect srcBounds = srcImage->bounds();
-
-  // Create a kernel
-  const int size = 2*radius+1;
-  base::UniquePtr<doc::Image> kernel(doc::Image::create(IMAGE_BITMAP, size, size));
-  doc::clear_image(kernel, 0);
-  if (brush == doc::kCircleBrushType)
-    doc::fill_ellipse(kernel, 0, 0, size-1, size-1, 1);
-  else
-    doc::fill_rect(kernel, 0, 0, size-1, size-1, 1);
-  doc::put_pixel(kernel, radius, radius, 0);
-
-  int total = 0;                // Number of 1s in the kernel image
-  for (int v=0; v<size; ++v)
-    for (int u=0; u<size; ++u)
-      total += kernel->getPixel(u, v);
-
-  for (int y=-radius; y<srcBounds.h+radius; ++y) {
-    for (int x=-radius; x<srcBounds.w+radius; ++x) {
-      doc::color_t c;
-      if (srcBounds.contains(x, y))
-        c = srcImage->getPixel(x, y);
-      else
-        c = 0;
-
-      int accum = 0;
-      for (int v=0; v<size; ++v) {
-        for (int u=0; u<size; ++u) {
-          if (kernel->getPixel(u, v)) {
-            if (srcBounds.contains(x+u-radius, y+v-radius))
-              accum += srcImage->getPixel(x-radius+u, y-radius+v);
-          }
-        }
-      }
-
-      switch (m_modifier) {
-        case Border: {
-          c = (c && accum < total) ? 1: 0;
-          break;
-        }
-        case Expand: {
-          c = (c || accum > 0) ? 1: 0;
-          break;
-        }
-        case Contract: {
-          c = (c && accum == total) ? 1: 0;
-          break;
-        }
-      }
-
-      if (c)
-        doc::put_pixel(dstImage,
-                       srcMask->bounds().x+x,
-                       srcMask->bounds().y+y, 1);
-    }
+    case Modifier::Border: return Strings::commands_ModifySelection_Border();
+    case Modifier::Expand: return Strings::commands_ModifySelection_Expand();
+    case Modifier::Contract: return Strings::commands_ModifySelection_Contract();
+    default: return Strings::commands_ModifySelection_Modify();
   }
 }
 

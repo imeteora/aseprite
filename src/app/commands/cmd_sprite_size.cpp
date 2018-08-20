@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,19 +8,17 @@
 #include "config.h"
 #endif
 
+#include "app/cmd/set_cel_bounds.h"
+#include "app/cmd/set_slice_key.h"
 #include "app/commands/cmd_sprite_size.h"
 #include "app/commands/command.h"
 #include "app/commands/params.h"
-#include "app/context.h"
-#include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
 #include "app/ini_file.h"
-#include "app/job.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
-#include "app/transaction.h"
+#include "app/sprite_job.h"
 #include "base/bind.h"
-#include "base/unique_ptr.h"
 #include "doc/algorithm/resize_image.h"
 #include "doc/cel.h"
 #include "doc/cels_range.h"
@@ -28,37 +26,43 @@
 #include "doc/layer.h"
 #include "doc/mask.h"
 #include "doc/primitives.h"
+#include "doc/slice.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
 
 #include "sprite_size.xml.h"
 
-#define PERC_FORMAT     "%.1f"
+#define PERC_FORMAT     "%.4g"
 
 namespace app {
 
 using namespace ui;
 using doc::algorithm::ResizeMethod;
 
-class SpriteSizeJob : public Job {
-  ContextWriter m_writer;
-  Document* m_document;
-  Sprite* m_sprite;
+class SpriteSizeJob : public SpriteJob {
   int m_new_width;
   int m_new_height;
   ResizeMethod m_resize_method;
 
-  int scale_x(int x) const { return x * m_new_width / m_sprite->width(); }
-  int scale_y(int y) const { return y * m_new_height / m_sprite->height(); }
+  template<typename T>
+  T scale_x(T x) const { return x * T(m_new_width) / T(sprite()->width()); }
+
+  template<typename T>
+  T scale_y(T y) const { return y * T(m_new_height) / T(sprite()->height()); }
+
+  template<typename T>
+  gfx::RectT<T> scale_rect(const gfx::RectT<T>& rc) const {
+    T x1 = scale_x(rc.x);
+    T y1 = scale_y(rc.y);
+    return gfx::RectT<T>(x1, y1,
+                         scale_x(rc.x2()) - x1,
+                         scale_y(rc.y2()) - y1);
+  }
 
 public:
 
   SpriteSizeJob(const ContextReader& reader, int new_width, int new_height, ResizeMethod resize_method)
-    : Job("Sprite Size")
-    , m_writer(reader)
-    , m_document(m_writer.document())
-    , m_sprite(m_writer.sprite())
-  {
+    : SpriteJob(reader, "Sprite Size") {
     m_new_width = new_width;
     m_new_height = new_height;
     m_resize_method = resize_method;
@@ -66,91 +70,113 @@ public:
 
 protected:
 
-  /**
-   * [working thread]
-   */
-  virtual void onJob()
-  {
-    Transaction transaction(m_writer.context(), "Sprite Size");
-    DocumentApi api = m_writer.document()->getApi(transaction);
+  // [working thread]
+  void onJob() override {
+    DocApi api = writer().document()->getApi(transaction());
 
     int cels_count = 0;
-    for (Cel* cel : m_sprite->uniqueCels()) { // TODO add size() member function to CelsRange
+    for (Cel* cel : sprite()->uniqueCels()) { // TODO add size() member function to CelsRange
       (void)cel;
       ++cels_count;
     }
 
     // For each cel...
     int progress = 0;
-    for (Cel* cel : m_sprite->uniqueCels()) {
-      // Change its location
-      api.setCelPosition(m_sprite, cel, scale_x(cel->x()), scale_y(cel->y()));
-
+    for (Cel* cel : sprite()->uniqueCels()) {
       // Get cel's image
       Image* image = cel->image();
       if (image && !cel->link()) {
-        // Resize the image
-        int w = scale_x(image->width());
-        int h = scale_y(image->height());
-        ImageRef new_image(Image::create(image->pixelFormat(), MAX(1, w), MAX(1, h)));
-        new_image->setMaskColor(image->maskColor());
+        // Resize the cel bounds only if it's from a reference layer
+        if (cel->layer()->isReference()) {
+          gfx::RectF newBounds = scale_rect<double>(cel->boundsF());
+          transaction().execute(new cmd::SetCelBoundsF(cel, newBounds));
+        }
+        else {
+          // Change its location
+          api.setCelPosition(sprite(), cel, scale_x(cel->x()), scale_y(cel->y()));
 
-        doc::algorithm::fixup_image_transparent_colors(image);
-        doc::algorithm::resize_image(
-          image, new_image.get(),
-          m_resize_method,
-          m_sprite->palette(cel->frame()),
-          m_sprite->rgbMap(cel->frame()),
-          (cel->layer()->isBackground() ? -1: m_sprite->transparentColor()));
+          // Resize the image
+          int w = scale_x(image->width());
+          int h = scale_y(image->height());
+          ImageRef new_image(Image::create(image->pixelFormat(), MAX(1, w), MAX(1, h)));
+          new_image->setMaskColor(image->maskColor());
 
-        api.replaceImage(m_sprite, cel->imageRef(), new_image);
+          doc::algorithm::fixup_image_transparent_colors(image);
+          doc::algorithm::resize_image(
+            image, new_image.get(),
+            m_resize_method,
+            sprite()->palette(cel->frame()),
+            sprite()->rgbMap(cel->frame()),
+            (cel->layer()->isBackground() ? -1: sprite()->transparentColor()));
+
+          api.replaceImage(sprite(), cel->imageRef(), new_image);
+        }
       }
 
       jobProgress((float)progress / cels_count);
       ++progress;
 
-      // cancel all the operation?
+      // Cancel all the operation?
       if (isCanceled())
         return;        // Transaction destructor will undo all operations
     }
 
     // Resize mask
-    if (m_document->isMaskVisible()) {
+    if (document()->isMaskVisible()) {
       ImageRef old_bitmap
-        (crop_image(m_document->mask()->bitmap(), -1, -1,
-                    m_document->mask()->bitmap()->width()+2,
-                    m_document->mask()->bitmap()->height()+2, 0));
+        (crop_image(document()->mask()->bitmap(), -1, -1,
+                    document()->mask()->bitmap()->width()+2,
+                    document()->mask()->bitmap()->height()+2, 0));
 
       int w = scale_x(old_bitmap->width());
       int h = scale_y(old_bitmap->height());
-      base::UniquePtr<Mask> new_mask(new Mask);
+      std::unique_ptr<Mask> new_mask(new Mask);
       new_mask->replace(
         gfx::Rect(
-          scale_x(m_document->mask()->bounds().x-1),
-          scale_y(m_document->mask()->bounds().y-1), MAX(1, w), MAX(1, h)));
+          scale_x(document()->mask()->bounds().x-1),
+          scale_y(document()->mask()->bounds().y-1), MAX(1, w), MAX(1, h)));
       algorithm::resize_image(
         old_bitmap.get(), new_mask->bitmap(),
         m_resize_method,
-        m_sprite->palette(0), // Ignored
-        m_sprite->rgbMap(0),  // Ignored
+        sprite()->palette(0), // Ignored
+        sprite()->rgbMap(0),  // Ignored
         -1);                  // Ignored
 
       // Reshrink
       new_mask->intersect(new_mask->bounds());
 
       // Copy new mask
-      api.copyToCurrentMask(new_mask);
+      api.copyToCurrentMask(new_mask.get());
 
       // Regenerate mask
-      m_document->resetTransformation();
-      m_document->generateMaskBoundaries();
+      document()->resetTransformation();
+      document()->generateMaskBoundaries();
     }
 
-    // resize sprite
-    api.setSpriteSize(m_sprite, m_new_width, m_new_height);
+    // Resize slices
+    for (auto& slice : sprite()->slices()) {
+      for (auto& k : *slice) {
+        const SliceKey& key = *k.value();
+        if (key.isEmpty())
+          continue;
 
-    // commit changes
-    transaction.commit();
+        SliceKey newKey = key;
+        newKey.setBounds(scale_rect(newKey.bounds()));
+
+        if (newKey.hasCenter())
+          newKey.setCenter(scale_rect(newKey.center()));
+
+        if (newKey.hasPivot())
+          newKey.setPivot(gfx::Point(scale_x(newKey.pivot().x),
+                                     scale_y(newKey.pivot().y)));
+
+        transaction().execute(
+          new cmd::SetSliceKey(slice, k.frame(), newKey));
+      }
+    }
+
+    // Resize Sprite
+    api.setSpriteSize(sprite(), m_new_width, m_new_height);
   }
 
 };
@@ -244,9 +270,7 @@ private:
 };
 
 SpriteSizeCommand::SpriteSizeCommand()
-  : Command("SpriteSize",
-            "Sprite Size",
-            CmdRecordableFlag)
+  : Command(CommandId::SpriteSize(), CmdRecordableFlag)
 {
   m_useUI = true;
   m_width = 0;
@@ -307,6 +331,7 @@ void SpriteSizeCommand::onExecute(Context* context)
   int new_height = (m_height ? m_height: int(sprite->height()*m_scaleY));
   ResizeMethod resize_method = m_resizeMethod;
 
+#ifdef ENABLE_UI
   if (m_useUI && context->isUIAvailable()) {
     SpriteSizeWindow window(context, new_width, new_height);
     window.remapWindow();
@@ -326,6 +351,10 @@ void SpriteSizeCommand::onExecute(Context* context)
 
     set_config_int("SpriteSize", "Method", resize_method);
   }
+#endif // ENABLE_UI
+
+  new_width = MID(1, new_width, DOC_SPRITE_MAX_WIDTH);
+  new_height = MID(1, new_height, DOC_SPRITE_MAX_HEIGHT);
 
   {
     SpriteSizeJob job(reader, new_width, new_height, resize_method);
@@ -333,7 +362,9 @@ void SpriteSizeCommand::onExecute(Context* context)
     job.waitJob();
   }
 
+#ifdef ENABLE_UI
   update_screen_for_document(reader.document());
+#endif
 }
 
 Command* CommandFactory::createSpriteSizeCommand()

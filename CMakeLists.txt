@@ -1,16 +1,13 @@
 # Aseprite
-# Copyright (C) 2001-2016  David Capello
+# Copyright (C) 2001-2018  David Capello
 #
 # Parts of this file come from the Allegro 4.4 CMakeLists.txt
 
-# CMake setup
-if(WIN32)
-  # We need 3.4 to use manifests in the source files list for the main
-  # application target.
-  cmake_minimum_required(VERSION 3.4)
-else()
-  cmake_minimum_required(VERSION 2.8)
-endif()
+cmake_minimum_required(VERSION 3.4)
+
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF) # We use -std=c++11 instead of -std=gnu++11 in macOS
 
 if(COMMAND cmake_policy)
   # CMP0003: Libraries linked via full path no longer produce linker search paths.
@@ -32,8 +29,17 @@ endif()
 # Note: This needs to be done before the project command
 set(CMAKE_CONFIGURATION_TYPES "${CMAKE_BUILD_TYPE}" CACHE INTERNAL "internal")
 
+set(CMAKE_USER_MAKE_RULES_OVERRIDE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/c_flag_overrides.cmake)
+set(CMAKE_USER_MAKE_RULES_OVERRIDE_CXX ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cxx_flag_overrides.cmake)
+
 # Aseprite project
 project(aseprite C CXX)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+  # As we compile with CMAKE_OSX_DEPLOYMENT_TARGET=10.7, we have to
+  # explicitly say that we want to use libc++ instead of the GNU libstdc++
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+endif()
 
 # Check repository status
 if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/laf/CMakeLists.txt)
@@ -50,41 +56,62 @@ enable_testing()
 # Options (these can be specified in cmake command line or modifying
 # CMakeCache.txt)
 
-option(WITH_WEBP_SUPPORT            "Enable support to load/save .webp files" off)
+option(WITH_WEBP_SUPPORT            "Enable support to load/save .webp files" on)
 option(WITH_GTK_FILE_DIALOG_SUPPORT "Enable support for the experimental native GTK File Dialog" off)
-option(WITH_DEPRECATED_GLIB_SUPPORT "Enable support for older glib versions" off)
 option(WITH_DESKTOP_INTEGRATION     "Enable desktop integration modules" off)
 option(WITH_QT_THUMBNAILER          "Enable kde5/qt5 thumnailer" off)
 
-option(USE_STATIC_LIBC    "Use static version of C and C++ runtimes" off)
+option(USE_SHARED_CMARK   "Use your installed copy of cmark" off)
 option(USE_SHARED_CURL    "Use your installed copy of curl" off)
 option(USE_SHARED_GIFLIB  "Use your installed copy of giflib" off)
 option(USE_SHARED_JPEGLIB "Use your installed copy of jpeglib" off)
 option(USE_SHARED_ZLIB    "Use your installed copy of zlib" off)
 option(USE_SHARED_LIBPNG  "Use your installed copy of libpng" off)
 option(USE_SHARED_LIBLOADPNG "Use your installed copy of libloadpng" off)
-option(USE_SHARED_LIBWEBP "Use your installed copy of libwebp" off)
 option(USE_SHARED_TINYXML "Use your installed copy of tinyxml" off)
 option(USE_SHARED_PIXMAN  "Use your installed copy of pixman" off)
 option(USE_SHARED_FREETYPE "Use shared FreeType library" off)
+option(USE_SHARED_HARFBUZZ "Use shared HarfBuzz library" off)
 option(USE_SHARED_ALLEGRO4 "Use shared Allegro 4 library (without resize support)" off)
 option(ENABLE_MEMLEAK     "Enable memory-leaks detector (only for developers)" off)
 option(ENABLE_UPDATER     "Enable automatic check for updates" on)
 option(ENABLE_SCRIPTING   "Compile with scripting support" on)
 option(ENABLE_WEBSERVER   "Enable support to run a webserver (for HTML5 gamedev)" off)
-option(ENABLE_TESTS       "Enable the unit tests" off)
+option(ENABLE_TESTS       "Compile unit tests" off)
+option(ENABLE_BENCHMARKS  "Compile benchmarks" off)
 option(ENABLE_TRIAL_MODE  "Compile the trial version" off)
 option(ENABLE_STEAM       "Compile with Steam library" off)
+option(ENABLE_DEVMODE     "Compile vesion for developers" off)
+option(ENABLE_UI          "Compile UI (turn off to compile CLI-only version)" on)
 option(FULLSCREEN_PLATFORM "Enable fullscreen by default" off)
 set(CUSTOM_WEBSITE_URL "" CACHE STRING "Enable custom local webserver to check updates")
 
-if(APPLE)
-  # On OS X Allegro isn't supported anymore
+if(NOT ENABLE_UI)
+  # Without UI, don't use back-ends
   set(USE_ALLEG4_BACKEND off)
-  set(USE_SKIA_BACKEND on)
+  set(USE_SKIA_BACKEND off)
+  set(USE_NONE_BACKEND on)
 else()
-  option(USE_ALLEG4_BACKEND "Use Allegro 4 backend" on)
-  option(USE_SKIA_BACKEND   "Use Skia backend" off)
+  if(APPLE)
+    # On OS X Allegro isn't supported anymore
+    set(USE_ALLEG4_BACKEND off)
+    set(USE_SKIA_BACKEND on)
+    set(USE_NONE_BACKEND off)
+  else()
+    option(USE_ALLEG4_BACKEND "Use Allegro 4 backend" on)
+    option(USE_SKIA_BACKEND   "Use Skia backend" off)
+    set(USE_NONE_BACKEND off)
+  endif()
+endif()
+
+# Check valid gtk + libpng combination
+if(WITH_GTK_FILE_DIALOG_SUPPORT)
+  if(NOT USE_SHARED_LIBPNG)
+    message(FATAL_ERROR "Cannot compile with gtk and static libpng, set USE_SHARED_LIBPNG=ON")
+  endif()
+  if(NOT USE_SHARED_HARFBUZZ)
+    message(FATAL_ERROR "Cannot compile with gtk and static HarfBuzz, set USE_SHARED_HARFBUZZ=ON")
+  endif()
 endif()
 
 ######################################################################
@@ -106,7 +133,7 @@ if(CMAKE_COMPILER_IS_GNUCC)
 endif()
 
 if(MSVC)
-    set(CMAKE_C_FLAGS_PROFILE "/MD /Zi /Ox /Gd"
+    set(CMAKE_C_FLAGS_PROFILE "/MT /Zi /Ox /Gd"
         CACHE STRING "Profiling C flags")
     set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_C_FLAGS_PROFILE}"
         CACHE STRING "Profiling C++ flags")
@@ -135,6 +162,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_PROFILE "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_PROFILE "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_PROFILE "${CMAKE_BINARY_DIR}/bin")
 
+set(CMARK_DIR           ${CMAKE_SOURCE_DIR}/third_party/cmark)
 set(CURL_DIR            ${CMAKE_SOURCE_DIR}/third_party/curl)
 set(GIFLIB_DIR          ${CMAKE_SOURCE_DIR}/third_party/giflib)
 set(LIBJPEG_DIR         ${CMAKE_SOURCE_DIR}/third_party/jpeg)
@@ -143,10 +171,10 @@ set(LOADPNG_DIR         ${CMAKE_SOURCE_DIR}/third_party/loadpng)
 set(LIBWEBP_DIR         ${CMAKE_SOURCE_DIR}/third_party/libwebp)
 set(PIXMAN_DIR          ${CMAKE_SOURCE_DIR}/third_party/pixman)
 set(FREETYPE_DIR        ${CMAKE_SOURCE_DIR}/third_party/freetype2)
+set(HARFBUZZ_DIR        ${CMAKE_SOURCE_DIR}/third_party/harfbuzz)
 set(SIMPLEINI_DIR       ${CMAKE_SOURCE_DIR}/third_party/simpleini)
 set(TINYXML_DIR         ${CMAKE_SOURCE_DIR}/third_party/tinyxml)
 set(ZLIB_DIR            ${CMAKE_SOURCE_DIR}/third_party/zlib)
-set(DUKTAPE_DIR         ${CMAKE_SOURCE_DIR}/third_party/duktape)
 
 # Search in the "cmake" directory for additional CMake modules.
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
@@ -164,26 +192,6 @@ else()
   add_definitions(-DNDEBUG)
 endif()
 
-if(MSVC)
-  if(USE_STATIC_LIBC)
-    if(CMAKE_BUILD_TYPE STREQUAL Debug)
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -MTd")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -MTd")
-    else()
-      set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -MT")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -MT")
-    endif()
-  endif()
-endif()
-
-if(NOT WIN32 AND NOT APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu89")
-endif()
-
-if(APPLE AND USE_SKIA_BACKEND)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -stdlib=libc++")
-endif()
-
 if(NOT USE_SHARED_CURL)
   set(CURL_STATICLIB ON BOOL)
 endif()
@@ -192,10 +200,13 @@ endif()
 if(USE_SHARED_ZLIB)
   find_package(ZLIB REQUIRED)
 else()
-  set(ZLIB_LIBRARIES zlibstatic)
+  set(ZLIB_FOUND)
+  set(ZLIB_LIBRARY zlibstatic)
+  set(ZLIB_LIBRARIES ${ZLIB_LIBRARY})
   set(ZLIB_INCLUDE_DIRS
     ${ZLIB_DIR}
     ${CMAKE_BINARY_DIR}/third_party/zlib) # Zlib generated zconf.h file
+  set(ZLIB_INCLUDE_DIR ${ZLIB_INCLUDE_DIRS} CACHE PATH "")
 endif()
 include_directories(${ZLIB_INCLUDE_DIRS})
 
@@ -204,31 +215,22 @@ if(USE_SHARED_LIBPNG)
   find_package(PNG REQUIRED)
   add_definitions(${PNG_DEFINITIONS})
 else()
-  set(PNG_LIBRARIES png_static)
+  set(PNG_FOUND ON)
+  set(PNG_LIBRARY png_static)
+  set(PNG_LIBRARIES ${PNG_LIBRARY})
   set(PNG_INCLUDE_DIRS
     ${LIBPNG_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/third_party/libpng) # Libpng generated pnglibconf.h file
+  set(PNG_INCLUDE_DIR ${PNG_INCLUDE_DIRS} CACHE PATH "")
+  set(PNG_PNG_INCLUDE_DIR ${PNG_INCLUDE_DIRS} CACHE PATH "")
 endif()
 include_directories(${PNG_INCLUDE_DIRS})
 add_definitions(-DPNG_NO_MMX_CODE) # Do not use MMX optimizations in PNG code
 
 # libwebp
 if(WITH_WEBP_SUPPORT)
-  if(USE_SHARED_LIBWEBP)
-    find_package(PkgConfig)
-    pkg_check_modules(WEBP libwebp)
-    if(NOT WEBP_FOUND)
-      message(FATAL_ERROR "libwebp not found")
-    endif()
-  else()
-    # Skia already includes webp library
-    if(NOT USE_SKIA_BACKEND)
-      set(WEBP_LIBRARIES webp)
-    else()
-      set(WEBP_LIBRARIES "")
-    endif()
-    set(WEBP_INCLUDE_DIR ${LIBWEBP_DIR}/src)
-  endif()
+  set(WEBP_LIBRARIES webp webpdemux webpmux)
+  set(WEBP_INCLUDE_DIR ${LIBWEBP_DIR}/src)
   include_directories(${WEBP_INCLUDE_DIR})
 endif()
 
@@ -258,24 +260,40 @@ include_directories(${PIXMAN_INCLUDE_DIR})
 if(USE_SHARED_FREETYPE)
   find_package(Freetype REQUIRED)
 else()
-  set(FREETYPE_LIBRARIES freetype)
+  set(FREETYPE_FOUND ON)
+  set(FREETYPE_LIBRARY freetype)
+  set(FREETYPE_LIBRARIES ${FREETYPE_LIBRARY})
   set(FREETYPE_INCLUDE_DIRS ${FREETYPE_DIR}/include)
 endif()
 include_directories(${FREETYPE_INCLUDE_DIRS})
 
+# harfbuzz
+if(USE_SHARED_HARFBUZZ)
+  find_package(HarfBuzz)
+else()
+  set(HARFBUZZ_LIBRARIES harfbuzz)
+  set(HARFBUZZ_INCLUDE_DIRS ${HARFBUZZ_DIR}/src)
+endif()
+include_directories(${HARFBUZZ_INCLUDE_DIRS})
+
 if(USE_SHARED_GIFLIB)
   find_package(GIF REQUIRED)
 else()
-  set(GIF_LIBRARIES giflib)
-  set(GIF_INCLUDE_DIRS ${GIFLIB_DIR}/lib)
+  set(GIF_LIBRARY giflib)
+  set(GIF_LIBRARIES ${GIF_LIBRARY})
+  set(GIF_INCLUDE_DIR ${GIFLIB_DIR}/lib)
+  set(GIF_INCLUDE_DIRS ${GIF_INCLUDE_DIR})
 endif()
 include_directories(${GIF_INCLUDE_DIRS})
 
 if(USE_SHARED_JPEGLIB)
   find_package(JPEG REQUIRED)
 else()
-  set(JPEG_LIBRARIES jpeg)
-  set(JPEG_INCLUDE_DIRS ${LIBJPEG_DIR})
+  set(JPEG_FOUND ON)
+  set(JPEG_INCLUDE_DIR ${LIBJPEG_DIR})
+  set(JPEG_LIBRARY jpeg CACHE FILEPATH "")
+  set(JPEG_LIBRARIES ${JPEG_LIBRARY})
+  set(JPEG_INCLUDE_DIRS ${JPEG_INCLUDE_DIR})
 endif()
 include_directories(${JPEG_INCLUDE_DIRS})
 
@@ -288,6 +306,15 @@ if(USE_ALLEG4_BACKEND)
     set(LOADPNG_INCLUDE_DIR ${LOADPNG_DIR})
   endif()
   include_directories(${LOADPNG_INCLUDE_DIR})
+endif()
+
+if(USE_SHARED_CMARK)
+  find_library(CMARK_LIBRARIES NAMES cmark)
+  find_path(CMARK_INCLUDE_DIRS NAMES cmark.h)
+else()
+  add_definitions(-DCMARK_STATIC_DEFINE)
+  set(CMARK_LIBRARIES libcmark_static)
+  include_directories(${CMAKE_BINARY_DIR}/third_party/cmark)
 endif()
 
 if(USE_SHARED_CURL)
@@ -382,13 +409,6 @@ if(UNIX AND NOT APPLE AND NOT BEOS)
   if(XDGA_FOUND)
     list(APPEND PLATFORM_LIBS Xxf86dga ${X11_LIBRARIES})
   endif()
-
-  if(WITH_GTK_FILE_DIALOG_SUPPORT)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GTKMM gtkmm-3.0)
-    include_directories(${GTKMM_INCLUDE_DIRS})
-    link_directories(${GTKMM_LIBRARY_DIRS})
-  endif()
 endif()
 
 # -- Windows --
@@ -398,8 +418,9 @@ if(WIN32)
     kernel32 user32 gdi32 comdlg32 ole32 winmm
     shlwapi psapi wininet comctl32 dbghelp)
 
-  # Windows XP is the minimum supported platform.
-  add_definitions(-D_WIN32_WINNT=0x0501 -DWINVER=0x0501)
+  # Windows Vista is the minimum supported platform but we're defining
+  # Windows 10 to get the all constant/structure definitions.
+  add_definitions(-D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00)
 
   # We need Unicode support
   add_definitions(-DUNICODE -D_UNICODE)
@@ -432,10 +453,6 @@ if(APPLE)
     endif(COMPILER_GCC)
 endif(APPLE)
 
-if(WITH_DESKTOP_INTEGRATION)
-  add_subdirectory(desktop)
-endif()
-
 # Third parties
 add_subdirectory(third_party)
 
@@ -446,11 +463,9 @@ if(ENABLE_MEMLEAK)
   add_definitions(-DLAF_MEMLEAK)
 endif()
 
-if(NOT USE_STATIC_LIBC)
-  set(gtest_force_shared_crt ON CACHE BOOL "Use shared (DLL) run-time lib even when Google Test is built as static lib.")
-endif()
-
 set(LAF_WITH_TESTS ${ENABLE_TESTS} CACHE BOOL "Enable LAF tests")
+set(UNDO_TESTS     ${ENABLE_TESTS} CACHE BOOL "Enable undo tests")
+
 add_subdirectory(laf)
 
 add_subdirectory(src)

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,13 +8,15 @@
 #include "config.h"
 #endif
 
+#include "app/cmd/set_pixel_ratio.h"
 #include "app/color.h"
 #include "app/commands/command.h"
 #include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
 #include "app/modules/gui.h"
-#include "app/ui/color_button.h"
 #include "app/transaction.h"
+#include "app/ui/color_button.h"
+#include "app/util/pixel_ratio.h"
 #include "base/bind.h"
 #include "base/mem_utils.h"
 #include "doc/image.h"
@@ -41,9 +43,7 @@ protected:
 };
 
 SpritePropertiesCommand::SpritePropertiesCommand()
-  : Command("SpriteProperties",
-            "Sprite Properties",
-            CmdUIOnlyFlag)
+  : Command(CommandId::SpriteProperties(), CmdUIOnlyFlag)
 {
 }
 
@@ -65,7 +65,7 @@ void SpritePropertiesCommand::onExecute(Context* context)
   // Get sprite properties and fill frame fields
   {
     const ContextReader reader(context);
-    const Document* document(reader.document());
+    const Doc* document(reader.document());
     const Sprite* sprite(reader.sprite());
 
     // Update widgets values
@@ -105,13 +105,17 @@ void SpritePropertiesCommand::onExecute(Context* context)
     if (sprite->pixelFormat() == IMAGE_INDEXED) {
       color_button = new ColorButton(app::Color::fromIndex(sprite->transparentColor()),
                                      IMAGE_INDEXED,
-                                     false);
+                                     ColorButtonOptions());
 
       window.transparentColorPlaceholder()->addChild(color_button);
     }
     else {
       window.transparentColorPlaceholder()->addChild(new Label("(only for indexed images)"));
     }
+
+    // Pixel ratio
+    window.pixelRatio()->setValue(
+      base::convert_to<std::string>(sprite->pixelRatio()));
   }
 
   window.remapWindow();
@@ -122,21 +126,28 @@ void SpritePropertiesCommand::onExecute(Context* context)
   window.openWindowInForeground();
 
   if (window.closer() == window.ok()) {
-    if (color_button) {
-      ContextWriter writer(context);
-      Sprite* sprite(writer.sprite());
+    ContextWriter writer(context);
+    Sprite* sprite(writer.sprite());
 
-      // If the transparent color index has changed, we update the
-      // property in the sprite.
-      int index = color_button->getColor().getIndex();
-      if (color_t(index) != sprite->transparentColor()) {
-        Transaction transaction(writer.context(), "Set Transparent Color");
-        DocumentApi api = writer.document()->getApi(transaction);
+    color_t index = (color_button ? color_button->getColor().getIndex():
+                                    sprite->transparentColor());
+    PixelRatio pixelRatio =
+      base::convert_to<PixelRatio>(window.pixelRatio()->getValue());
+
+    if (index != sprite->transparentColor() ||
+        pixelRatio != sprite->pixelRatio()) {
+      Transaction transaction(writer.context(), "Change Sprite Properties");
+      DocApi api = writer.document()->getApi(transaction);
+
+      if (index != sprite->transparentColor())
         api.setSpriteTransparentColor(sprite, index);
-        transaction.commit();
 
-        update_screen_for_document(writer.document());
-      }
+      if (pixelRatio != sprite->pixelRatio())
+        transaction.execute(new cmd::SetPixelRatio(sprite, pixelRatio));
+
+      transaction.commit();
+
+      update_screen_for_document(writer.document());
     }
   }
 

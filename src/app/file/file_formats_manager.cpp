@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +13,7 @@
 #include "app/file/file_format.h"
 #include "app/file/format_options.h"
 #include "base/string.h"
-#include "docio/detect_format.h"
+#include "dio/detect_format.h"
 
 #include <algorithm>
 #include <cstring>
@@ -21,7 +21,6 @@
 namespace app {
 
 extern FileFormat* CreateAseFormat();
-extern FileFormat* CreatePixlyFormat();
 extern FileFormat* CreateBmpFormat();
 extern FileFormat* CreateFliFormat();
 extern FileFormat* CreateGifFormat();
@@ -41,7 +40,7 @@ static FileFormatsManager* singleton = NULL;
 FileFormatsManager* FileFormatsManager::instance()
 {
   if (!singleton)
-    singleton = new FileFormatsManager();
+    singleton = new FileFormatsManager;
   return singleton;
 }
 
@@ -52,19 +51,10 @@ void FileFormatsManager::destroyInstance()
   singleton = NULL;
 }
 
-FileFormatsManager::~FileFormatsManager()
-{
-  FileFormatsList::iterator end = this->end();
-  for (FileFormatsList::iterator it = begin(); it != end; ++it) {
-    delete (*it);               // delete the FileFormat
-  }
-}
-
-void FileFormatsManager::registerAllFormats()
+FileFormatsManager::FileFormatsManager()
 {
   // The first format is the default image format in FileSelector
   registerFormat(CreateAseFormat());
-  registerFormat(CreatePixlyFormat());
   registerFormat(CreateBmpFormat());
   registerFormat(CreateFliFormat());
   registerFormat(CreateGifFormat());
@@ -77,6 +67,14 @@ void FileFormatsManager::registerAllFormats()
 #ifdef ASEPRITE_WITH_WEBP_SUPPORT
   registerFormat(CreateWebPFormat());
 #endif
+}
+
+FileFormatsManager::~FileFormatsManager()
+{
+  FileFormatsList::iterator end = this->end();
+  for (FileFormatsList::iterator it = begin(); it != end; ++it) {
+    delete (*it);               // delete the FileFormat
+  }
 }
 
 void FileFormatsManager::registerFormat(FileFormat* fileFormat)
@@ -94,10 +92,10 @@ FileFormatsList::iterator FileFormatsManager::end()
   return m_formats.end();
 }
 
-FileFormat* FileFormatsManager::getFileFormat(const docio::FileFormat docioFormat) const
+FileFormat* FileFormatsManager::getFileFormat(const dio::FileFormat dioFormat) const
 {
   for (FileFormat* ff : m_formats)
-    if (ff->docioFormat() == docioFormat)
+    if (ff->dioFormat() == dioFormat)
       return ff;
   return nullptr;
 }

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,7 +15,7 @@
 #include "app/commands/command.h"
 #include "app/context.h"
 #include "app/context_access.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/ini_file.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
@@ -25,7 +25,6 @@
 #include "base/bind.h"
 #include "base/chrono.h"
 #include "base/convert_to.h"
-#include "base/unique_ptr.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -56,16 +55,14 @@ private:
   Mask* generateMask(const Sprite* sprite, const Image* image, int xpos, int ypos);
   void maskPreview(const ContextReader& reader);
 
-  Window* m_window; // TODO we cannot use a UniquePtr because clone() needs a copy ctor
+  Window* m_window; // TODO we cannot use a std::unique_ptr because clone() needs a copy ctor
   ColorButton* m_buttonColor;
   CheckBox* m_checkPreview;
   Slider* m_sliderTolerance;
 };
 
 MaskByColorCommand::MaskByColorCommand()
-  : Command("MaskByColor",
-            "Mask By Color",
-            CmdUIOnlyFlag)
+  : Command(CommandId::MaskByColor(), CmdUIOnlyFlag)
 {
 }
 
@@ -101,15 +98,19 @@ void MaskByColorCommand::onExecute(Context* context)
   box4 = new Box(HORIZONTAL | HOMOGENEOUS);
   label_color = new Label("Color:");
   m_buttonColor = new ColorButton
-   (get_config_color("MaskColor", "Color",
-                     ColorBar::instance()->getFgColor()),
-    sprite->pixelFormat(),
-    false);
+    (get_config_color("MaskColor", "Color",
+                      ColorBar::instance()->getFgColor()),
+     sprite->pixelFormat(),
+     ColorButtonOptions());
   label_tolerance = new Label("Tolerance:");
   m_sliderTolerance = new Slider(0, 255, get_config_int("MaskColor", "Tolerance", 0));
   m_checkPreview = new CheckBox("&Preview");
   button_ok = new Button("&OK");
   button_cancel = new Button("&Cancel");
+
+  m_checkPreview->processMnemonicFromText();
+  button_ok->processMnemonicFromText();
+  button_cancel->processMnemonicFromText();
 
   if (get_config_bool("MaskColor", "Preview", true))
     m_checkPreview->setSelected(true);
@@ -155,12 +156,12 @@ void MaskByColorCommand::onExecute(Context* context)
   bool apply = (m_window->closer() == button_ok);
 
   ContextWriter writer(reader);
-  Document* document(writer.document());
+  Doc* document(writer.document());
 
   if (apply) {
     Transaction transaction(writer.context(), "Mask by Color", DoesntModifyDocument);
-    base::UniquePtr<Mask> mask(generateMask(sprite, image, xpos, ypos));
-    transaction.execute(new cmd::SetMask(document, mask));
+    std::unique_ptr<Mask> mask(generateMask(sprite, image, xpos, ypos));
+    transaction.execute(new cmd::SetMask(document, mask.get()));
     transaction.commit();
 
     set_config_color("MaskColor", "Color", m_buttonColor->getColor());
@@ -184,7 +185,7 @@ Mask* MaskByColorCommand::generateMask(const Sprite* sprite, const Image* image,
   color = color_utils::color_for_image(m_buttonColor->getColor(), sprite->pixelFormat());
   tolerance = m_sliderTolerance->getValue();
 
-  base::UniquePtr<Mask> mask(new Mask());
+  std::unique_ptr<Mask> mask(new Mask());
   mask->byColor(image, color, tolerance);
   mask->offsetOrigin(xpos, ypos);
 
@@ -196,7 +197,7 @@ void MaskByColorCommand::maskPreview(const ContextReader& reader)
   if (m_checkPreview->isSelected()) {
     int xpos, ypos;
     const Image* image = reader.image(&xpos, &ypos);
-    base::UniquePtr<Mask> mask(generateMask(reader.sprite(), image, xpos, ypos));
+    std::unique_ptr<Mask> mask(generateMask(reader.sprite(), image, xpos, ypos));
     {
       ContextWriter writer(reader);
 
@@ -204,7 +205,7 @@ void MaskByColorCommand::maskPreview(const ContextReader& reader)
       base::Chrono chrono;
 #endif
 
-      writer.document()->generateMaskBoundaries(mask);
+      writer.document()->generateMaskBoundaries(mask.get());
 
 #ifdef SHOW_BOUNDARIES_GEN_PERFORMANCE
       double time = chrono.elapsed();

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,7 +9,6 @@
 #pragma once
 
 #include "app/file_selector.h"
-#include "base/unique_ptr.h"
 #include "ui/window.h"
 
 #include "file_selector.xml.h"
@@ -23,14 +22,16 @@ namespace ui {
 }
 
 namespace app {
-  class CustomFileNameEntry;
   class FileList;
   class FileListView;
   class IFileItem;
 
   class FileSelector : public app::gen::FileSelector {
   public:
-    FileSelector(FileSelectorType type, FileSelectorDelegate* delegate);
+    FileSelector(FileSelectorType type);
+    ~FileSelector();
+
+    void setDefaultExtension(const std::string& extension);
 
     void goBack();
     void goForward();
@@ -38,9 +39,10 @@ namespace app {
     void goInsideFolder();
 
     // Shows the dialog to select a file in the program.
-    std::string show(const std::string& title,
-                     const std::string& initialPath,
-                     const std::string& showExtensions);
+    bool show(const std::string& title,
+              const std::string& initialPath,
+              const base::paths& extensions,
+              base::paths& output);
 
   private:
     void updateLocation();
@@ -57,8 +59,13 @@ namespace app {
     void onFileListCurrentFolderChanged();
     std::string getSelectedExtension() const;
 
+    class ArrowNavigator;
+    class CustomFileNameItem;
+    class CustomFolderNameItem;
+    class CustomFileNameEntry;
+    class CustomFileExtensionItem;
+
     FileSelectorType m_type;
-    FileSelectorDelegate* m_delegate;
     std::string m_defExtension;
     CustomFileNameEntry* m_fileName;
     FileList* m_fileList;

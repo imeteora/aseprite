@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,7 +12,7 @@
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/job.h"
 #include "app/ui/main_window.h"
 #include "ui/alert.h"
@@ -29,9 +29,7 @@ protected:
 };
 
 ExitCommand::ExitCommand()
-  : Command("Exit",
-            "Exit",
-            CmdUIOnlyFlag)
+  : Command(CommandId::Exit(), CmdUIOnlyFlag)
 {
 }
 
@@ -43,7 +41,7 @@ void ExitCommand::onExecute(Context* ctx)
     return;
 
   if (ctx->hasModifiedDocuments()) {
-    Command* closeAll = CommandsModule::instance()->getCommandByName(CommandId::CloseAllFiles);
+    Command* closeAll = Commands::instance()->byId(CommandId::CloseAllFiles());
     Params params;
     params.set("quitting", "1");
     ctx->executeCommand(closeAll, params);

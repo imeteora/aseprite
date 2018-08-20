@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -9,13 +9,15 @@
 #pragma once
 
 #include <allegro.h>
+#include <vector>
 
+#include "gfx/rect.h"
 #include "she/surface.h"
 #include "she/common/generic_surface.h"
 
 namespace she {
 
-  class Alleg4Surface : public GenericDrawTextSurface<GenericDrawColoredRgbaSurface<Surface> > {
+  class Alleg4Surface : public GenericDrawColoredRgbaSurface<Surface> {
   public:
     enum DestroyFlag {
       None = 0,
@@ -34,12 +36,16 @@ namespace she {
     int width() const override;
     int height() const override;
     bool isDirectToScreen() const override;
-    gfx::Rect getClipBounds() override;
-    void setClipBounds(const gfx::Rect& rc) override;
-    bool intersectClipRect(const gfx::Rect& rc) override;
+    int getSaveCount() const override;
+    gfx::Rect getClipBounds() const override;
+    void saveClip() override;
+    void restoreClip() override;
+    bool clipRect(const gfx::Rect& rc) override;
     void lock() override;
     void unlock() override;
-    void setDrawMode(DrawMode mode, int param) override;
+    void setDrawMode(DrawMode mode, int param,
+                     const gfx::Color a,
+                     const gfx::Color b) override;
     void applyScale(int scale) override;
     void* nativeHandle() override;
     void clear() override;
@@ -56,11 +62,14 @@ namespace she {
     void scrollTo(const gfx::Rect& rc, int dx, int dy) override;
     void drawSurface(const Surface* src, int dstx, int dsty) override;
     void drawRgbaSurface(const Surface* src, int dstx, int dsty) override;
+    void drawRgbaSurface(const Surface* src, int srcx, int srcy, int dstx, int dsty, int w, int h) override;
+    void drawRgbaSurface(const Surface* src, const gfx::Rect& srcRect, const gfx::Rect& dstRect) override;
 
   private:
     BITMAP* m_bmp;
     DestroyFlag m_destroy;
     int m_lock;
+    std::vector<gfx::Rect> m_clipStack;
   };
 
 } // namespace she

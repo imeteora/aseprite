@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,6 +13,7 @@
 #include "app/app.h"
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
+#include "app/i18n/strings.h"
 #include "app/modules/editors.h"
 #include "app/modules/gfx.h"
 #include "app/tools/active_tool.h"
@@ -24,6 +25,7 @@
 #include "app/ui/status_bar.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
+#include "fmt/format.h"
 #include "gfx/size.h"
 #include "obs/signal.h"
 #include "she/surface.h"
@@ -293,8 +295,6 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
   gfx::Rect bounds = clientBounds();
   Graphics* g = ev.graphics();
   SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-  gfx::Color normalFace = theme->colors.buttonNormalFace();
-  gfx::Color hotFace = theme->colors.buttonHotFace();
   ToolBox* toolbox = App::instance()->toolBox();
   Tool* activeTool = App::instance()->activeTool();
   ToolGroupList::iterator it = toolbox->begin_group();
@@ -306,22 +306,19 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
   for (int c=0; c<groups; ++c, ++it) {
     ToolGroup* tool_group = *it;
     Tool* tool = m_selectedInGroup[tool_group];
-    gfx::Color face;
     SkinPartPtr nw;
 
     if (activeTool == tool || m_hotIndex == c) {
       nw = theme->parts.toolbuttonHot();
-      face = hotFace;
     }
     else {
       nw = c >= 0 && c < groups-1 ? theme->parts.toolbuttonNormal():
                                     theme->parts.toolbuttonLast();
-      face = normalFace;
     }
 
     toolrc = getToolGroupBounds(c);
     toolrc.offset(-origin());
-    theme->drawRect(g, toolrc, nw.get(), face);
+    theme->drawRect(g, toolrc, nw.get());
 
     // Draw the tool icon
     she::Surface* icon = theme->getToolIcon(tool->getId().c_str());
@@ -341,8 +338,7 @@ void ToolBar::onPaint(ui::PaintEvent& ev)
     g,
     toolrc,
     (isHot ? theme->parts.toolbuttonHot().get():
-             theme->parts.toolbuttonLast().get()),
-    (isHot ? hotFace: normalFace));
+             theme->parts.toolbuttonLast().get()));
 
   she::Surface* icon = theme->getToolIcon("minieditor");
   if (icon) {
@@ -407,7 +403,7 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
     return;
 
   // In case this tool contains more than just one tool, show the popup window
-  m_popupWindow = new PopupWindow("", PopupWindow::ClickBehavior::CloseOnClickOutsideHotRegion);
+  m_popupWindow = new TransparentPopupWindow(PopupWindow::ClickBehavior::CloseOnClickOutsideHotRegion);
   m_closeConn = m_popupWindow->Close.connect(base::Bind<void, ToolBar, ToolBar>(&ToolBar::onClosePopup, this));
   m_openedRecently = true;
 
@@ -431,9 +427,6 @@ void ToolBar::openPopupWindow(int group_index, ToolGroup* tool_group)
   Region rgn(gfx::Rect(rc).enlarge(16*guiscale()));
   rgn.createUnion(rgn, Region(bounds()));
   m_popupWindow->setHotRegion(rgn);
-
-  m_popupWindow->setTransparent(true);
-  m_popupWindow->setBgColor(gfx::ColorNone);
   m_popupWindow->setAutoRemap(false);
   m_popupWindow->setBounds(rc);
   toolstrip->setBounds(rc);
@@ -513,17 +506,18 @@ void ToolBar::openTipWindow(int group_index, Tool* tool)
     }
 
     // Tool shortcut
-    Key* key = KeyboardShortcuts::instance()->tool(tool);
+    KeyPtr key = KeyboardShortcuts::instance()->tool(tool);
     if (key && !key->accels().empty()) {
-      tooltip += "\n\nShortcut: ";
-      tooltip += key->accels().front().toString();
+      tooltip += "\n\n";
+      tooltip += fmt::format(Strings::tools_shortcut(),
+                             key->accels().front().toString());
     }
   }
   else if (group_index == PreviewVisibilityIndex) {
     if (App::instance()->mainWindow()->getPreviewEditor()->isPreviewEnabled())
-      tooltip = "Hide Preview";
+      tooltip = Strings::tools_preview_hide();
     else
-      tooltip = "Show Preview";
+      tooltip = Strings::tools_preview_show();
   }
   else
     return;
@@ -568,6 +562,14 @@ void ToolBar::selectTool(Tool* tool)
     m_currentStrip->invalidate();
 
   invalidate();
+}
+
+void ToolBar::selectToolGroup(tools::ToolGroup* toolGroup)
+{
+  ASSERT(toolGroup);
+  ASSERT(m_selectedInGroup[toolGroup]);
+  if (m_selectedInGroup[toolGroup])
+    selectTool(m_selectedInGroup[toolGroup]);
 }
 
 void ToolBar::onClosePopup()
@@ -706,21 +708,18 @@ void ToolBar::ToolStrip::onPaint(PaintEvent& ev)
   for (ToolIterator it = toolbox->begin(); it != toolbox->end(); ++it) {
     Tool* tool = *it;
     if (tool->getGroup() == m_group) {
-      gfx::Color face;
       SkinPartPtr nw;
 
       if (activeTool == tool || m_hotTool == tool) {
         nw = theme->parts.toolbuttonHot();
-        face = theme->colors.buttonHotFace();
       }
       else {
         nw = theme->parts.toolbuttonLast();
-        face = theme->colors.buttonNormalFace();
       }
 
       toolrc = getToolBounds(index++);
       toolrc.offset(-bounds().x, -bounds().y);
-      theme->drawRect(g, toolrc, nw.get(), face);
+      theme->drawRect(g, toolrc, nw.get());
 
       // Draw the tool icon
       she::Surface* icon = theme->getToolIcon(tool->getId().c_str());

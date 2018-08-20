@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,10 +14,11 @@
 #include "app/context.h"
 #include "app/file/palette_file.h"
 #include "app/file_selector.h"
+#include "app/i18n/strings.h"
 #include "app/modules/palettes.h"
 #include "base/fs.h"
-#include "base/unique_ptr.h"
 #include "doc/palette.h"
+#include "fmt/format.h"
 #include "ui/alert.h"
 
 namespace app {
@@ -35,18 +36,18 @@ protected:
 
 private:
   std::string m_preset;
+  std::string m_filename;
 };
 
 LoadPaletteCommand::LoadPaletteCommand()
-  : Command("LoadPalette",
-            "Load Palette",
-            CmdRecordableFlag)
+  : Command(CommandId::LoadPalette(), CmdRecordableFlag)
 {
 }
 
 void LoadPaletteCommand::onLoadParams(const Params& params)
 {
   m_preset = params.get("preset");
+  m_filename = params.get("filename");
 }
 
 void LoadPaletteCommand::onExecute(Context* context)
@@ -58,24 +59,36 @@ void LoadPaletteCommand::onExecute(Context* context)
     if (!base::is_file(filename))
       filename = get_preset_palette_filename(m_preset, ".gpl");
   }
+  else if (!m_filename.empty()) {
+    filename = m_filename;
+  }
+#ifdef ENABLE_UI
   else {
-    std::string exts = get_readable_palette_extensions();
-    filename = app::show_file_selector("Load Palette", "", exts,
-                                       FileSelectorType::Open);
+    base::paths exts = get_readable_palette_extensions();
+    base::paths filenames;
+    if (app::show_file_selector(
+          "Load Palette", "", exts,
+          FileSelectorType::Open, filenames)) {
+      filename = filenames.front();
+    }
+  }
+#endif // ENABLE_UI
+
+  // Do nothing
+  if (filename.empty())
+    return;
+
+  std::unique_ptr<doc::Palette> palette(load_palette(filename.c_str()));
+  if (!palette) {
+    if (context->isUIAvailable())
+      ui::Alert::show(fmt::format(Strings::alerts_error_loading_file(), filename));
+    return;
   }
 
-  if (!filename.empty()) {
-    base::UniquePtr<doc::Palette> palette(load_palette(filename.c_str()));
-    if (!palette) {
-      Alert::show("Error<<Loading palette file||&Close");
-    }
-    else {
-      SetPaletteCommand* cmd = static_cast<SetPaletteCommand*>(
-        CommandsModule::instance()->getCommandByName(CommandId::SetPalette));
-      cmd->setPalette(palette);
-      context->executeCommand(cmd);
-    }
-  }
+  SetPaletteCommand* cmd = static_cast<SetPaletteCommand*>(
+    Commands::instance()->byId(CommandId::SetPalette()));
+  cmd->setPalette(palette.get());
+  context->executeCommand(cmd);
 }
 
 Command* CommandFactory::createLoadPaletteCommand()

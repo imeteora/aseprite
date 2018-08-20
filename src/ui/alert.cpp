@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -40,11 +40,11 @@
 #include "ui/button.h"
 #include "ui/grid.h"
 #include "ui/label.h"
+#include "ui/scale.h"
 #include "ui/separator.h"
 #include "ui/slider.h"
 #include "ui/theme.h"
 
-#include <cstdarg>
 #include <cstdio>
 
 namespace ui {
@@ -66,19 +66,24 @@ void Alert::addProgress()
   m_progressPlaceholder->setVisible(true);
 }
 
+CheckBox* Alert::addCheckBox(const std::string& text)
+{
+  auto checkBox = new CheckBox(text);
+  m_progressPlaceholder->addChild(checkBox);
+  m_progressPlaceholder->setVisible(true);
+  return checkBox;
+}
+
 void Alert::setProgress(double progress)
 {
   ASSERT(m_progress);
   m_progress->setValue(int(MID(0.0, progress * 100.0, 100.0)));
 }
 
-AlertPtr Alert::create(const char* format, ...)
+// static
+AlertPtr Alert::create(const std::string& _msg)
 {
-  // Process arguments
-  std::va_list ap;
-  va_start(ap, format);
-  std::string msg = base::string_vprintf(format, ap);
-  va_end(ap);
+  std::string msg(_msg);
 
   // Create the alert window
   AlertPtr window(new Alert());
@@ -87,13 +92,9 @@ AlertPtr Alert::create(const char* format, ...)
 }
 
 // static
-int Alert::show(const char* format, ...)
+int Alert::show(const std::string& _msg)
 {
-  // Process arguments
-  std::va_list ap;
-  va_start(ap, format);
-  std::string msg = base::string_vprintf(format, ap);
-  va_end(ap);
+  std::string msg(_msg);
 
   // Create the alert window
   AlertPtr window(new Alert());
@@ -133,7 +134,14 @@ void Alert::processString(std::string& buf)
   // Process buffer
   c = 0;
   beg = 0;
-  for (; ; c++) {
+  for (;;) {
+    // Ignore characters
+    if (buf[c] == '\n' ||
+        buf[c] == '\r') {
+      buf.erase(c, 1);
+      continue;
+    }
+
     if ((!buf[c]) ||
         ((buf[c] == buf[c+1]) &&
          ((buf[c] == '<') ||
@@ -158,6 +166,7 @@ void Alert::processString(std::string& buf)
         else if (button) {
           char buttonId[256];
           Button* button_widget = new Button(item);
+          button_widget->processMnemonicFromText();
           button_widget->setMinSize(gfx::Size(60*guiscale(), 0));
           m_buttons.push_back(button_widget);
 
@@ -183,9 +192,10 @@ void Alert::processString(std::string& buf)
           case '-': separator=true; break;
           case '|': button=true; break;
         }
-        c++;
+        ++c;
       }
     }
+    ++c;
   }
 
   auto box1 = new Box(VERTICAL);
@@ -226,9 +236,10 @@ void Alert::processString(std::string& buf)
   for (auto it=m_buttons.begin(); it!=m_buttons.end(); ++it)
     box3->addChild(*it);
 
-  // Default button is the last one
+  // Default button is the first one (Enter default option, Esc should
+  // act like the last button)
   if (!m_buttons.empty())
-    m_buttons[m_buttons.size()-1]->setFocusMagnet(true);
+    m_buttons[0]->setFocusMagnet(true);
 }
 
 } // namespace ui

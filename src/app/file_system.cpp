@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -37,6 +37,7 @@
   #define MYPC_CSLID  "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}"
 #else
   #include <dirent.h>
+  #include <sys/stat.h>
 #endif
 
 //////////////////////////////////////////////////////////////////////
@@ -46,6 +47,8 @@
 #endif
 
 #define NOTINITIALIZED  "{__not_initialized_path__}"
+
+#define FS_TRACE(...)
 
 namespace app {
 
@@ -92,7 +95,7 @@ public:
   const FileItemList& children();
   void createDirectory(const std::string& dirname);
 
-  bool hasExtension(const std::string& csv_extensions);
+  bool hasExtension(const base::paths& extensions);
 
   she::Surface* getThumbnail();
   void setThumbnail(she::Surface* thumbnail);
@@ -456,11 +459,15 @@ const FileItemList& FileItem::children()
             child = new FileItem(this);
 
             bool is_folder;
-            if (entry->d_type == DT_LNK) {
+            struct stat fileStat;
+
+            stat(fullfn.c_str(), &fileStat);
+
+            if ((fileStat.st_mode & S_IFMT) == S_IFLNK) {
               is_folder = base::is_directory(fullfn);
             }
             else {
-              is_folder = (entry->d_type == DT_DIR);
+              is_folder = ((fileStat.st_mode & S_IFMT) == S_IFDIR);
             }
 
             child->m_filename = fullfn;
@@ -511,11 +518,11 @@ void FileItem::createDirectory(const std::string& dirname)
   m_version = 0;
 }
 
-bool FileItem::hasExtension(const std::string& csv_extensions)
+bool FileItem::hasExtension(const base::paths& extensions)
 {
   ASSERT(m_filename != NOTINITIALIZED);
 
-  return base::has_file_extension(m_filename, csv_extensions);
+  return base::has_file_extension(m_filename, extensions);
 }
 
 she::Surface* FileItem::getThumbnail()
@@ -542,7 +549,7 @@ void FileItem::setThumbnail(she::Surface* thumbnail)
 
 FileItem::FileItem(FileItem* parent)
 {
-  //LOG("FS: Creating %p fileitem with parent %p\n", this, parent);
+  FS_TRACE("FS: Creating %p fileitem with parent %p\n", this, parent);
 
   m_keyname = NOTINITIALIZED;
   m_filename = NOTINITIALIZED;
@@ -559,7 +566,7 @@ FileItem::FileItem(FileItem* parent)
 
 FileItem::~FileItem()
 {
-  TRACE("FS: Destroying FileItem() with parent %p\n", m_parent);
+  FS_TRACE("FS: Destroying FileItem() with parent %p\n", m_parent);
 
 #ifdef _WIN32
   if (m_fullpidl && m_fullpidl != m_pidl) {

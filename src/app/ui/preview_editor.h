@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,7 +8,7 @@
 #define APP_UI_PREVIEW_EDITOR_H_INCLUDED
 #pragma once
 
-#include "app/ui/document_view.h"
+#include "app/ui/doc_view.h"
 #include "app/ui/editor/editor_observer.h"
 #include "doc/frame.h"
 #include "app/pref/preferences.h"
@@ -20,16 +20,17 @@ namespace app {
 
   class PreviewEditorWindow : public ui::Window
                             , public EditorObserver
-                            , public DocumentViewPreviewDelegate {
+                            , public DocViewPreviewDelegate {
   public:
     PreviewEditorWindow();
     ~PreviewEditorWindow();
 
     bool isPreviewEnabled() const { return m_isEnabled; }
     void setPreviewEnabled(bool state);
+    void pressPlayButton();
 
     void updateUsingEditor(Editor* editor);
-
+    Editor* previewEditor() const;
     Editor* relatedEditor() const { return m_relatedEditor; }
 
     // EditorObserver impl
@@ -37,13 +38,14 @@ namespace app {
     void onScrollChanged(Editor* editor) override;
     void onZoomChanged(Editor* editor) override;
 
-    // DocumentViewPreviewDelegate impl
+    // DocViewPreviewDelegate impl
     void onScrollOtherEditor(Editor* editor) override;
     void onDisposeOtherEditor(Editor* editor) override;
     void onPreviewOtherEditor(Editor* editor) override;
 
   protected:
     bool onProcessMessage(ui::Message* msg) override;
+    void onInitTheme(ui::InitThemeEvent& ev) override;
     void onClose(ui::CloseEvent& ev) override;
     void onWindowResize() override;
 
@@ -59,7 +61,7 @@ namespace app {
     void saveScrollPref();
 
     bool m_isEnabled;
-    DocumentView* m_docView;
+    DocView* m_docView;
     MiniCenterButton* m_centerButton;
     MiniPlayButton* m_playButton;
     doc::frame_t m_refFrame;

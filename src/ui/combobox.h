@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -18,8 +18,8 @@ namespace ui {
 
   class Button;
   class Entry;
+  class Event;
   class ListBox;
-  class ListItem;
   class Window;
 
   class ComboBoxEntry;
@@ -30,29 +30,31 @@ namespace ui {
     friend class ComboBoxListBox;
 
   public:
-    typedef std::vector<ListItem*> ListItems;
+    typedef std::vector<Widget*> Items;
 
     ComboBox();
     ~ComboBox();
 
-    ListItems::iterator begin() { return m_items.begin(); }
-    ListItems::iterator end() { return m_items.end(); }
+    Items::iterator begin() { return m_items.begin(); }
+    Items::iterator end() { return m_items.end(); }
 
     void setEditable(bool state);
     void setClickOpen(bool state);
     void setCaseSensitive(bool state);
+    void setUseCustomWidget(bool state);
 
     bool isEditable() const { return m_editable; }
     bool isClickOpen() const { return m_clickopen; }
     bool isCaseSensitive() const { return m_casesensitive; }
+    bool useCustomWidget() const { return m_useCustomWidget; }
 
-    int addItem(ListItem* item);
+    int addItem(Widget* item);
     int addItem(const std::string& text);
-    void insertItem(int itemIndex, ListItem* item);
+    void insertItem(int itemIndex, Widget* item);
     void insertItem(int itemIndex, const std::string& text);
 
     // Removes the given item (you must delete it).
-    void removeItem(ListItem* item);
+    void removeItem(Widget* item);
 
     // Removes and deletes the given item.
     void removeItem(int itemIndex);
@@ -61,14 +63,14 @@ namespace ui {
 
     int getItemCount() const;
 
-    ListItem* getItem(int itemIndex);
+    Widget* getItem(int itemIndex);
     const std::string& getItemText(int itemIndex) const;
     void setItemText(int itemIndex, const std::string& text);
     int findItemIndex(const std::string& text) const;
     int findItemIndexByValue(const std::string& value) const;
 
-    ListItem* getSelectedItem() const;
-    void setSelectedItem(ListItem* item);
+    Widget* getSelectedItem() const;
+    void setSelectedItem(Widget* item);
 
     int getSelectedItemIndex() const;
     void setSelectedItemIndex(int itemIndex);
@@ -93,22 +95,28 @@ namespace ui {
     bool onProcessMessage(Message* msg) override;
     void onResize(ResizeEvent& ev) override;
     void onSizeHint(SizeHintEvent& ev) override;
+    void onInitTheme(InitThemeEvent& ev) override;
     virtual void onChange();
     virtual void onOpenListBox();
     virtual void onCloseListBox();
 
   private:
     void onButtonClick(Event& ev);
+    void filterMessages();
+    void removeMessageFilters();
+    void putSelectedItemAsCustomWidget();
 
     ComboBoxEntry* m_entry;
     Button* m_button;
     Window* m_window;
     ComboBoxListBox* m_listbox;
-    ListItems m_items;
+    Items m_items;
     int m_selected;
     bool m_editable;
     bool m_clickopen;
     bool m_casesensitive;
+    bool m_filtering;
+    bool m_useCustomWidget;
   };
 
 } // namespace ui

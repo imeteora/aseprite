@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,25 +8,30 @@
 #include "config.h"
 #endif
 
-#include "base/string.h"
 #include "app/app.h"
 #include "app/commands/command.h"
 #include "app/context.h"
 #include "app/context_access.h"
-#include "app/document.h"
-#include "app/document_exporter.h"
+#include "app/doc.h"
+#include "app/doc_exporter.h"
 #include "app/file/file.h"
 #include "app/file_selector.h"
+#include "app/i18n/strings.h"
 #include "app/modules/editors.h"
 #include "app/pref/preferences.h"
+#include "app/restore_visible_layers.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/layer_frame_comboboxes.h"
+#include "app/ui/optional_alert.h"
 #include "app/ui/status_bar.h"
-#include "app/ui/timeline.h"
+#include "app/ui/timeline/timeline.h"
 #include "base/bind.h"
 #include "base/convert_to.h"
 #include "base/fs.h"
+#include "base/string.h"
 #include "doc/frame_tag.h"
 #include "doc/layer.h"
+#include "fmt/format.h"
 
 #include "export_sprite_sheet.xml.h"
 
@@ -38,11 +43,6 @@ namespace app {
 using namespace ui;
 
 namespace {
-
-  static const char* kAllLayers = "";
-  static const char* kAllFrames = "";
-  static const char* kSelectedLayers = "**selected-layers**";
-  static const char* kSelectedFrames = "**selected-frames**";
 
   // Special key value used in default preferences to know if by default
   // the user wants to generate texture and/or files.
@@ -141,7 +141,6 @@ namespace {
          !dataname.empty() &&
          base::is_file(dataname))) {
       std::stringstream text;
-      text << "Export Sprite Sheet Warning<<Do you want to overwrite the following file(s)?";
 
       if (base::is_file(filename))
         text << "<<" << base::get_file_name(filename).c_str();
@@ -149,128 +148,24 @@ namespace {
       if (base::is_file(dataname))
         text << "<<" << base::get_file_name(dataname).c_str();
 
-      text << "||&Yes||&No";
-      if (Alert::show(text.str().c_str()) != 1)
+      int ret = OptionalAlert::show(
+        Preferences::instance().spriteSheet.showOverwriteFilesAlert,
+        1, // Yes is the default option when the alert dialog is disabled
+        fmt::format(Strings::alerts_overwrite_files_on_export_sprite_sheet(),
+                    text.str()));
+      if (ret != 1)
         return false;
     }
     return true;
   }
 
-  class SelectedFrameTag {
-  public:
-    static frame_t From() {
-      // TODO the range of selected frames should be in doc::Site.
-      auto range = App::instance()->timeline()->range();
-      if (range.enabled()) {
-        return range.frameBegin();
-      }
-      else if (current_editor) {
-        return current_editor->frame();
-      }
-      else
-        return 0;
-    }
-
-    static frame_t To() {
-      auto range = App::instance()->timeline()->range();
-      if (range.enabled()) {
-        return range.frameEnd();
-      }
-      else if (current_editor) {
-        return current_editor->frame();
-      }
-      else
-        return 0;
-    }
-
-    SelectedFrameTag() : m_frameTag(nullptr) {
-    }
-
-    ~SelectedFrameTag() {
-      if (m_frameTag) {
-        m_frameTag->owner()->remove(m_frameTag);
-        delete m_frameTag;
-      }
-    }
-
-    FrameTag* create(Sprite* sprite) {
-      m_frameTag = new FrameTag(From(), To());
-      sprite->frameTags().add(m_frameTag);
-      return m_frameTag;
-    }
-
-  private:
-    FrameTag* m_frameTag;
-  };
-
-  class SelectedLayers {
-  public:
-    ~SelectedLayers() {
-      for (auto item : m_restore)
-        item.first->setVisible(item.second);
-    }
-
-    void showSelectedLayers(Sprite* sprite) {
-      // TODO the range of selected frames should be in doc::Site.
-      auto range = App::instance()->timeline()->range();
-      if (!range.enabled()) {
-        if (current_editor) {
-          ASSERT(current_editor->sprite() == sprite);
-          range.startRange(sprite->layerToIndex(current_editor->layer()),
-                           current_editor->frame(), DocumentRange::kCels);
-          range.endRange(sprite->layerToIndex(current_editor->layer()),
-                         current_editor->frame());
-        }
-        else
-          return;
-      }
-
-      std::vector<Layer*> layers;
-      sprite->getLayersList(layers);
-      for (int i=0; i<int(layers.size()); ++i) {
-        Layer* layer = layers[i];
-        bool selected = range.inRange(LayerIndex(i));
-
-        if (selected != layer->isVisible()) {
-          m_restore.push_back(std::make_pair(layer, layer->isVisible()));
-          layer->setVisible(selected);
-        }
-      }
-    }
-
-  private:
-    std::vector<std::pair<Layer*, bool> > m_restore;
-  };
-
 }
 
 class ExportSpriteSheetWindow : public app::gen::ExportSpriteSheet {
 public:
-  class LayerItem : public ListItem {
-  public:
-    LayerItem(Layer* layer)
-      : ListItem("Layer: " + layer->name())
-      , m_layer(layer) {
-    }
-    Layer* layer() const { return m_layer; }
-  private:
-    Layer* m_layer;
-  };
-
-  class TagItem : public ListItem {
-  public:
-    TagItem(FrameTag* tag)
-      : ListItem("Tag: " + tag->name())
-      , m_tag(tag) {
-    }
-    FrameTag* tag() const { return m_tag; }
-  private:
-    FrameTag* m_tag;
-  };
-
-  ExportSpriteSheetWindow(Document* doc, Sprite* sprite,
-    DocumentPreferences& docPref)
-    : m_sprite(sprite)
+  ExportSpriteSheetWindow(Site& site, DocumentPreferences& docPref)
+    : m_site(site)
+    , m_sprite(site.sprite())
     , m_docPref(docPref)
     , m_filenameAskOverwrite(true)
     , m_dataFilenameAskOverwrite(true)
@@ -290,31 +185,14 @@ public:
     if (m_docPref.spriteSheet.type() != app::SpriteSheetType::None)
       sheetType()->setSelectedItemIndex((int)m_docPref.spriteSheet.type()-1);
 
-    layers()->addItem("Visible layers");
-    int i = layers()->addItem("Selected layers");
-    if (m_docPref.spriteSheet.layer() == kSelectedLayers)
-      layers()->setSelectedItemIndex(i);
-    {
-      std::vector<Layer*> layersList;
-      m_sprite->getLayersList(layersList);
-      for (Layer* layer : layersList) {
-        i = layers()->addItem(new LayerItem(layer));
-        if (m_docPref.spriteSheet.layer() == layer->name())
-          layers()->setSelectedItemIndex(i);
-      }
-    }
+    fill_layers_combobox(
+      m_sprite, layers(), m_docPref.spriteSheet.layer());
 
-    frames()->addItem("All frames");
-    i = frames()->addItem("Selected frames");
-    if (m_docPref.spriteSheet.frameTag() == kSelectedFrames)
-      frames()->setSelectedItemIndex(i);
-    for (FrameTag* tag : m_sprite->frameTags()) {
-      i = frames()->addItem(new TagItem(tag));
-      if (m_docPref.spriteSheet.frameTag() == tag->name())
-        frames()->setSelectedItemIndex(i);
-    }
+    fill_frames_combobox(
+      m_sprite, frames(), m_docPref.spriteSheet.frameTag());
 
     openGenerated()->setSelected(m_docPref.spriteSheet.openGenerated());
+    trimEnabled()->setSelected(m_docPref.spriteSheet.trim());
 
     borderPadding()->setTextf("%d", m_docPref.spriteSheet.borderPadding());
     shapePadding()->setTextf("%d", m_docPref.spriteSheet.shapePadding());
@@ -360,17 +238,20 @@ public:
     dataFormat()->setSelectedItemIndex(int(m_docPref.spriteSheet.dataFormat()));
     listLayers()->setSelected(m_docPref.spriteSheet.listLayers());
     listTags()->setSelected(m_docPref.spriteSheet.listFrameTags());
+    listSlices()->setSelected(m_docPref.spriteSheet.listSlices());
     updateDataFields();
 
-    std::string base = doc->filename();
+    std::string base = site.document()->filename();
     base = base::join_path(base::get_file_path(base), base::get_file_title(base));
 
     if (m_filename.empty() ||
         m_filename == kSpecifiedFilename) {
-      if (base::utf8_icmp(base::get_file_extension(doc->filename()), "png") == 0)
-        m_filename = base + "-sheet.png";
+      std::string defExt = Preferences::instance().spriteSheet.defaultExtension();
+
+      if (base::utf8_icmp(base::get_file_extension(site.document()->filename()), defExt) == 0)
+        m_filename = base + "-sheet." + defExt;
       else
-        m_filename = base + ".png";
+        m_filename = base + "." + defExt;
     }
 
     if (m_dataFilename.empty() ||
@@ -448,11 +329,11 @@ public:
       return std::string();
   }
 
-  DocumentExporter::DataFormat dataFormatValue() const {
+  DocExporter::DataFormat dataFormatValue() const {
     if (dataEnabled()->isSelected())
-      return DocumentExporter::DataFormat(dataFormat()->getSelectedItemIndex());
+      return DocExporter::DataFormat(dataFormat()->getSelectedItemIndex());
     else
-      return DocumentExporter::DefaultDataFormat;
+      return DocExporter::DefaultDataFormat;
   }
 
   int borderPaddingValue() const {
@@ -482,26 +363,20 @@ public:
       return 0;
   }
 
+  bool trimValue() const {
+    return trimEnabled()->isSelected();
+  }
+
   bool openGeneratedValue() const {
     return openGenerated()->isSelected();
   }
 
   std::string layerValue() const {
-    if (LayerItem* item = dynamic_cast<LayerItem*>(layers()->getSelectedItem()))
-      return item->layer()->name();
-    else if (layers()->getSelectedItemIndex() == 1)
-      return kSelectedLayers;
-    else
-      return kAllLayers;
+    return layers()->getValue();
   }
 
   std::string frameTagValue() const {
-    if (TagItem* item = dynamic_cast<TagItem*>(frames()->getSelectedItem()))
-      return item->tag()->name();
-    else if (frames()->getSelectedItemIndex() == 1)
-      return kSelectedFrames;
-    else
-      return kAllFrames;
+    return frames()->getValue();
   }
 
   bool listLayersValue() const {
@@ -510,6 +385,10 @@ public:
 
   bool listFrameTagsValue() const {
     return listTags()->isSelected();
+  }
+
+  bool listSlicesValue() const {
+    return listSlices()->isSelected();
   }
 
 private:
@@ -580,14 +459,16 @@ private:
   }
 
   void onImageFilename() {
-    std::string exts = get_writable_extensions();
-
-    std::string newFilename = app::show_file_selector(
-      "Save Sprite Sheet", m_filename, exts, FileSelectorType::Save);
-    if (newFilename.empty())
+    base::paths newFilename;
+    if (!app::show_file_selector(
+          "Save Sprite Sheet", m_filename,
+          get_writable_extensions(),
+          FileSelectorType::Save, newFilename))
       return;
 
-    m_filename = newFilename;
+    ASSERT(!newFilename.empty());
+
+    m_filename = newFilename.front();
     m_filenameAskOverwrite = false; // Already asked in file selector
     onFileNamesChange();
   }
@@ -602,12 +483,16 @@ private:
 
   void onDataFilename() {
     // TODO hardcoded "json" extension
-    std::string newFilename = app::show_file_selector(
-      "Save JSON Data", m_dataFilename, "json", FileSelectorType::Save);
-    if (newFilename.empty())
+    base::paths exts = { "json" };
+    base::paths newFilename;
+    if (!app::show_file_selector(
+          "Save JSON Data", m_dataFilename, exts,
+          FileSelectorType::Save, newFilename))
       return;
 
-    m_dataFilename = newFilename;
+    ASSERT(!newFilename.empty());
+
+    m_dataFilename = newFilename.front();
     m_dataFilenameAskOverwrite = false; // Already asked in file selector
     onFileNamesChange();
   }
@@ -653,16 +538,12 @@ private:
   }
 
   void updateSizeFields() {
-    int nframes = m_sprite->totalFrames();
-    std::string tagName = frameTagValue();
-    if (tagName == kSelectedFrames) {
-      nframes = SelectedFrameTag::To() - SelectedFrameTag::From() + 1;
-    }
-    else {
-      FrameTag* frameTag = m_sprite->frameTags().getByName(tagName);
-      if (frameTag)
-        nframes = frameTag->toFrame() - frameTag->fromFrame() + 1;
-    }
+    SelectedFrames selFrames;
+    calculate_selected_frames(m_site,
+                              frameTagValue(),
+                              selFrames);
+
+    frame_t nframes = selFrames.size();
 
     Fit fit;
     if (bestFit()->isSelected()) {
@@ -691,6 +572,7 @@ private:
     dataMeta()->setVisible(state);
   }
 
+  Site& m_site;
   Sprite* m_sprite;
   DocumentPreferences& m_docPref;
   std::string m_filename;
@@ -717,9 +599,7 @@ private:
 };
 
 ExportSpriteSheetCommand::ExportSpriteSheetCommand()
-  : Command("ExportSpriteSheet",
-            "Export Sprite Sheet",
-            CmdRecordableFlag)
+  : Command(CommandId::ExportSpriteSheet(), CmdRecordableFlag)
   , m_useUI(true)
   , m_askOverwrite(true)
 {
@@ -745,13 +625,14 @@ bool ExportSpriteSheetCommand::onEnabled(Context* context)
 
 void ExportSpriteSheetCommand::onExecute(Context* context)
 {
-  Document* document(context->activeDocument());
-  Sprite* sprite = document->sprite();
+  Site site = context->activeSite();
+  Doc* document = site.document();
+  Sprite* sprite = site.sprite();
   DocumentPreferences& docPref(Preferences::instance().document(document));
   bool askOverwrite = m_askOverwrite;
 
   if (m_useUI && context->isUIAvailable()) {
-    ExportSpriteSheetWindow window(document, sprite, docPref);
+    ExportSpriteSheetWindow window(site, docPref);
     window.openWindowInForeground();
     if (!window.ok())
       return;
@@ -769,11 +650,13 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
     docPref.spriteSheet.borderPadding(window.borderPaddingValue());
     docPref.spriteSheet.shapePadding(window.shapePaddingValue());
     docPref.spriteSheet.innerPadding(window.innerPaddingValue());
+    docPref.spriteSheet.trim(window.trimValue());
     docPref.spriteSheet.openGenerated(window.openGeneratedValue());
     docPref.spriteSheet.layer(window.layerValue());
     docPref.spriteSheet.frameTag(window.frameTagValue());
     docPref.spriteSheet.listLayers(window.listLayersValue());
     docPref.spriteSheet.listFrameTags(window.listFrameTagsValue());
+    docPref.spriteSheet.listSlices(window.listSlicesValue());
 
     // Default preferences for future sprites
     DocumentPreferences& defPref(Preferences::instance().document(nullptr));
@@ -796,7 +679,7 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
   bool bestFit = docPref.spriteSheet.bestFit();
   std::string filename = docPref.spriteSheet.textureFilename();
   std::string dataFilename = docPref.spriteSheet.dataFilename();
-  DocumentExporter::DataFormat dataFormat = docPref.spriteSheet.dataFormat();
+  DocExporter::DataFormat dataFormat = docPref.spriteSheet.dataFormat();
   std::string layerName = docPref.spriteSheet.layer();
   std::string frameTagName = docPref.spriteSheet.frameTag();
   int borderPadding = docPref.spriteSheet.borderPadding();
@@ -805,8 +688,10 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
   borderPadding = MID(0, borderPadding, 100);
   shapePadding = MID(0, shapePadding, 100);
   innerPadding = MID(0, innerPadding, 100);
-  bool listLayers = docPref.spriteSheet.listLayers();
-  bool listFrameTags = docPref.spriteSheet.listFrameTags();
+  const bool trimCels = docPref.spriteSheet.trim();
+  const bool listLayers = docPref.spriteSheet.listLayers();
+  const bool listFrameTags = docPref.spriteSheet.listFrameTags();
+  const bool listSlices = docPref.spriteSheet.listSlices();
 
   if (context->isUIAvailable() && askOverwrite) {
     if (!ask_overwrite(true, filename,
@@ -814,41 +699,28 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
       return;                   // Do not overwrite
   }
 
-  // If the user want to export selected frames, we can create a
-  // temporal frame tag for that.
-  FrameTag* frameTag;
-  bool isTemporalTag = false;
-  SelectedFrameTag selectedFrameTag;
-  if (frameTagName == kSelectedFrames) {
-    frameTag = selectedFrameTag.create(sprite);
-    isTemporalTag = true;
-  }
-  else if (frameTagName != kAllFrames)
-    frameTag = sprite->frameTags().getByName(frameTagName);
-  else
-    frameTag = nullptr;
+  SelectedFrames selFrames;
+  FrameTag* frameTag =
+    calculate_selected_frames(site, frameTagName, selFrames);
+
+  frame_t nframes = selFrames.size();
+  ASSERT(nframes > 0);
 
   // If the user choose to render selected layers only, we can
   // temporaly make them visible and hide the other ones.
-  Layer* layer = nullptr;
-  SelectedLayers layersVisibility;
-  if (layerName == kSelectedLayers) {
-    layersVisibility.showSelectedLayers(sprite);
-  }
-  else {
+  RestoreVisibleLayers layersVisibility;
+  calculate_visible_layers(site, layerName, layersVisibility);
+
+  SelectedLayers selLayers;
+  if (layerName != kSelectedLayers) {
     // TODO add a getLayerByName
-    std::vector<Layer*> layers;
-    sprite->getLayersList(layers);
-    for (Layer* l : layers) {
-      if (l->name() == layerName) {
-        layer = l;
+    for (Layer* layer : sprite->allLayers()) {
+      if (layer->name() == layerName) {
+        selLayers.insert(layer);
         break;
       }
     }
   }
-
-  int nframes = (frameTag ? frameTag->toFrame() - frameTag->fromFrame() + 1:
-                            sprite->totalFrames());
 
   if (bestFit) {
     Fit fit = best_fit(sprite, nframes, borderPadding, shapePadding, innerPadding);
@@ -884,7 +756,7 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
   if (sheet_w == 0) sheet_w = fit.width;
   if (sheet_h == 0) sheet_h = fit.height;
 
-  DocumentExporter exporter;
+  DocExporter exporter;
   if (!filename.empty())
     exporter.setTextureFilename(filename);
   if (!dataFilename.empty()) {
@@ -897,13 +769,15 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
   exporter.setBorderPadding(borderPadding);
   exporter.setShapePadding(shapePadding);
   exporter.setInnerPadding(innerPadding);
-  if (listLayers)
-    exporter.setListLayers(true);
-  if (listFrameTags)
-    exporter.setListFrameTags(true);
-  exporter.addDocument(document, layer, frameTag, isTemporalTag);
+  exporter.setTrimCels(trimCels);
+  if (listLayers) exporter.setListLayers(true);
+  if (listFrameTags) exporter.setListFrameTags(true);
+  if (listSlices) exporter.setListSlices(true);
+  exporter.addDocument(document, frameTag,
+                       (!selLayers.empty() ? &selLayers: nullptr),
+                       (!selFrames.empty() ? &selFrames: nullptr));
 
-  base::UniquePtr<Document> newDocument(exporter.exportSheet());
+  std::unique_ptr<Doc> newDocument(exporter.exportSheet(context));
   if (!newDocument)
     return;
 
@@ -913,11 +787,12 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
 
   // Copy background and grid preferences
   {
-    DocumentPreferences& newDocPref(Preferences::instance().document(newDocument));
+    DocumentPreferences& newDocPref(
+      Preferences::instance().document(newDocument.get()));
     newDocPref.bg = docPref.bg;
     newDocPref.grid = docPref.grid;
     newDocPref.pixelGrid = docPref.pixelGrid;
-    Preferences::instance().removeDocument(newDocument);
+    Preferences::instance().removeDocument(newDocument.get());
   }
 
   if (docPref.spriteSheet.openGenerated()) {

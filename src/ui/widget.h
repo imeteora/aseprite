@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -14,6 +14,7 @@
 #include "gfx/rect.h"
 #include "gfx/region.h"
 #include "gfx/size.h"
+#include "obs/signal.h"
 #include "ui/base.h"
 #include "ui/component.h"
 #include "ui/graphics.h"
@@ -40,6 +41,7 @@ namespace ui {
   class ResizeEvent;
   class SaveLayoutEvent;
   class SizeHintEvent;
+  class Style;
   class Theme;
   class Window;
 
@@ -83,7 +85,6 @@ namespace ui {
     const std::string& text() const { return m_text; }
     int textInt() const;
     double textDouble() const;
-    int textLength() const;
     void setText(const std::string& text);
     void setTextf(const char* text, ...);
     void setTextQuiet(const std::string& text);
@@ -137,7 +138,6 @@ namespace ui {
     // ===============================================================
 
     she::Font* font() const;
-    void resetFont();
 
     // Gets the background color of the widget.
     gfx::Color bgColor() const {
@@ -151,16 +151,18 @@ namespace ui {
     void setBgColor(gfx::Color color);
 
     Theme* theme() const { return m_theme; }
+    Style* style() const { return m_style; }
     void setTheme(Theme* theme);
+    void setStyle(Style* style);
     void initTheme();
 
     // ===============================================================
     // PARENTS & CHILDREN
     // ===============================================================
 
-    Window* window();
-    Widget* parent() { return m_parent; }
-    Manager* manager();
+    Window* window() const;
+    Widget* parent() const { return m_parent; }
+    Manager* manager() const;
 
     // Returns a list of parents, if "ascendant" is true the list is
     // build from child to parents, else the list is from parent to
@@ -184,7 +186,8 @@ namespace ui {
     Widget* nextSibling();
     Widget* previousSibling();
 
-    Widget* pick(const gfx::Point& pt, bool checkParentsVisibility = true);
+    Widget* pick(const gfx::Point& pt,
+                 const bool checkParentsVisibility = true) const;
     bool hasChild(Widget* child);
     bool hasAncestor(Widget* ancestor);
     Widget* findChild(const char* id);
@@ -326,6 +329,7 @@ namespace ui {
     gfx::Size sizeHint(const gfx::Size& fitIn);
     void setSizeHint(const gfx::Size& fixedSize);
     void setSizeHint(int fixedWidth, int fixedHeight);
+    void resetSizeHint();
 
     // ===============================================================
     // MOUSE, FOCUS & KEYBOARD
@@ -336,10 +340,10 @@ namespace ui {
     void captureMouse();
     void releaseMouse();
 
-    bool hasFocus();
-    bool hasMouse();
-    bool hasMouseOver();
-    bool hasCapture();
+    bool hasFocus() const;
+    bool hasMouse() const;
+    bool hasMouseOver() const;
+    bool hasCapture() const;
 
     // Offer the capture to widgets of the given type. Returns true if
     // the capture was passed to other widget.
@@ -347,10 +351,18 @@ namespace ui {
 
     // Returns lower-case letter that represet the mnemonic of the widget
     // (the underscored character, i.e. the letter after & symbol).
-    int mnemonicChar() const;
+    int mnemonic() const { return m_mnemonic; }
+    void setMnemonic(int mnemonic);
+
+    // Assigns mnemonic from the character preceded by the given
+    // escapeChar ('&' by default).
+    void processMnemonicFromText(int escapeChar = '&');
 
     // Returns true if the mnemonic character is pressed.
-    bool mnemonicCharPressed(const ui::KeyMessage* keyMsg) const;
+    bool isMnemonicPressed(const ui::KeyMessage* keyMsg) const;
+
+    // Signals
+    obs::signal<void()> InitTheme;
 
   protected:
     // ===============================================================
@@ -377,16 +389,22 @@ namespace ui {
     virtual void onSelect(bool selected);
     virtual void onSetText();
     virtual void onSetBgColor();
+    virtual int onGetTextInt() const;
+    virtual double onGetTextDouble() const;
 
   private:
     void removeChild(WidgetsList::iterator& it);
-    void paint(Graphics* graphics, const gfx::Region& drawRegion);
-    bool paintEvent(Graphics* graphics);
+    void paint(Graphics* graphics,
+               const gfx::Region& drawRegion,
+               const bool isBg);
+    bool paintEvent(Graphics* graphics,
+                    const bool isBg);
 
     WidgetType m_type;           // Widget's type
     std::string m_id;            // Widget's id
     int m_flags;                 // Special boolean properties (see flags in ui/base.h)
     Theme* m_theme;              // Widget's theme
+    Style* m_style;
     std::string m_text;          // Widget text
     mutable she::Font* m_font;   // Cached font returned by the theme
     gfx::Color m_bgColor;        // Background color
@@ -395,6 +413,7 @@ namespace ui {
     WidgetsList m_children;       // Sub-widgets
     Widget* m_parent;             // Who is the parent?
     gfx::Size* m_sizeHint;
+    int m_mnemonic;               // Keyboard shortcut to access this widget like Alt+mnemonic
 
     // Widget size limits
     gfx::Size m_minSize, m_maxSize;

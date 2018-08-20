@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,11 +15,9 @@
 #include "app/app_menus.h"
 #include "app/color_utils.h"
 #include "app/commands/commands.h"
-#include "app/document.h"
+#include "app/commands/quick_command.h"
+#include "app/doc.h"
 #include "app/ini_file.h"
-#include "app/modules/gfx.h"
-#include "app/modules/gui.h"
-#include "app/modules/palettes.h"
 #include "app/pref/preferences.h"
 #include "app/shade.h"
 #include "app/tools/active_tool.h"
@@ -33,20 +31,21 @@
 #include "app/ui/brush_popup.h"
 #include "app/ui/button_set.h"
 #include "app/ui/color_button.h"
+#include "app/ui/color_shades.h"
+#include "app/ui/dithering_selector.h"
 #include "app/ui/icon_button.h"
-#include "app/ui/skin/button_icon_impl.h"
+#include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/skin/skin_theme.h"
-#include "app/ui/skin/style.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
 #include "base/scoped_value.h"
-#include "base/unique_ptr.h"
 #include "doc/brush.h"
 #include "doc/conversion_she.h"
 #include "doc/image.h"
 #include "doc/palette.h"
 #include "doc/remap.h"
 #include "obs/connection.h"
+#include "render/dithering.h"
 #include "she/surface.h"
 #include "she/system.h"
 #include "ui/button.h"
@@ -91,7 +90,7 @@ private:
     switch (selectedItem()) {
 
       case 0: {
-        cmd = CommandsModule::instance()->getCommandByName(CommandId::Zoom);
+        cmd = Commands::instance()->byId(CommandId::Zoom());
         params.set("action", "set");
         params.set("percentage", "100");
         params.set("focus", "center");
@@ -100,12 +99,12 @@ private:
       }
 
       case 1: {
-        cmd = CommandsModule::instance()->getCommandByName(CommandId::ScrollCenter);
+        cmd = Commands::instance()->byId(CommandId::ScrollCenter());
         break;
       }
 
       case 2: {
-        cmd = CommandsModule::instance()->getCommandByName(CommandId::FitScreen);
+        cmd = Commands::instance()->byId(CommandId::FitScreen());
         break;
       }
     }
@@ -118,6 +117,23 @@ private:
   }
 };
 
+class ContextBar::BrushBackField : public ButtonSet {
+public:
+  BrushBackField()
+    : ButtonSet(1) {
+    addItem("Back");
+  }
+
+protected:
+  void onItemChange(Item* item) override {
+    ButtonSet::onItemChange(item);
+
+    Command* discardBrush = Commands::instance()
+      ->byId(CommandId::DiscardBrush());
+    UIContext::instance()->executeCommand(discardBrush);
+  }
+};
+
 class ContextBar::BrushTypeField : public ButtonSet {
 public:
   BrushTypeField(ContextBar* owner)
@@ -125,9 +141,7 @@ public:
     , m_owner(owner)
     , m_brushes(App::instance()->brushes()) {
     SkinPartPtr part(new SkinPart);
-    part->setBitmap(
-      0, BrushPopup::createSurfaceForBrush(BrushRef(nullptr)));
-
+    part->setBitmap(0, BrushPopup::createSurfaceForBrush(BrushRef(nullptr)));
     addItem(part);
   }
 
@@ -136,19 +150,24 @@ public:
   }
 
   void updateBrush(tools::Tool* tool = nullptr) {
+    BrushRef brush = m_owner->activeBrush(tool);
     SkinPartPtr part(new SkinPart);
-    part->setBitmap(
-      0, BrushPopup::createSurfaceForBrush(
-        m_owner->activeBrush(tool)));
+    part->setBitmap(0, BrushPopup::createSurfaceForBrush(brush));
 
-    getItem(0)->setIcon(part);
+    const bool mono = (brush->type() != kImageBrushType);
+    getItem(0)->setIcon(part, mono);
   }
 
   void setupTooltips(TooltipManager* tooltipManager) {
     m_popupWindow.setupTooltips(tooltipManager);
   }
 
+  void showPopup() {
+    openPopup();
+  }
+
   void showPopupAndHighlightSlot(int slot) {
+    // TODO use slot?
     openPopup();
   }
 
@@ -164,6 +183,11 @@ protected:
 
   void onSizeHint(SizeHintEvent& ev) override {
     ev.setSizeHint(Size(16, 18)*guiscale());
+  }
+
+  void onInitTheme(InitThemeEvent& ev) override {
+    ButtonSet::onInitTheme(ev);
+    m_popupWindow.initTheme();
   }
 
 private:
@@ -217,8 +241,7 @@ private:
   }
 };
 
-class ContextBar::BrushAngleField : public IntEntry
-{
+class ContextBar::BrushAngleField : public IntEntry {
 public:
   BrushAngleField(BrushTypeField* brushType)
     : IntEntry(0, 180)
@@ -244,8 +267,7 @@ private:
   BrushTypeField* m_brushType;
 };
 
-class ContextBar::BrushPatternField : public ComboBox
-{
+class ContextBar::BrushPatternField : public ComboBox {
 public:
   BrushPatternField() : m_lock(false) {
     addItem("Pattern aligned to source");
@@ -288,8 +310,7 @@ protected:
   bool m_lock;
 };
 
-class ContextBar::ToleranceField : public IntEntry
-{
+class ContextBar::ToleranceField : public IntEntry {
 public:
   ToleranceField() : IntEntry(0, 255) {
   }
@@ -306,14 +327,18 @@ protected:
   }
 };
 
-class ContextBar::ContiguousField : public CheckBox
-{
+class ContextBar::ContiguousField : public CheckBox {
 public:
   ContiguousField() : CheckBox("Contiguous") {
-    setup_mini_font(this);
+    initTheme();
   }
 
 protected:
+  void onInitTheme(InitThemeEvent& ev) override {
+    CheckBox::onInitTheme(ev);
+    setStyle(SkinTheme::instance()->styles.miniCheckBox());
+  }
+
   void onClick(Event& ev) override {
     CheckBox::onClick(ev);
 
@@ -433,317 +458,18 @@ protected:
 
 class ContextBar::InkShadesField : public HBox {
 
-  class ShadeWidget : public Widget {
-  public:
-    enum ClickType { DragAndDrop, Select };
-
-    obs::signal<void()> Click;
-
-    ShadeWidget(const Shade& colors, ClickType click)
-      : Widget(kGenericWidget)
-      , m_click(click)
-      , m_shade(colors)
-      , m_hotIndex(-1)
-      , m_dragIndex(-1)
-      , m_boxSize(12) {
-      setText("Select colors in the palette");
-    }
-
-    void reverseShadeColors() {
-      std::reverse(m_shade.begin(), m_shade.end());
-      invalidate();
-    }
-
-    doc::Remap* createShadeRemap(bool left) {
-      base::UniquePtr<doc::Remap> remap;
-      Shade colors = getShade();
-
-      // We need two or more colors to create a shading remap. In
-      // other case, the ShadingInkProcessing will use the full
-      // color palette.
-      if (colors.size() > 1) {
-        remap.reset(new doc::Remap(get_current_palette()->size()));
-
-        for (int i=0; i<remap->size(); ++i)
-          remap->map(i, i);
-
-        if (left) {
-          for (int i=1; i<int(colors.size()); ++i)
-            remap->map(colors[i].getIndex(), colors[i-1].getIndex());
-        }
-        else {
-          for (int i=0; i<int(colors.size())-1; ++i)
-            remap->map(colors[i].getIndex(), colors[i+1].getIndex());
-        }
-      }
-
-      return remap.release();
-    }
-
-    int size() const {
-      int colors = 0;
-      for (const auto& color : m_shade) {
-        if ((color.getIndex() >= 0 &&
-             color.getIndex() < get_current_palette()->size()) ||
-            (m_click == Select)) {
-          ++colors;
-        }
-      }
-      return colors;
-    }
-
-    Shade getShade() const {
-      Shade colors;
-      for (const auto& color : m_shade) {
-        if ((color.getIndex() >= 0 &&
-             color.getIndex() < get_current_palette()->size()) ||
-            (m_click == Select)) {
-          colors.push_back(color);
-        }
-      }
-      return colors;
-    }
-
-    void setShade(const Shade& shade) {
-      m_shade = shade;
-      invalidate();
-      parent()->parent()->layout();
-    }
-
-    void updateShadeFromColorBarPicks() {
-      auto colorBar = ColorBar::instance();
-      if (!colorBar)
-        return;
-
-      doc::PalettePicks picks;
-      colorBar->getPaletteView()->getSelectedEntries(picks);
-      if (picks.picks() >= 2)
-        onChangeColorBarSelection();
-    }
-
-  private:
-
-    void onChangeColorBarSelection() {
-      if (!isVisible())
-        return;
-
-      doc::PalettePicks picks;
-      ColorBar::instance()->getPaletteView()->getSelectedEntries(picks);
-
-      m_shade.resize(picks.picks());
-
-      int i = 0, j = 0;
-      for (bool pick : picks) {
-        if (pick)
-          m_shade[j++] = app::Color::fromIndex(i);
-        ++i;
-      }
-
-      parent()->parent()->layout();
-    }
-
-    bool onProcessMessage(ui::Message* msg) override {
-      switch (msg->type()) {
-
-        case kOpenMessage:
-          if (m_click == DragAndDrop) {
-            m_conn = ColorBar::instance()->ChangeSelection.connect(
-              base::Bind<void>(&ShadeWidget::onChangeColorBarSelection, this));
-          }
-          break;
-
-        case kSetCursorMessage:
-          if (hasCapture()) {
-            ui::set_mouse_cursor(kMoveCursor);
-            return true;
-          }
-          break;
-
-        case kMouseEnterMessage:
-        case kMouseLeaveMessage:
-          invalidate();
-          break;
-
-        case kMouseDownMessage: {
-          if (m_click == DragAndDrop) {
-            if (m_hotIndex >= 0 &&
-                m_hotIndex < int(m_shade.size())) {
-              m_dragIndex = m_hotIndex;
-              m_dropBefore = false;
-              captureMouse();
-            }
-          }
-          break;
-        }
-
-        case kMouseUpMessage: {
-          if (m_click == Select) {
-            setSelected(true);
-            Click();
-            closeWindow();
-          }
-
-          if (m_dragIndex >= 0) {
-            ASSERT(m_dragIndex < int(m_shade.size()));
-
-            auto color = m_shade[m_dragIndex];
-            m_shade.erase(m_shade.begin()+m_dragIndex);
-            if (m_hotIndex >= 0)
-              m_shade.insert(m_shade.begin()+m_hotIndex, color);
-
-            m_dragIndex = -1;
-            invalidate();
-
-            // Relayout the context bar if we have removed an entry.
-            if (m_hotIndex < 0)
-              parent()->parent()->layout();
-          }
-
-          if (hasCapture())
-            releaseMouse();
-          break;
-        }
-
-        case kMouseMoveMessage: {
-          MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-          gfx::Point mousePos = mouseMsg->position() - bounds().origin();
-          gfx::Rect bounds = clientBounds();
-          int hot = -1;
-
-          bounds.shrink(3*guiscale());
-
-          if (bounds.contains(mousePos)) {
-            int count = size();
-            hot = (mousePos.x - bounds.x) / (m_boxSize*guiscale());
-            hot = MID(0, hot, count-1);
-          }
-
-          if (m_hotIndex != hot) {
-            m_hotIndex = hot;
-            invalidate();
-          }
-
-          bool dropBefore =
-            (hot >= 0 && mousePos.x < (bounds.x+m_boxSize*guiscale()*hot)+m_boxSize*guiscale()/2);
-          if (m_dropBefore != dropBefore) {
-            m_dropBefore = dropBefore;
-            invalidate();
-          }
-          break;
-        }
-      }
-      return Widget::onProcessMessage(msg);
-    }
-
-    void onSizeHint(SizeHintEvent& ev) override {
-      int size = this->size();
-      if (size < 2)
-        ev.setSizeHint(Size((16+m_boxSize)*guiscale()+textWidth(), 18*guiscale()));
-      else {
-        if (m_click == Select && size > 16)
-          size = 16;
-        ev.setSizeHint(Size(6+m_boxSize*size, 18)*guiscale());
-      }
-    }
-
-    void onPaint(PaintEvent& ev) override {
-      SkinTheme* theme = SkinTheme::instance();
-      Graphics* g = ev.graphics();
-      gfx::Rect bounds = clientBounds();
-
-      gfx::Color bg = bgColor();
-      if (m_click == Select && hasMouseOver())
-        bg = theme->colors.menuitemHighlightFace();
-      g->fillRect(bg, bounds);
-
-      Shade colors = getShade();
-      if (colors.size() >= 2) {
-        int w = (6+m_boxSize*colors.size())*guiscale();
-        if (bounds.w > w)
-          bounds.w = w;
-      }
-
-      skin::Style::State state;
-      if (hasMouseOver()) state += Style::hover();
-      theme->styles.view()->paint(g, bounds, nullptr, state);
-
-      bounds.shrink(3*guiscale());
-
-      gfx::Rect box(bounds.x, bounds.y, m_boxSize*guiscale(), bounds.h);
-
-      if (colors.size() >= 2) {
-        gfx::Rect hotBounds;
-
-        int j = 0;
-        for (int i=0; i<int(colors.size()); ++i) {
-          if (i == int(colors.size())-1)
-            box.w = bounds.x+bounds.w-box.x;
-
-          app::Color color;
-
-          if (m_dragIndex >= 0 &&
-              m_hotIndex == i) {
-            color = colors[m_dragIndex];
-          }
-          else {
-            if (j == m_dragIndex) {
-              ++j;
-            }
-            if (j < int(colors.size()))
-              color = colors[j++];
-            else
-              color = app::Color::fromMask();
-          }
-
-          draw_color(g, box, color,
-                     (doc::ColorMode)app_get_current_pixel_format());
-
-          if (m_hotIndex == i)
-            hotBounds = box;
-
-          box.x += box.w;
-        }
-
-        if (!hotBounds.isEmpty() && m_click == DragAndDrop) {
-          hotBounds.enlarge(3*guiscale());
-
-          Style::State state = Style::active();
-          state += Style::hover();
-          theme->styles.timelineRangeOutline()->paint(
-            g, hotBounds, NULL, state);
-        }
-      }
-      else {
-        g->fillRect(theme->colors.editorFace(), bounds);
-        g->drawAlignedUIString(text(), theme->colors.face(), gfx::ColorNone, bounds,
-                               ui::CENTER | ui::MIDDLE);
-      }
-    }
-
-    ClickType m_click;
-    Shade m_shade;
-    int m_hotIndex;
-    int m_dragIndex;
-    bool m_dropBefore;
-    int m_boxSize;
-    obs::scoped_connection m_conn;
-  };
-
 public:
   InkShadesField()
-    : m_button(SkinTheme::instance()->parts.iconArrowDown()->bitmap(0))
-    , m_shade(Shade(), ShadeWidget::DragAndDrop)
+    : m_button(SkinTheme::instance()->parts.iconArrowDown())
+    , m_shade(Shade(), ColorShades::DragAndDropEntries)
     , m_loaded(false) {
-    SkinTheme* theme = SkinTheme::instance();
-    m_shade.setBgColor(theme->colors.workspace());
-    m_button.setBgColor(theme->colors.workspace());
-
-    noBorderNoChildSpacing();
     addChild(&m_button);
     addChild(&m_shade);
 
     m_button.setFocusStop(false);
     m_button.Click.connect(base::Bind<void>(&InkShadesField::onShowMenu, this));
+
+    initTheme();
   }
 
   ~InkShadesField() {
@@ -771,6 +497,14 @@ public:
   }
 
 private:
+  void onInitTheme(InitThemeEvent& ev) override {
+    HBox::onInitTheme(ev);
+    SkinTheme* theme = SkinTheme::instance();
+    noBorderNoChildSpacing();
+    m_shade.setStyle(theme->styles.topShadeView());
+    m_button.setBgColor(theme->colors.workspace());
+  }
+
   void onShowMenu() {
     loadShades();
     gfx::Rect bounds = m_button.bounds();
@@ -795,16 +529,20 @@ private:
 
       int i = 0;
       for (const Shade& shade : m_shades) {
-        auto shadeWidget = new ShadeWidget(shade, ShadeWidget::Select);
+        auto shadeWidget = new ColorShades(shade, ColorShades::ClickWholeShade);
         shadeWidget->setExpansive(true);
-        shadeWidget->setBgColor(theme->colors.menuitemNormalFace());
         shadeWidget->Click.connect(
           [&]{
             m_shade.setShade(shade);
           });
 
-        auto close = new IconButton(theme->parts.iconClose()->bitmap(0));
-        close->setBgColor(theme->colors.menuitemNormalFace());
+        auto close = new IconButton(theme->parts.iconClose());
+        close->InitTheme.connect(
+          [close]{
+            close->setBgColor(
+              SkinTheme::instance()->colors.menuitemNormalFace());
+          });
+        close->initTheme();
         close->Click.connect(
           base::Bind<void>(
             [this, i, close]{
@@ -813,7 +551,11 @@ private:
             }));
 
         auto item = new HBox();
-        item->noBorderNoChildSpacing();
+        item->InitTheme.connect(
+          [item]{
+            item->noBorderNoChildSpacing();
+          });
+        item->initTheme();
         item->addChild(shadeWidget);
         item->addChild(close);
         menu.addChild(item);
@@ -861,13 +603,12 @@ private:
   }
 
   IconButton m_button;
-  ShadeWidget m_shade;
+  ColorShades m_shade;
   std::vector<Shade> m_shades;
   bool m_loaded;
 };
 
-class ContextBar::InkOpacityField : public IntEntry
-{
+class ContextBar::InkOpacityField : public IntEntry {
 public:
   InkOpacityField() : IntEntry(0, 255) {
   }
@@ -893,8 +634,7 @@ protected:
   }
 };
 
-class ContextBar::SprayWidthField : public IntEntry
-{
+class ContextBar::SprayWidthField : public IntEntry {
 public:
   SprayWidthField() : IntEntry(1, 32) {
   }
@@ -910,8 +650,7 @@ protected:
   }
 };
 
-class ContextBar::SpraySpeedField : public IntEntry
-{
+class ContextBar::SpraySpeedField : public IntEntry {
 public:
   SpraySpeedField() : IntEntry(1, 100) {
   }
@@ -932,7 +671,7 @@ class ContextBar::TransparentColorField : public HBox {
 public:
   TransparentColorField(ContextBar* owner)
     : m_icon(1)
-    , m_maskColor(app::Color::fromMask(), IMAGE_RGB, false)
+    , m_maskColor(app::Color::fromMask(), IMAGE_RGB, ColorButtonOptions())
     , m_owner(owner) {
     SkinTheme* theme = SkinTheme::instance();
 
@@ -1142,11 +881,10 @@ private:
   bool m_lockChange;
 };
 
-class ContextBar::FreehandAlgorithmField : public CheckBox
-{
+class ContextBar::FreehandAlgorithmField : public CheckBox {
 public:
   FreehandAlgorithmField() : CheckBox("Pixel-perfect") {
-    setup_mini_font(this);
+    initTheme();
   }
 
   void setupTooltips(TooltipManager* tooltipManager) {
@@ -1168,6 +906,11 @@ public:
   }
 
 protected:
+  void onInitTheme(InitThemeEvent& ev) override {
+    CheckBox::onInitTheme(ev);
+    setStyle(SkinTheme::instance()->styles.miniCheckBox());
+  }
+
   void onClick(Event& ev) override {
     CheckBox::onClick(ev);
 
@@ -1181,8 +924,7 @@ protected:
   }
 };
 
-class ContextBar::SelectionModeField : public ButtonSet
-{
+class ContextBar::SelectionModeField : public ButtonSet {
 public:
   SelectionModeField() : ButtonSet(3) {
     SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
@@ -1195,10 +937,14 @@ public:
   }
 
   void setupTooltips(TooltipManager* tooltipManager) {
-    // TODO use real shortcuts in tooltips
-    tooltipManager->addTooltipFor(at(0), "Replace selection", BOTTOM);
-    tooltipManager->addTooltipFor(at(1), "Add to selection\n(Shift)", BOTTOM);
-    tooltipManager->addTooltipFor(at(2), "Subtract from selection\n(Shift+Alt)", BOTTOM);
+    tooltipManager->addTooltipFor(
+      at(0), "Replace selection", BOTTOM);
+
+    tooltipManager->addTooltipFor(
+      at(1), key_tooltip("Add to selection", KeyAction::AddSelection), BOTTOM);
+
+    tooltipManager->addTooltipFor(
+      at(2), key_tooltip("Subtract from selection", KeyAction::SubtractSelection), BOTTOM);
   }
 
   void setSelectionMode(gen::SelectionMode mode) {
@@ -1215,8 +961,7 @@ protected:
   }
 };
 
-class ContextBar::DropPixelsField : public ButtonSet
-{
+class ContextBar::DropPixelsField : public ButtonSet {
 public:
   DropPixelsField() : ButtonSet(2) {
     SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
@@ -1227,8 +972,9 @@ public:
   }
 
   void setupTooltips(TooltipManager* tooltipManager) {
-    tooltipManager->addTooltipFor(at(0), "Drop pixels here", BOTTOM);
-    tooltipManager->addTooltipFor(at(1), "Cancel drag and drop", BOTTOM);
+    // TODO Enter and Esc should be configurable keys
+    tooltipManager->addTooltipFor(at(0), "Drop pixels here (Enter)", BOTTOM);
+    tooltipManager->addTooltipFor(at(1), "Cancel drag and drop (Esc)", BOTTOM);
   }
 
   obs::signal<void(ContextBarObserver::DropAction)> DropPixels;
@@ -1244,8 +990,7 @@ protected:
   }
 };
 
-class ContextBar::EyedropperField : public HBox
-{
+class ContextBar::EyedropperField : public HBox {
 public:
   EyedropperField() {
     m_channel.addItem("Color+Alpha");
@@ -1253,14 +998,17 @@ public:
     m_channel.addItem("Alpha");
     m_channel.addItem("RGB+Alpha");
     m_channel.addItem("RGB");
-    m_channel.addItem("HSB+Alpha");
-    m_channel.addItem("HSB");
+    m_channel.addItem("HSV+Alpha");
+    m_channel.addItem("HSV");
+    m_channel.addItem("HSL+Alpha");
+    m_channel.addItem("HSL");
     m_channel.addItem("Gray+Alpha");
     m_channel.addItem("Gray");
     m_channel.addItem("Best fit Index");
 
     m_sample.addItem("All Layers");
     m_sample.addItem("Current Layer");
+    m_sample.addItem("First Reference Layer");
 
     addChild(new Label("Pick:"));
     addChild(&m_channel);
@@ -1291,14 +1039,18 @@ private:
   ComboBox m_sample;
 };
 
-class ContextBar::AutoSelectLayerField : public CheckBox
-{
+class ContextBar::AutoSelectLayerField : public CheckBox {
 public:
   AutoSelectLayerField() : CheckBox("Auto Select Layer") {
-    setup_mini_font(this);
+    initTheme();
   }
 
 protected:
+  void onInitTheme(InitThemeEvent& ev) override {
+    CheckBox::onInitTheme(ev);
+    setStyle(SkinTheme::instance()->styles.miniCheckBox());
+  }
+
   void onClick(Event& ev) override {
     CheckBox::onClick(ev);
 
@@ -1310,41 +1062,44 @@ protected:
 
 class ContextBar::SymmetryField : public ButtonSet {
 public:
-  SymmetryField() : ButtonSet(3) {
+  SymmetryField() : ButtonSet(2) {
+    setMultipleSelection(true);
     SkinTheme* theme = SkinTheme::instance();
-    addItem(theme->parts.noSymmetry());
     addItem(theme->parts.horizontalSymmetry());
     addItem(theme->parts.verticalSymmetry());
   }
 
   void setupTooltips(TooltipManager* tooltipManager) {
-    tooltipManager->addTooltipFor(at(0), "Without Symmetry", BOTTOM);
-    tooltipManager->addTooltipFor(at(1), "Horizontal Symmetry", BOTTOM);
-    tooltipManager->addTooltipFor(at(2), "Vertical Symmetry", BOTTOM);
+    tooltipManager->addTooltipFor(at(0), "Horizontal Symmetry", BOTTOM);
+    tooltipManager->addTooltipFor(at(1), "Vertical Symmetry", BOTTOM);
   }
 
   void updateWithCurrentDocument() {
-    Document* doc = UIContext::instance()->activeDocument();
+    Doc* doc = UIContext::instance()->activeDocument();
     if (!doc)
       return;
 
     DocumentPreferences& docPref = Preferences::instance().document(doc);
 
-    setSelectedItem((int)docPref.symmetry.mode());
+    at(0)->setSelected(int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::HORIZONTAL) ? true: false);
+    at(1)->setSelected(int(docPref.symmetry.mode()) & int(app::gen::SymmetryMode::VERTICAL) ? true: false);
   }
 
 private:
   void onItemChange(Item* item) override {
     ButtonSet::onItemChange(item);
 
-    Document* doc = UIContext::instance()->activeDocument();
+    Doc* doc = UIContext::instance()->activeDocument();
     if (!doc)
       return;
 
     DocumentPreferences& docPref =
       Preferences::instance().document(doc);
 
-    docPref.symmetry.mode((app::gen::SymmetryMode)selectedItem());
+    int mode = 0;
+    if (at(0)->isSelected()) mode |= int(app::gen::SymmetryMode::HORIZONTAL);
+    if (at(1)->isSelected()) mode |= int(app::gen::SymmetryMode::VERTICAL);
+    docPref.symmetry.mode(app::gen::SymmetryMode(mode));
 
     // Redraw symmetry rules
     doc->notifyGeneralUpdate();
@@ -1354,13 +1109,6 @@ private:
 ContextBar::ContextBar()
   : Box(HORIZONTAL)
 {
-  gfx::Border border = this->border();
-  border.bottom(2*guiscale());
-  setBorder(border);
-
-  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-  setBgColor(theme->colors.workspace());
-
   addChild(m_selectionOptionsBox = new HBox());
   m_selectionOptionsBox->addChild(m_dropPixels = new DropPixelsField());
   m_selectionOptionsBox->addChild(m_selectionMode = new SelectionModeField);
@@ -1370,6 +1118,7 @@ ContextBar::ContextBar()
 
   addChild(m_zoomButtons = new ZoomButtons);
 
+  addChild(m_brushBack = new BrushBackField);
   addChild(m_brushType = new BrushTypeField(this));
   addChild(m_brushSize = new BrushSizeField());
   addChild(m_brushAngle = new BrushAngleField(m_brushType));
@@ -1379,6 +1128,8 @@ ContextBar::ContextBar()
   addChild(m_tolerance = new ToleranceField());
   addChild(m_contiguous = new ContiguousField());
   addChild(m_paintBucketSettings = new PaintBucketSettingsField());
+  addChild(m_ditheringSelector = new DitheringSelector(DitheringSelector::SelectMatrix));
+  m_ditheringSelector->setUseCustomWidget(false); // Disable custom widget because the context bar is too small
 
   addChild(m_inkType = new InkTypeField(this));
   addChild(m_inkOpacityLabel = new Label("Opacity:"));
@@ -1399,18 +1150,9 @@ ContextBar::ContextBar()
   m_sprayBox->addChild(m_spraySpeed = new SpraySpeedField());
 
   addChild(m_selectBoxHelp = new Label(""));
-
-  setup_mini_font(m_sprayLabel);
-
   addChild(m_freehandBox = new HBox());
-#if 0                           // TODO for v1.1
-  m_freehandBox->addChild(m_freehandLabel = new Label("Freehand:"));
-  setup_mini_font(m_freehandLabel);
-#endif
-  m_freehandBox->addChild(m_freehandAlgo = new FreehandAlgorithmField());
 
-  setup_mini_font(m_toleranceLabel);
-  setup_mini_font(m_inkOpacityLabel);
+  m_freehandBox->addChild(m_freehandAlgo = new FreehandAlgorithmField());
 
   addChild(m_symmetry = new SymmetryField());
   m_symmetry->setVisible(Preferences::instance().symmetryMode.enabled());
@@ -1418,25 +1160,7 @@ ContextBar::ContextBar()
   TooltipManager* tooltipManager = new TooltipManager();
   addChild(tooltipManager);
 
-  tooltipManager->addTooltipFor(m_brushType, "Brush Type", BOTTOM);
-  tooltipManager->addTooltipFor(m_brushSize, "Brush Size (in pixels)", BOTTOM);
-  tooltipManager->addTooltipFor(m_brushAngle, "Brush Angle (in degrees)", BOTTOM);
-  tooltipManager->addTooltipFor(m_inkType, "Ink", BOTTOM);
-  tooltipManager->addTooltipFor(m_inkOpacity, "Opacity (paint intensity)", BOTTOM);
-  tooltipManager->addTooltipFor(m_inkShades, "Shades", BOTTOM);
-  tooltipManager->addTooltipFor(m_sprayWidth, "Spray Width", BOTTOM);
-  tooltipManager->addTooltipFor(m_spraySpeed, "Spray Speed", BOTTOM);
-  tooltipManager->addTooltipFor(m_pivot, "Rotation Pivot", BOTTOM);
-  tooltipManager->addTooltipFor(m_transparentColor, "Transparent Color", BOTTOM);
-  tooltipManager->addTooltipFor(m_rotAlgo, "Rotation Algorithm", BOTTOM);
-  tooltipManager->addTooltipFor(m_freehandAlgo, "Freehand trace algorithm", BOTTOM);
-  tooltipManager->addTooltipFor(m_paintBucketSettings, "Extra paint bucket options", BOTTOM);
-
-  m_brushType->setupTooltips(tooltipManager);
-  m_selectionMode->setupTooltips(tooltipManager);
-  m_dropPixels->setupTooltips(tooltipManager);
-  m_freehandAlgo->setupTooltips(tooltipManager);
-  m_symmetry->setupTooltips(tooltipManager);
+  setupTooltips(tooltipManager);
 
   App::instance()->activeToolManager()->add_observer(this);
 
@@ -1448,14 +1172,34 @@ ContextBar::ContextBar()
   pref.colorBar.bgColor.AfterChange.connect(
     base::Bind<void>(&ContextBar::onFgOrBgColorChange, this, doc::Brush::ImageColor::BackgroundColor));
 
+  KeyboardShortcuts::instance()->UserChange.connect(
+    base::Bind<void>(&ContextBar::setupTooltips, this, tooltipManager));
+
   m_dropPixels->DropPixels.connect(&ContextBar::onDropPixels, this);
 
   setActiveBrush(createBrushFromPreferences());
+
+  initTheme();
+  registerCommands();
 }
 
 ContextBar::~ContextBar()
 {
   App::instance()->activeToolManager()->remove_observer(this);
+}
+
+void ContextBar::onInitTheme(ui::InitThemeEvent& ev)
+{
+  Box::onInitTheme(ev);
+
+  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+  gfx::Border border = this->border();
+  border.bottom(2*guiscale());
+  setBorder(border);
+  setBgColor(theme->colors.workspace());
+  m_sprayLabel->setStyle(theme->styles.miniLabel());
+  m_toleranceLabel->setStyle(theme->styles.miniLabel());
+  m_inkOpacityLabel->setStyle(theme->styles.miniLabel());
 }
 
 void ContextBar::onSizeHint(SizeHintEvent& ev)
@@ -1477,6 +1221,15 @@ void ContextBar::onToolSetFreehandAlgorithm()
   if (tool) {
     m_freehandAlgo->setFreehandAlgorithm(
       Preferences::instance().tool(tool).freehandAlgorithm());
+  }
+}
+
+void ContextBar::onToolSetContiguous()
+{
+  Tool* tool = App::instance()->activeTool();
+  if (tool) {
+    m_contiguous->setSelected(
+      Preferences::instance().tool(tool).contiguous());
   }
 }
 
@@ -1519,11 +1272,13 @@ void ContextBar::onFgOrBgColorChange(doc::Brush::ImageColor imageColor)
     auto& pref = Preferences::instance();
     m_activeBrush->setImageColor(
       imageColor,
-      color_utils::color_for_image(
+      color_utils::color_for_target_mask(
         (imageColor == doc::Brush::ImageColor::MainColor ?
          pref.colorBar.fgColor():
          pref.colorBar.bgColor()),
-        m_activeBrush->image()->pixelFormat()));
+        ColorTarget(ColorTarget::TransparentLayer,
+                    m_activeBrush->image()->pixelFormat(),
+                    -1)));
   }
 }
 
@@ -1564,6 +1319,7 @@ void ContextBar::updateForTool(tools::Tool* tool)
     m_angleConn = brushPref->angle.AfterChange.connect(base::Bind<void>(&ContextBar::onBrushAngleChange, this));
     m_opacityConn = toolPref->opacity.AfterChange.connect(&ContextBar::onToolSetOpacity, this);
     m_freehandAlgoConn = toolPref->freehandAlgorithm.AfterChange.connect(base::Bind<void>(&ContextBar::onToolSetFreehandAlgorithm, this));
+    m_contiguousConn = toolPref->contiguous.AfterChange.connect(base::Bind<void>(&ContextBar::onToolSetContiguous, this));
   }
 
   if (tool)
@@ -1619,71 +1375,76 @@ void ContextBar::updateForTool(tools::Tool* tool)
     m_spraySpeed->setValue(toolPref->spray.speed());
   }
 
-  bool updateShade = (!m_inkShades->isVisible() && hasInkShades);
+  const bool updateShade = (!m_inkShades->isVisible() && hasInkShades);
 
   m_eyedropperField->updateFromPreferences(preferences.eyedropper);
   m_autoSelectLayer->setSelected(preferences.editor.autoSelectLayer());
 
   // True if we have an image as brush
-  bool hasImageBrush = (activeBrush()->type() == kImageBrushType);
+  const bool hasImageBrush = (activeBrush()->type() == kImageBrushType);
 
   // True if the brush type supports angle.
-  bool hasBrushWithAngle =
+  const bool hasBrushWithAngle =
     (activeBrush()->size() > 1) &&
     (activeBrush()->type() == kSquareBrushType ||
      activeBrush()->type() == kLineBrushType);
 
   // True if the current tool is eyedropper.
-  bool needZoomButtons = tool &&
+  const bool needZoomButtons = tool &&
     (tool->getInk(0)->isZoom() ||
      tool->getInk(1)->isZoom() ||
      tool->getInk(0)->isScrollMovement() ||
      tool->getInk(1)->isScrollMovement());
 
   // True if the current tool is eyedropper.
-  bool isEyedropper = tool &&
+  const bool isEyedropper = tool &&
     (tool->getInk(0)->isEyedropper() ||
      tool->getInk(1)->isEyedropper());
 
   // True if the current tool is move tool.
-  bool isMove = tool &&
+  const bool isMove = tool &&
     (tool->getInk(0)->isCelMovement() ||
      tool->getInk(1)->isCelMovement());
 
   // True if the current tool is floodfill
-  bool isFloodfill = tool &&
+  const bool isFloodfill = tool &&
     (tool->getPointShape(0)->isFloodFill() ||
      tool->getPointShape(1)->isFloodFill());
 
   // True if the current tool needs tolerance options
-  bool hasTolerance = tool &&
+  const bool hasTolerance = tool &&
     (tool->getPointShape(0)->isFloodFill() ||
      tool->getPointShape(1)->isFloodFill());
 
   // True if the current tool needs spray options
-  bool hasSprayOptions = tool &&
+  const bool hasSprayOptions = tool &&
     (tool->getPointShape(0)->isSpray() ||
      tool->getPointShape(1)->isSpray());
 
-  bool hasSelectOptions = tool &&
+  const bool hasSelectOptions = tool &&
     (tool->getInk(0)->isSelection() ||
      tool->getInk(1)->isSelection());
 
-  bool isFreehand = tool &&
+  const bool isFreehand = tool &&
     (tool->getController(0)->isFreehand() ||
      tool->getController(1)->isFreehand());
 
-  bool showOpacity =
+  const bool showOpacity =
     (supportOpacity) &&
     ((isPaint && (hasInkWithOpacity || hasImageBrush)) ||
      (isEffect));
 
+  const bool withDithering = tool &&
+    (tool->getInk(0)->withDitheringOptions() ||
+     tool->getInk(1)->withDitheringOptions());
+
   // Show/Hide fields
   m_zoomButtons->setVisible(needZoomButtons);
-  m_brushType->setVisible(supportOpacity && (!isFloodfill || (isFloodfill && hasImageBrush)));
+  m_brushBack->setVisible(supportOpacity && hasImageBrush && !withDithering);
+  m_brushType->setVisible(supportOpacity && (!isFloodfill || (isFloodfill && hasImageBrush && !withDithering)));
   m_brushSize->setVisible(supportOpacity && !isFloodfill && !hasImageBrush);
   m_brushAngle->setVisible(supportOpacity && !isFloodfill && !hasImageBrush && hasBrushWithAngle);
-  m_brushPatternField->setVisible(supportOpacity && hasImageBrush);
+  m_brushPatternField->setVisible(supportOpacity && hasImageBrush && !withDithering);
   m_inkType->setVisible(hasInk);
   m_inkOpacityLabel->setVisible(showOpacity);
   m_inkOpacity->setVisible(showOpacity);
@@ -1697,6 +1458,7 @@ void ContextBar::updateForTool(tools::Tool* tool)
   m_paintBucketSettings->setVisible(hasTolerance);
   m_sprayBox->setVisible(hasSprayOptions);
   m_selectionOptionsBox->setVisible(hasSelectOptions);
+  m_ditheringSelector->setVisible(withDithering);
   m_selectionMode->setVisible(true);
   m_pivot->setVisible(true);
   m_dropPixels->setVisible(false);
@@ -1811,13 +1573,19 @@ void ContextBar::setActiveBrushBySlot(tools::Tool* tool, int slot)
 
       brush.brush()->setImageColor(
         Brush::ImageColor::MainColor,
-        color_utils::color_for_image(pref.colorBar.fgColor(),
-                                     pixelFormat));
+        color_utils::color_for_target_mask(
+          pref.colorBar.fgColor(),
+          ColorTarget(ColorTarget::TransparentLayer,
+                      pixelFormat,
+                      -1)));
 
       brush.brush()->setImageColor(
         Brush::ImageColor::BackgroundColor,
-        color_utils::color_for_image(pref.colorBar.bgColor(),
-                                     pixelFormat));
+        color_utils::color_for_target_mask(
+          pref.colorBar.bgColor(),
+          ColorTarget(ColorTarget::TransparentLayer,
+                      pixelFormat,
+                      -1)));
     }
 
     if (brush.hasFlag(BrushSlot::Flags::InkType))
@@ -1860,11 +1628,22 @@ void ContextBar::setActiveBrush(const doc::BrushRef& brush)
   updateForActiveTool();
 }
 
-doc::BrushRef ContextBar::activeBrush(tools::Tool* tool) const
+doc::BrushRef ContextBar::activeBrush(tools::Tool* tool,
+                                      tools::Ink* ink) const
 {
-  if ((!tool) ||
+  if (ink == nullptr)
+    ink = (tool ? tool->getInk(0): nullptr);
+
+  // Selection tools use a brush with size = 1 (always)
+  if (ink && ink->isSelection()) {
+    doc::BrushRef brush;
+    brush.reset(new Brush(kCircleBrushType, 1, 0));
+    return brush;
+  }
+
+  if ((tool == nullptr) ||
       (tool == App::instance()->activeTool()) ||
-      (tool->getInk(0)->isPaint() &&
+      (ink && ink->isPaint() &&
        m_activeBrush->type() == kImageBrushType)) {
     m_activeBrush->setPattern(Preferences::instance().brush.pattern());
     return m_activeBrush;
@@ -1944,6 +1723,74 @@ void ContextBar::reverseShadeColors()
 void ContextBar::setInkType(tools::InkType type)
 {
   m_inkType->setInkType(type);
+}
+
+render::DitheringMatrix ContextBar::ditheringMatrix()
+{
+  return m_ditheringSelector->ditheringMatrix();
+}
+
+render::DitheringAlgorithmBase* ContextBar::ditheringAlgorithm()
+{
+  static std::unique_ptr<render::DitheringAlgorithmBase> s_dither;
+
+  switch (m_ditheringSelector->ditheringAlgorithm()) {
+    case render::DitheringAlgorithm::None:
+      s_dither.reset(nullptr);
+      break;
+    case render::DitheringAlgorithm::Ordered:
+      s_dither.reset(new render::OrderedDither2(-1));
+      break;
+    case render::DitheringAlgorithm::Old:
+      s_dither.reset(new render::OrderedDither(-1));
+      break;
+  }
+
+  return s_dither.get();
+}
+
+void ContextBar::setupTooltips(TooltipManager* tooltipManager)
+{
+  tooltipManager->addTooltipFor(m_brushBack, "Discard Brush (Esc)", BOTTOM);
+  tooltipManager->addTooltipFor(m_brushType, "Brush Type", BOTTOM);
+  tooltipManager->addTooltipFor(m_brushSize, "Brush Size (in pixels)", BOTTOM);
+  tooltipManager->addTooltipFor(m_brushAngle, "Brush Angle (in degrees)", BOTTOM);
+  tooltipManager->addTooltipFor(m_inkType, "Ink", BOTTOM);
+  tooltipManager->addTooltipFor(m_inkOpacity, "Opacity (paint intensity)", BOTTOM);
+  tooltipManager->addTooltipFor(m_inkShades, "Shades", BOTTOM);
+  tooltipManager->addTooltipFor(m_sprayWidth, "Spray Width", BOTTOM);
+  tooltipManager->addTooltipFor(m_spraySpeed, "Spray Speed", BOTTOM);
+  tooltipManager->addTooltipFor(m_pivot, "Rotation Pivot", BOTTOM);
+  tooltipManager->addTooltipFor(m_transparentColor, "Transparent Color", BOTTOM);
+  tooltipManager->addTooltipFor(m_rotAlgo, "Rotation Algorithm", BOTTOM);
+  tooltipManager->addTooltipFor(m_freehandAlgo,
+                                key_tooltip("Freehand trace algorithm",
+                                            CommandId::PixelPerfectMode()), BOTTOM);
+  tooltipManager->addTooltipFor(m_contiguous,
+                                key_tooltip("Fill contiguous areas color",
+                                            CommandId::ContiguousFill()), BOTTOM);
+  tooltipManager->addTooltipFor(m_paintBucketSettings,
+                                "Extra paint bucket options", BOTTOM);
+
+  m_brushType->setupTooltips(tooltipManager);
+  m_selectionMode->setupTooltips(tooltipManager);
+  m_dropPixels->setupTooltips(tooltipManager);
+  m_freehandAlgo->setupTooltips(tooltipManager);
+  m_symmetry->setupTooltips(tooltipManager);
+}
+
+void ContextBar::registerCommands()
+{
+  Commands::instance()
+    ->add(
+      new QuickCommand(
+        CommandId::ShowBrushes(),
+        [this]{ this->showBrushes(); }));
+}
+
+void ContextBar::showBrushes()
+{
+  m_brushType->showPopup();
 }
 
 } // namespace app

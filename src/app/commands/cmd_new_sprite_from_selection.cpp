@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,16 +10,16 @@
 
 #include "app/commands/command.h"
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/site.h"
 #include "app/util/new_image_from_mask.h"
 #include "base/fs.h"
 #include "doc/cel.h"
+#include "doc/document.h"
+#include "doc/layer.h"
 #include "doc/mask.h"
 #include "doc/palette.h"
-#include "doc/layer.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
-#include "doc/document.h"
 
 #include <cstdio>
 
@@ -38,9 +38,7 @@ protected:
 };
 
 NewSpriteFromSelectionCommand::NewSpriteFromSelectionCommand()
-  : Command("NewSpriteFromSelection",
-            "New Sprite From Selection",
-            CmdUIOnlyFlag)
+  : Command(CommandId::NewSpriteFromSelection(), CmdUIOnlyFlag)
 {
 }
 
@@ -53,7 +51,7 @@ bool NewSpriteFromSelectionCommand::onEnabled(Context* context)
 void NewSpriteFromSelectionCommand::onExecute(Context* context)
 {
   const Site site = context->activeSite();
-  const app::Document* doc = static_cast<const app::Document*>(site.document());
+  const Doc* doc = site.document();
   const Sprite* sprite = site.sprite();
   const Mask* mask = doc->mask();
   ImageRef image(
@@ -63,7 +61,7 @@ void NewSpriteFromSelectionCommand::onExecute(Context* context)
 
   Palette* palette = sprite->palette(site.frame());
 
-  base::UniquePtr<Sprite> dstSprite(
+  std::unique_ptr<Sprite> dstSprite(
     Sprite::createBasicSprite(image->pixelFormat(),
                               image->width(),
                               image->height(),
@@ -71,13 +69,13 @@ void NewSpriteFromSelectionCommand::onExecute(Context* context)
 
   palette->copyColorsTo(dstSprite->palette(frame_t(0)));
 
-  LayerImage* dstLayer = static_cast<LayerImage*>(dstSprite->folder()->getFirstLayer());
+  LayerImage* dstLayer = static_cast<LayerImage*>(dstSprite->root()->firstLayer());
   if (site.layer()->isBackground())
     dstLayer->configureAsBackground(); // Configure layer name as background
   dstLayer->setFlags(site.layer()->flags()); // Copy all flags
   copy_image(dstLayer->cel(frame_t(0))->image(), image.get());
 
-  base::UniquePtr<Document> dstDoc(new Document(dstSprite));
+  std::unique_ptr<Doc> dstDoc(new Doc(dstSprite.get()));
   dstSprite.release();
   char buf[1024];
   std::sprintf(buf, "%s-%dx%d-%dx%d",

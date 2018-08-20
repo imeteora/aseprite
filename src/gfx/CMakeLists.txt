@@ -1,8 +1,8 @@
 # Aseprite
-# Copyright (C) 2001-2016  David Capello
+# Copyright (C) 2001-2017  David Capello
 
 add_library(gfx-lib
-  clip.cpp
+  hsl.cpp
   hsv.cpp
   packing_rects.cpp
   region.cpp

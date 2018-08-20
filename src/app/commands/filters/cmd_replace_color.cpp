@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,20 +14,23 @@
 #include "app/color.h"
 #include "app/color_utils.h"
 #include "app/commands/command.h"
+#include "app/commands/commands.h"
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
 #include "app/context.h"
 #include "app/find_widget.h"
 #include "app/ini_file.h"
 #include "app/load_widget.h"
+#include "app/site.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/color_button.h"
+#include "app/ui/keyboard_shortcuts.h"
+#include "app/ui_context.h"
 #include "base/bind.h"
-#include "filters/replace_color_filter.h"
 #include "doc/image.h"
 #include "doc/mask.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
+#include "filters/replace_color_filter.h"
 #include "ui/ui.h"
 
 namespace app {
@@ -67,11 +70,11 @@ public:
                    WithoutTiledCheckBox)
     , m_filter(filter)
     , m_controlsWidget(app::load_widget<Widget>("replace_color.xml", "controls"))
-    , m_fromButton(app::find_widget<ColorButton>(m_controlsWidget, "from"))
-    , m_toButton(app::find_widget<ColorButton>(m_controlsWidget, "to"))
-    , m_toleranceSlider(app::find_widget<ui::Slider>(m_controlsWidget, "tolerance"))
+    , m_fromButton(app::find_widget<ColorButton>(m_controlsWidget.get(), "from"))
+    , m_toButton(app::find_widget<ColorButton>(m_controlsWidget.get(), "to"))
+    , m_toleranceSlider(app::find_widget<ui::Slider>(m_controlsWidget.get(), "tolerance"))
   {
-    getContainer()->addChild(m_controlsWidget);
+    getContainer()->addChild(m_controlsWidget.get());
 
     m_fromButton->setColor(m_filter.getFrom());
     m_toButton->setColor(m_filter.getTo());
@@ -82,28 +85,43 @@ public:
     m_toleranceSlider->Change.connect(&ReplaceColorWindow::onToleranceChange, this);
   }
 
-protected:
-  void onFromChange(const app::Color& color)
-  {
+private:
+
+  void onFromChange(const app::Color& color) {
     m_filter.setFrom(color);
     restartPreview();
   }
 
-  void onToChange(const app::Color& color)
-  {
+  void onToChange(const app::Color& color) {
     m_filter.setTo(color);
     restartPreview();
   }
 
-  void onToleranceChange()
-  {
+  void onToleranceChange() {
     m_filter.setTolerance(m_toleranceSlider->getValue());
     restartPreview();
   }
 
-private:
+  bool onProcessMessage(ui::Message* msg) override {
+    switch (msg->type()) {
+      case ui::kKeyDownMessage: {
+        KeyboardShortcuts* keys = KeyboardShortcuts::instance();
+        const KeyPtr key = keys->command(CommandId::SwitchColors());
+        if (key && key->isPressed(msg, *keys)) {
+          // Switch colors
+          app::Color from = m_fromButton->getColor();
+          app::Color to = m_toButton->getColor();
+          m_fromButton->setColor(to);
+          m_toButton->setColor(from);
+        }
+        break;
+      }
+    }
+    return FilterWindow::onProcessMessage(msg);
+  }
+
   ReplaceColorFilterWrapper& m_filter;
-  base::UniquePtr<ui::Widget> m_controlsWidget;
+  std::unique_ptr<ui::Widget> m_controlsWidget;
   ColorButton* m_fromButton;
   ColorButton* m_toButton;
   ui::Slider* m_toleranceSlider;
@@ -120,9 +138,7 @@ protected:
 };
 
 ReplaceColorCommand::ReplaceColorCommand()
-  : Command("ReplaceColor",
-            "Replace Color",
-            CmdRecordableFlag)
+  : Command(CommandId::ReplaceColor(), CmdRecordableFlag)
 {
 }
 
@@ -142,12 +158,14 @@ void ReplaceColorCommand::onExecute(Context* context)
   filter.setTolerance(get_config_int(ConfigSection, "Tolerance", 0));
 
   FilterManagerImpl filterMgr(context, &filter);
-  filterMgr.setTarget(TARGET_RED_CHANNEL |
-                      TARGET_GREEN_CHANNEL |
-                      TARGET_BLUE_CHANNEL |
-                      TARGET_GRAY_CHANNEL |
-                      TARGET_ALPHA_CHANNEL |
-                      TARGET_INDEX_CHANNEL);
+  filterMgr.setTarget(
+    site.sprite()->pixelFormat() == IMAGE_INDEXED ?
+    TARGET_INDEX_CHANNEL:
+    TARGET_RED_CHANNEL |
+    TARGET_GREEN_CHANNEL |
+    TARGET_BLUE_CHANNEL |
+    TARGET_GRAY_CHANNEL |
+    TARGET_ALPHA_CHANNEL);
 
   ReplaceColorWindow window(filter, filterMgr);
   if (window.doModal()) {

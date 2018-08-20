@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,8 +12,8 @@
 #include <map>
 #include <string>
 
+#include "app/i18n/xml_translator.h"
 #include "app/tools/tool.h"
-#include "base/unique_ptr.h"
 
 class TiXmlElement;
 
@@ -37,6 +37,7 @@ namespace app {
       extern const char* PaintCopy;
       extern const char* PaintLockAlpha;
       extern const char* Shading;
+      extern const char* Gradient;
       extern const char* Eraser;
       extern const char* ReplaceFgWithBg;
       extern const char* ReplaceBgWithFg;
@@ -46,12 +47,23 @@ namespace app {
       extern const char* Scroll;
       extern const char* Move;
       extern const char* Slice;
+      extern const char* MoveSlice;
       extern const char* Blur;
       extern const char* Jumble;
     };
 
+    namespace WellKnownControllers {
+      extern const char* Freehand;
+      extern const char* PointByPoint;
+      extern const char* OnePoints;
+      extern const char* TwoPoints;
+      extern const char* FourPoints;
+      extern const char* LineFreehand;
+    };
+
     namespace WellKnownIntertwiners {
       extern const char* None;
+      extern const char* FirstPoint;
       extern const char* AsLines;
       extern const char* AsRectangles;
       extern const char* AsEllipses;
@@ -89,6 +101,7 @@ namespace app {
 
       Tool* getToolById(const std::string& id);
       Ink* getInkById(const std::string& id);
+      Controller* getControllerById(const std::string& id);
       Intertwine* getIntertwinerById(const std::string& id);
       PointShape* getPointShapeById(const std::string& id);
       int getGroupsCount() const { return m_groups.size(); }
@@ -104,6 +117,7 @@ namespace app {
 
       ToolGroupList m_groups;
       ToolList m_tools;
+      XmlTranslator m_xmlTranslator;
     };
 
   } // namespace tools

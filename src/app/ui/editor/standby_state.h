@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,17 +12,22 @@
 #include "app/ui/editor/editor_decorator.h"
 #include "app/ui/editor/handle_type.h"
 #include "app/ui/editor/state_with_wheel_behavior.h"
+#include "doc/algorithm/flip_type.h"
 #include "obs/connection.h"
 
 namespace app {
   namespace tools {
     class Ink;
+    class Pointer;
   }
 
+  class DrawingState;
   class TransformHandles;
 
   class StandbyState : public StateWithWheelBehavior {
   public:
+    enum class DrawingType { Regular, LineFreehand };
+
     StandbyState();
     virtual ~StandbyState();
     virtual void onEnterState(Editor* editor) override;
@@ -43,26 +48,32 @@ namespace app {
     virtual Transformation getTransformation(Editor* editor);
 
     void startSelectionTransformation(Editor* editor, const gfx::Point& move, double angle);
-
+    
+    void startFlipTransformation(Editor* editor, doc::algorithm::FlipType flipType);
+    
   protected:
-    // Returns true and changes to ScrollingState when "msg" says "the
-    // user wants to scroll".
-    bool checkForScroll(Editor* editor, ui::MouseMessage* msg);
-    bool checkForZoom(Editor* editor, ui::MouseMessage* msg);
-    void callEyedropper(Editor* editor);
+    void callEyedropper(Editor* editor, const ui::MouseMessage* msg);
+    bool checkStartDrawingStraightLine(Editor* editor, const ui::MouseMessage* msg);
 
     class Decorator : public EditorDecorator {
     public:
+      struct Handle {
+        int align;
+        gfx::Rect bounds;
+        Handle(int align, const gfx::Rect& bounds)
+          : align(align), bounds(bounds) { }
+      };
+      typedef std::vector<Handle> Handles;
+
       Decorator(StandbyState* standbyState);
       virtual ~Decorator();
 
       TransformHandles* getTransformHandles(Editor* editor);
-      bool getSymmetryHandles(Editor* editor, gfx::Rect& box1, gfx::Rect& box2);
+      bool getSymmetryHandles(Editor* editor, Handles& handles);
 
       bool onSetCursor(tools::Ink* ink, Editor* editor, const gfx::Point& mouseScreenPos);
 
       // EditorDecorator overrides
-      void preRenderDecorator(EditorPreRender* render) override;
       void postRenderDecorator(EditorPostRender* render) override;
       void getInvalidDecoratoredRegion(Editor* editor, gfx::Region& region) override;
 
@@ -72,8 +83,13 @@ namespace app {
     };
 
   private:
+    DrawingState* startDrawingState(Editor* editor,
+                                    const DrawingType drawingType,
+                                    const tools::Pointer& pointer);
     void transformSelection(Editor* editor, ui::MouseMessage* msg, HandleType handle);
     void onPivotChange(Editor* editor);
+    gfx::Rect resizeCelBounds(Editor* editor) const;
+    bool overSelectionEdges(Editor* editor, const gfx::Point& mouseScreenPos) const;
 
     Decorator* m_decorator;
     obs::scoped_connection m_pivotVisConn;

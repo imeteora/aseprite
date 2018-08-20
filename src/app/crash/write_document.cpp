@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,13 +11,12 @@
 #include "app/crash/write_document.h"
 
 #include "app/crash/internals.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "base/convert_to.h"
 #include "base/fs.h"
 #include "base/fstream_path.h"
 #include "base/serialization.h"
 #include "base/string.h"
-#include "base/unique_ptr.h"
 #include "doc/cancel_io.h"
 #include "doc/cel.h"
 #include "doc/cel_data_io.h"
@@ -30,6 +29,8 @@
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/palette_io.h"
+#include "doc/slice.h"
+#include "doc/slice_io.h"
 #include "doc/sprite.h"
 #include "doc/string_io.h"
 
@@ -46,11 +47,11 @@ using namespace doc;
 namespace {
 
 static std::map<ObjectId, ObjVersionsMap> g_docVersions;
-static std::map<ObjectId, std::vector<std::string> > g_deleteFiles;
+static std::map<ObjectId, base::paths> g_deleteFiles;
 
 class Writer {
 public:
-  Writer(const std::string& dir, app::Document* doc, doc::CancelIO* cancel)
+  Writer(const std::string& dir, Doc* doc, doc::CancelIO* cancel)
     : m_dir(dir)
     , m_doc(doc)
     , m_objVersions(g_docVersions[doc->id()])
@@ -72,20 +73,41 @@ public:
       if (!saveObject("frtag", frtag, &Writer::writeFrameTag))
         return false;
 
-    for (Cel* cel : spr->uniqueCels()) {
-      if (!saveObject("img", cel->image(), &Writer::writeImage))
+    for (Slice* slice : spr->slices())
+      if (!saveObject("slice", slice, &Writer::writeSlice))
         return false;
 
-      if (!saveObject("celdata", cel->data(), &Writer::writeCelData))
-        return false;
+    // Get all layers (visible, hidden, subchildren, etc.)
+    LayerList layers = spr->allLayers();
+
+    // Save original cel data (skip links)
+    for (Layer* lay : layers) {
+      CelList cels;
+      lay->getCels(cels);
+
+      for (Cel* cel : cels) {
+        if (cel->link())        // Skip link
+          continue;
+
+        if (!saveObject("img", cel->image(), &Writer::writeImage))
+          return false;
+
+        if (!saveObject("celdata", cel->data(), &Writer::writeCelData))
+          return false;
+      }
     }
 
-    for (Cel* cel : spr->cels())
-      if (!saveObject("cel", cel, &Writer::writeCel))
-        return false;
+    // Save all cels (original and links)
+    for (Layer* lay : layers) {
+      CelList cels;
+      lay->getCels(cels);
 
-    std::vector<Layer*> layers;
-    spr->getLayersList(layers);
+      for (Cel* cel : cels)
+        if (!saveObject("cel", cel, &Writer::writeCel))
+          return false;
+    }
+
+    // Save all layers (top level, groups, children, etc.)
     for (Layer* lay : layers)
       if (!saveObject("lay", lay, &Writer::writeLayerStructure))
         return false;
@@ -107,7 +129,7 @@ private:
     return (m_cancel && m_cancel->isCanceled());
   }
 
-  bool writeDocumentFile(std::ofstream& s, app::Document* doc) {
+  bool writeDocumentFile(std::ofstream& s, Doc* doc) {
     write32(s, doc->sprite()->id());
     write_string(s, doc->filename());
     return true;
@@ -125,11 +147,8 @@ private:
       write32(s, spr->frameDuration(fr));
 
     // IDs of all main layers
-    std::vector<Layer*> layers;
-    spr->getLayersList(layers);
-    write32(s, layers.size());
-    for (Layer* lay : layers)
-      write32(s, lay->id());
+    write32(s, spr->allLayersCount());
+    writeAllLayersID(s, 0, spr->root());
 
     // IDs of all palettes
     write32(s, spr->getPalettes().size());
@@ -141,7 +160,22 @@ private:
     for (FrameTag* frtag : spr->frameTags())
       write32(s, frtag->id());
 
+    // IDs of all slices
+    write32(s, spr->slices().size());
+    for (const Slice* slice : spr->slices())
+      write32(s, slice->id());
+
     return true;
+  }
+
+  void writeAllLayersID(std::ofstream& s, ObjectId parentId, const LayerGroup* group) {
+    for (const Layer* lay : group->layers()) {
+      write32(s, lay->id());
+      write32(s, parentId);
+
+      if (lay->isGroup())
+        writeAllLayersID(s, lay->id(), static_cast<const LayerGroup*>(lay));
+    }
   }
 
   bool writeLayerStructure(std::ofstream& s, Layer* lay) {
@@ -149,16 +183,29 @@ private:
     write16(s, static_cast<int>(lay->type()));  // Type
     write_string(s, lay->name());
 
-    if (lay->type() == ObjectType::LayerImage) {
-      CelConstIterator it, begin = static_cast<const LayerImage*>(lay)->getCelBegin();
-      CelConstIterator end = static_cast<const LayerImage*>(lay)->getCelEnd();
+    switch (lay->type()) {
 
-      // Cels
-      write32(s, static_cast<const LayerImage*>(lay)->getCelsCount());
-      for (it=begin; it != end; ++it) {
-        const Cel* cel = *it;
-        write32(s, cel->id());
+      case ObjectType::LayerImage: {
+        CelConstIterator it, begin = static_cast<const LayerImage*>(lay)->getCelBegin();
+        CelConstIterator end = static_cast<const LayerImage*>(lay)->getCelEnd();
+
+        // Blend mode & opacity
+        write16(s, (int)static_cast<const LayerImage*>(lay)->blendMode());
+        write8(s, static_cast<const LayerImage*>(lay)->opacity());
+
+        // Cels
+        write32(s, static_cast<const LayerImage*>(lay)->getCelsCount());
+        for (it=begin; it != end; ++it) {
+          const Cel* cel = *it;
+          write32(s, cel->id());
+        }
+        break;
       }
+
+      case ObjectType::LayerGroup:
+        // Do nothing (the layer parent/children structure is saved in
+        // writeSprite/writeAllLayersID() functions)
+        break;
     }
     return true;
   }
@@ -184,6 +231,11 @@ private:
 
   bool writeFrameTag(std::ofstream& s, FrameTag* frameTag) {
     write_frame_tag(s, frameTag);
+    return true;
+  }
+
+  bool writeSlice(std::ofstream& s, Slice* slice) {
+    write_slice(s, slice);
     return true;
   }
 
@@ -247,9 +299,9 @@ private:
   }
 
   std::string m_dir;
-  app::Document* m_doc;
+  Doc* m_doc;
   ObjVersionsMap& m_objVersions;
-  std::vector<std::string>& m_deleteFiles;
+  base::paths& m_deleteFiles;
   doc::CancelIO* m_cancel;
 };
 
@@ -259,14 +311,14 @@ private:
 // Public API
 
 bool write_document(const std::string& dir,
-                    app::Document* doc,
+                    Doc* doc,
                     doc::CancelIO* cancel)
 {
   Writer writer(dir, doc, cancel);
   return writer.saveDocument();
 }
 
-void delete_document_internals(app::Document* doc)
+void delete_document_internals(Doc* doc)
 {
   ASSERT(doc);
 

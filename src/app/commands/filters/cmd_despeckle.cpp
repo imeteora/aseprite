@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +13,7 @@
 #include "app/commands/filters/filter_manager_impl.h"
 #include "app/commands/filters/filter_window.h"
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/find_widget.h"
 #include "app/ini_file.h"
 #include "app/load_widget.h"
@@ -27,6 +27,8 @@
 #include "ui/grid.h"
 #include "ui/widget.h"
 #include "ui/window.h"
+
+#include "despeckle.xml.h"
 
 #include <stdio.h>
 
@@ -44,11 +46,11 @@ public:
                    WithTiledCheckBox,
                    filter.getTiledMode())
     , m_filter(filter)
-    , m_controlsWidget(app::load_widget<ui::Widget>("despeckle.xml", "controls"))
-    , m_widthEntry(app::find_widget<ui::Entry>(m_controlsWidget, "width"))
-    , m_heightEntry(app::find_widget<ui::Entry>(m_controlsWidget, "height"))
+    , m_controlsWidget(new gen::Despeckle)
+    , m_widthEntry(m_controlsWidget->width())
+    , m_heightEntry(m_controlsWidget->height())
   {
-    getContainer()->addChild(m_controlsWidget);
+    getContainer()->addChild(m_controlsWidget.get());
 
     m_widthEntry->setTextf("%d", m_filter.getWidth());
     m_heightEntry->setTextf("%d", m_filter.getHeight());
@@ -58,10 +60,15 @@ public:
   }
 
 private:
-  void onSizeChange()
-  {
-    m_filter.setSize(m_widthEntry->textInt(),
-                     m_heightEntry->textInt());
+  void onSizeChange() {
+    gfx::Size newSize(m_widthEntry->textInt(),
+                      m_heightEntry->textInt());
+
+    // Avoid negative numbers
+    newSize.w = MID(1, newSize.w, 100);
+    newSize.h = MID(1, newSize.h, 100);
+
+    m_filter.setSize(newSize.w, newSize.h);
     restartPreview();
   }
 
@@ -71,9 +78,9 @@ private:
   }
 
   MedianFilter& m_filter;
-  base::UniquePtr<ui::Widget> m_controlsWidget;
-  ui::Entry* m_widthEntry;
-  ui::Entry* m_heightEntry;
+  std::unique_ptr<gen::Despeckle> m_controlsWidget;
+  ExprEntry* m_widthEntry;
+  ExprEntry* m_heightEntry;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -91,9 +98,7 @@ protected:
 };
 
 DespeckleCommand::DespeckleCommand()
-  : Command("Despeckle",
-            "Despeckle",
-            CmdRecordableFlag)
+  : Command(CommandId::Despeckle(), CmdRecordableFlag)
 {
 }
 

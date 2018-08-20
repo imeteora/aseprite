@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -16,40 +16,6 @@
 
 #include <allegro.h>
 #include <allegro/internal/aintern.h>
-
-namespace {
-
-void checked_mode(int offset)
-{
-  static BITMAP* pattern = NULL;
-  int x, y, fg, bg;
-
-  if (offset < 0) {
-    if (pattern) {
-      destroy_bitmap(pattern);
-      pattern = NULL;
-    }
-    drawing_mode(DRAW_MODE_SOLID, NULL, 0, 0);
-    return;
-  }
-
-  if (!pattern)
-    pattern = create_bitmap(8, 8);
-
-  bg = makecol(0, 0, 0);
-  fg = makecol(255, 255, 255);
-  offset = 7 - (offset & 7);
-
-  clear_bitmap(pattern);
-
-  for (y=0; y<8; y++)
-    for (x=0; x<8; x++)
-      putpixel(pattern, x, y, ((x+y+offset)&7) < 4 ? fg: bg);
-
-  drawing_mode(DRAW_MODE_COPY_PATTERN, pattern, 0, 0);
-}
-
-}
 
 namespace she {
 
@@ -77,11 +43,47 @@ inline gfx::Color from_allegro(int color_depth, int color)
     (color_depth == 32 ? geta32(color): 255));
 }
 
+namespace {
+
+void checked_mode(int offset,
+                  const gfx::Color a = gfx::ColorNone,
+                  const gfx::Color b = gfx::ColorNone)
+{
+  static BITMAP* pattern = NULL;
+
+  if (offset < 0) {
+    if (pattern) {
+      destroy_bitmap(pattern);
+      pattern = NULL;
+    }
+    drawing_mode(DRAW_MODE_SOLID, NULL, 0, 0);
+    return;
+  }
+
+  if (!pattern)
+    pattern = create_bitmap(8, 8);
+
+  int A = to_allegro(bitmap_color_depth(pattern), a);
+  int B = to_allegro(bitmap_color_depth(pattern), b);
+  offset = 7 - (offset & 7);
+
+  clear_bitmap(pattern);
+
+  for (int y=0; y<8; ++y)
+    for (int x=0; x<8; ++x)
+      putpixel(pattern, x, y, ((x+y+offset)&7) < 4 ? B: A);
+
+  drawing_mode(DRAW_MODE_COPY_PATTERN, pattern, 0, 0);
+}
+
+}
+
 Alleg4Surface::Alleg4Surface(BITMAP* bmp, DestroyFlag destroy)
   : m_bmp(bmp)
   , m_destroy(destroy)
   , m_lock(0)
 {
+  saveClip();
 }
 
 Alleg4Surface::Alleg4Surface(int width, int height, DestroyFlag destroy)
@@ -89,6 +91,7 @@ Alleg4Surface::Alleg4Surface(int width, int height, DestroyFlag destroy)
   , m_destroy(destroy)
   , m_lock(0)
 {
+  saveClip();
 }
 
 Alleg4Surface::Alleg4Surface(int width, int height, int bpp, DestroyFlag destroy)
@@ -96,6 +99,7 @@ Alleg4Surface::Alleg4Surface(int width, int height, int bpp, DestroyFlag destroy
   , m_destroy(destroy)
   , m_lock(0)
 {
+  saveClip();
 }
 
 Alleg4Surface::~Alleg4Surface()
@@ -130,7 +134,12 @@ bool Alleg4Surface::isDirectToScreen() const
   return m_bmp == screen;
 }
 
-gfx::Rect Alleg4Surface::getClipBounds()
+int Alleg4Surface::getSaveCount() const
+{
+  return int(m_clipStack.size());
+}
+
+gfx::Rect Alleg4Surface::getClipBounds() const
 {
   return gfx::Rect(
     m_bmp->cl,
@@ -139,8 +148,18 @@ gfx::Rect Alleg4Surface::getClipBounds()
     m_bmp->cb - m_bmp->ct);
 }
 
-void Alleg4Surface::setClipBounds(const gfx::Rect& rc)
+void Alleg4Surface::saveClip()
 {
+  m_clipStack.push_back(getClipBounds());
+}
+
+void Alleg4Surface::restoreClip()
+{
+  ASSERT(!m_clipStack.empty());
+
+  gfx::Rect rc = m_clipStack.back();
+  m_clipStack.pop_back();
+
   set_clip_rect(m_bmp,
                 rc.x,
                 rc.y,
@@ -148,7 +167,7 @@ void Alleg4Surface::setClipBounds(const gfx::Rect& rc)
                 rc.y+rc.h-1);
 }
 
-bool Alleg4Surface::intersectClipRect(const gfx::Rect& rc)
+bool Alleg4Surface::clipRect(const gfx::Rect& rc)
 {
   add_clip_rect(m_bmp,
                 rc.x,
@@ -175,12 +194,14 @@ void Alleg4Surface::unlock()
     release_bitmap(m_bmp);
 }
 
-void Alleg4Surface::setDrawMode(DrawMode mode, int param)
+void Alleg4Surface::setDrawMode(DrawMode mode, int param,
+                                const gfx::Color a,
+                                const gfx::Color b)
 {
   switch (mode) {
     case DrawMode::Solid: checked_mode(-1); break;
     case DrawMode::Xor: xor_mode(TRUE); break;
-    case DrawMode::Checked: checked_mode(param); break;
+    case DrawMode::Checked: checked_mode(param, a, b); break;
   }
 }
 
@@ -383,6 +404,32 @@ void Alleg4Surface::drawRgbaSurface(const Surface* src, int dstx, int dsty)
 {
   set_alpha_blender();
   draw_trans_sprite(m_bmp, static_cast<const Alleg4Surface*>(src)->m_bmp, dstx, dsty);
+}
+
+void Alleg4Surface::drawRgbaSurface(const Surface* src, int srcx, int srcy, int dstx, int dsty, int w, int h)
+{
+  if (w < 1 || h < 1)
+    return;
+
+  set_alpha_blender();
+
+  BITMAP* tmp = create_sub_bitmap(
+    static_cast<const Alleg4Surface*>(src)->m_bmp,
+    srcx, srcy, w, h);
+  draw_trans_sprite(m_bmp, tmp, dstx, dsty);
+  destroy_bitmap(tmp);
+}
+
+void Alleg4Surface::drawRgbaSurface(const Surface* src, const gfx::Rect& srcRect, const gfx::Rect& dstRect)
+{
+  ASSERT(src);
+  ASSERT(static_cast<const Alleg4Surface*>(src)->m_bmp);
+  ASSERT(static_cast<Alleg4Surface*>(this)->m_bmp);
+
+  stretch_blit(
+    static_cast<const Alleg4Surface*>(src)->m_bmp, m_bmp,
+    srcRect.x, srcRect.y, srcRect.w, srcRect.h,
+    dstRect.x, dstRect.y, dstRect.w, dstRect.h);
 }
 
 } // namespace she

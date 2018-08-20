@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -28,9 +28,8 @@ namespace ui {
 
   class Manager : public Widget {
   public:
-    static Manager* getDefault() {
-      return m_defaultManager;
-    }
+    static Manager* getDefault() { return m_defaultManager; }
+    static bool widgetAssociatedToManager(Widget* widget);
 
     Manager();
     ~Manager();
@@ -111,9 +110,9 @@ namespace ui {
   protected:
     bool onProcessMessage(Message* msg) override;
     void onResize(ResizeEvent& ev) override;
-    void onPaint(PaintEvent& ev) override;
     void onSizeHint(SizeHintEvent& ev) override;
     void onBroadcastMouseMessage(WidgetsList& targets) override;
+    void onInitTheme(InitThemeEvent& ev) override;
     virtual LayoutIO* onGetLayoutIO();
     virtual void onNewDisplayConfiguration();
 
@@ -149,7 +148,7 @@ namespace ui {
                             const double magnification);
     void handleWindowZOrder();
 
-    void pumpQueue();
+    int pumpQueue();
     bool sendMessageToWidget(Message* msg, Widget* widget);
 
     static void removeWidgetFromRecipients(Widget* widget, Message* msg);

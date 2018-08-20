@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,7 +9,6 @@
 #pragma once
 
 #include "base/disable_copying.h"
-#include "base/unique_ptr.h"
 #include "doc/blend_mode.h"
 #include "doc/cel.h"
 #include "doc/frame.h"
@@ -17,6 +16,8 @@
 #include "doc/image_ref.h"
 #include "gfx/rect.h"
 #include "render/extra_type.h"
+
+#include <memory>
 
 namespace doc {
   class Sprite;
@@ -29,7 +30,6 @@ namespace app {
     ExtraCel();
 
     void create(doc::Sprite* sprite, const gfx::Rect& bounds, doc::frame_t frame, int opacity);
-    void destroy();
 
     render::ExtraType type() const { return m_type; }
     void setType(render::ExtraType type) { m_type = type; }
@@ -42,7 +42,7 @@ namespace app {
 
   private:
     render::ExtraType m_type;
-    base::UniquePtr<doc::Cel> m_cel;
+    std::unique_ptr<doc::Cel> m_cel;
     doc::ImageRef m_image;
     doc::ImageBufferPtr m_imageBuffer;
     doc::BlendMode m_blendMode;

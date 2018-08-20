@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,22 +10,21 @@
 
 #include "app/app.h"
 
-#include "app/app_options.h"
 #include "app/check_update.h"
+#include "app/cli/app_options.h"
+#include "app/cli/cli_processor.h"
+#include "app/cli/default_cli_delegate.h"
+#include "app/cli/preview_cli_delegate.h"
 #include "app/color_utils.h"
-#include "app/commands/cmd_save_file.h"
-#include "app/commands/cmd_sprite_size.h"
 #include "app/commands/commands.h"
-#include "app/commands/params.h"
 #include "app/console.h"
 #include "app/crash/data_recovery.h"
-#include "app/document_exporter.h"
-#include "app/document_undo.h"
+#include "app/extensions.h"
 #include "app/file/file.h"
 #include "app/file/file_formats_manager.h"
 #include "app/file_system.h"
-#include "app/filename_formatter.h"
 #include "app/gui_xml.h"
+#include "app/i18n/strings.h"
 #include "app/ini_file.h"
 #include "app/log.h"
 #include "app/modules.h"
@@ -36,11 +35,12 @@
 #include "app/recent_files.h"
 #include "app/resource_finder.h"
 #include "app/send_crash.h"
+#include "app/site.h"
 #include "app/tools/active_tool.h"
 #include "app/tools/tool_box.h"
 #include "app/ui/backup_indicator.h"
 #include "app/ui/color_bar.h"
-#include "app/ui/document_view.h"
+#include "app/ui/doc_view.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/editor_view.h"
 #include "app/ui/input_chain.h"
@@ -52,28 +52,22 @@
 #include "app/ui_context.h"
 #include "app/util/clipboard.h"
 #include "app/webserver.h"
-#include "base/convert_to.h"
 #include "base/exception.h"
 #include "base/fs.h"
 #include "base/scoped_lock.h"
 #include "base/split_string.h"
-#include "base/unique_ptr.h"
-#include "doc/document_observer.h"
-#include "doc/frame_tag.h"
-#include "doc/image.h"
-#include "doc/layer.h"
-#include "doc/layers_range.h"
-#include "doc/palette.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
+#include "fmt/format.h"
 #include "render/render.h"
 #include "she/display.h"
 #include "she/error.h"
+#include "she/surface.h"
 #include "she/system.h"
 #include "ui/intern.h"
 #include "ui/ui.h"
 
 #include <iostream>
+#include <memory>
 
 #ifdef ENABLE_SCRIPTING
   #include "app/script/app_scripting.h"
@@ -95,23 +89,49 @@ public:
   Preferences m_preferences;
 };
 
+class App::LoadLanguage {
+public:
+  LoadLanguage(Preferences& pref,
+               Extensions& exts) {
+    Strings::createInstance(pref, exts);
+  }
+};
+
 class App::Modules {
 public:
+#ifdef ENABLE_UI
+  typedef app::UIContext ContextT;
+#else
+  typedef app::Context ContextT;
+#endif
+
   LoggerModule m_loggerModule;
   FileSystemModule m_file_system_module;
+  Extensions m_extensions;
+  // Load main language (after loading the extensions)
+  LoadLanguage m_loadLanguage;
+#ifdef ENABLE_UI
   tools::ToolBox m_toolbox;
   tools::ActiveToolManager m_activeToolManager;
-  CommandsModule m_commands_modules;
-  UIContext m_ui_context;
+#endif
+  Commands m_commands;
+  ContextT m_context;
+#ifdef ENABLE_UI
   RecentFiles m_recent_files;
   InputChain m_inputChain;
   clipboard::ClipboardManager m_clipboardManager;
+#endif
   // This is a raw pointer because we want to delete this explicitly.
   app::crash::DataRecovery* m_recovery;
 
-  Modules(bool createLogInDesktop)
+  Modules(const bool createLogInDesktop,
+          Preferences& pref)
     : m_loggerModule(createLogInDesktop)
+    , m_loadLanguage(pref, m_extensions)
+#ifdef ENABLE_UI
     , m_activeToolManager(&m_toolbox)
+    , m_recent_files(pref.general.recentItems())
+#endif
     , m_recovery(nullptr) {
   }
 
@@ -125,7 +145,7 @@ public:
 
   void createDataRecovery() {
 #ifdef ENABLE_DATA_RECOVERY
-    m_recovery = new app::crash::DataRecovery(&m_ui_context);
+    m_recovery = new app::crash::DataRecovery(&m_context);
 #endif
   }
 
@@ -138,15 +158,6 @@ public:
 
 };
 
-#ifdef ENABLE_SCRIPTING
-class StdoutEngineDelegate : public script::EngineDelegate {
-public:
-  void onConsolePrint(const char* text) override {
-    printf("%s\n", text);
-  }
-};
-#endif
-
 App* App::m_instance = NULL;
 
 App::App()
@@ -155,8 +166,9 @@ App::App()
   , m_legacy(NULL)
   , m_isGui(false)
   , m_isShell(false)
-  , m_exporter(NULL)
+#ifdef ENABLE_UI
   , m_backupIndicator(nullptr)
+#endif
 {
   ASSERT(m_instance == NULL);
   m_instance = this;
@@ -164,12 +176,23 @@ App::App()
 
 void App::initialize(const AppOptions& options)
 {
-  m_isGui = options.startUI();
+#ifdef ENABLE_UI
+  m_isGui = options.startUI() && !options.previewCLI();
+#else
+  m_isGui = false;
+#endif
   m_isShell = options.startShell();
+  m_coreModules = new CoreModules;
+
+#ifdef _WIN32
+  if (options.disableWintab() ||
+      !preferences().experimental.loadWintabDriver()) {
+    she::instance()->useWintabAPI(false);
+  }
+#endif
+
   if (m_isGui)
     m_uiSystem.reset(new ui::UISystem);
-
-  m_coreModules = new CoreModules;
 
   bool createLogInDesktop = false;
   switch (options.verboseLevel()) {
@@ -185,34 +208,34 @@ void App::initialize(const AppOptions& options)
       break;
   }
 
-  m_modules = new Modules(createLogInDesktop);
+  // Load modules
+  m_modules = new Modules(createLogInDesktop, preferences());
   m_legacy = new LegacyModules(isGui() ? REQUIRE_INTERFACE: 0);
+#ifdef ENABLE_UI
   m_brushes.reset(new AppBrushes);
-
-  if (options.hasExporterParams())
-    m_exporter.reset(new DocumentExporter);
+#endif
 
   // Data recovery is enabled only in GUI mode
   if (isGui() && preferences().general.dataRecovery())
     m_modules->createDataRecovery();
-
-  // Register well-known image file types.
-  FileFormatsManager::instance()->registerAllFormats();
 
   if (isPortable())
     LOG("APP: Running in portable mode\n");
 
   // Load or create the default palette, or migrate the default
   // palette from an old format palette to the new one, etc.
-  load_default_palette(options.paletteFileName());
+  load_default_palette();
 
+#ifdef ENABLE_UI
   // Initialize GUI interface
-  UIContext* ctx = UIContext::instance();
   if (isGui()) {
     LOG("APP: GUI mode\n");
 
-    // Setup the GUI cursor and redraw screen
+    // Set the ClipboardDelegate impl to copy/paste text in the native
+    // clipboard from the ui::Entry control.
+    m_uiSystem->setClipboardDelegate(&m_modules->m_clipboardManager);
 
+    // Setup the GUI cursor and redraw screen
     ui::set_use_native_cursors(preferences().cursor.useNativeCursor());
     ui::set_mouse_cursor_scale(preferences().cursor.cursorScale());
     ui::set_mouse_cursor(kArrowCursor);
@@ -235,432 +258,19 @@ void App::initialize(const AppOptions& options)
     // Redraw the whole screen.
     ui::Manager::getDefault()->invalidate();
   }
+#endif  // ENABLE_UI
 
-  // Procress options
+  // Process options
   LOG("APP: Processing options...\n");
+  {
+    std::unique_ptr<CliDelegate> delegate;
+    if (options.previewCLI())
+      delegate.reset(new PreviewCliDelegate);
+    else
+      delegate.reset(new DefaultCliDelegate);
 
-  bool ignoreEmpty = false;
-  bool trim = false;
-  Params cropParams;
-  SpriteSheetType sheetType = SpriteSheetType::None;
-
-  // Open file specified in the command line
-  if (!options.values().empty()) {
-    Console console;
-    bool splitLayers = false;
-    bool splitLayersSaveAs = false;
-    bool allLayers = false;
-    bool listLayers = false;
-    bool listTags = false;
-    std::string importLayer;
-    std::string importLayerSaveAs;
-    std::string filenameFormat;
-    std::string frameTagName;
-    std::string frameRange;
-
-    for (const auto& value : options.values()) {
-      const AppOptions::Option* opt = value.option();
-
-      // Special options/commands
-      if (opt) {
-        // --data <file.json>
-        if (opt == &options.data()) {
-          if (m_exporter)
-            m_exporter->setDataFilename(value.value());
-        }
-        // --format <format>
-        else if (opt == &options.format()) {
-          if (m_exporter) {
-            DocumentExporter::DataFormat format = DocumentExporter::DefaultDataFormat;
-
-            if (value.value() == "json-hash")
-              format = DocumentExporter::JsonHashDataFormat;
-            else if (value.value() == "json-array")
-              format = DocumentExporter::JsonArrayDataFormat;
-
-            m_exporter->setDataFormat(format);
-          }
-        }
-        // --sheet <file.png>
-        else if (opt == &options.sheet()) {
-          if (m_exporter)
-            m_exporter->setTextureFilename(value.value());
-        }
-        // --sheet-width <width>
-        else if (opt == &options.sheetWidth()) {
-          if (m_exporter)
-            m_exporter->setTextureWidth(strtol(value.value().c_str(), NULL, 0));
-        }
-        // --sheet-height <height>
-        else if (opt == &options.sheetHeight()) {
-          if (m_exporter)
-            m_exporter->setTextureHeight(strtol(value.value().c_str(), NULL, 0));
-        }
-        // --sheet-pack
-        else if (opt == &options.sheetType()) {
-          if (value.value() == "horizontal")
-            sheetType = SpriteSheetType::Horizontal;
-          else if (value.value() == "vertical")
-            sheetType = SpriteSheetType::Vertical;
-          else if (value.value() == "rows")
-            sheetType = SpriteSheetType::Rows;
-          else if (value.value() == "columns")
-            sheetType = SpriteSheetType::Columns;
-          else if (value.value() == "packed")
-            sheetType = SpriteSheetType::Packed;
-        }
-        // --sheet-pack
-        else if (opt == &options.sheetPack()) {
-          sheetType = SpriteSheetType::Packed;
-        }
-        // --split-layers
-        else if (opt == &options.splitLayers()) {
-          splitLayers = true;
-          splitLayersSaveAs = true;
-        }
-        // --layer <layer-name>
-        else if (opt == &options.layer()) {
-          importLayer = value.value();
-          importLayerSaveAs = value.value();
-        }
-        // --all-layers
-        else if (opt == &options.allLayers()) {
-          allLayers = true;
-        }
-        // --frame-tag <tag-name>
-        else if (opt == &options.frameTag()) {
-          frameTagName = value.value();
-        }
-        // --frame-range from,to
-        else if (opt == &options.frameRange()) {
-          frameRange = value.value();
-        }
-        // --ignore-empty
-        else if (opt == &options.ignoreEmpty()) {
-          ignoreEmpty = true;
-        }
-        // --border-padding
-        else if (opt == &options.borderPadding()) {
-          if (m_exporter)
-            m_exporter->setBorderPadding(strtol(value.value().c_str(), NULL, 0));
-        }
-        // --shape-padding
-        else if (opt == &options.shapePadding()) {
-          if (m_exporter)
-            m_exporter->setShapePadding(strtol(value.value().c_str(), NULL, 0));
-        }
-        // --inner-padding
-        else if (opt == &options.innerPadding()) {
-          if (m_exporter)
-            m_exporter->setInnerPadding(strtol(value.value().c_str(), NULL, 0));
-        }
-        // --trim
-        else if (opt == &options.trim()) {
-          trim = true;
-        }
-        // --crop x,y,width,height
-        else if (opt == &options.crop()) {
-          std::vector<std::string> parts;
-          base::split_string(value.value(), parts, ",");
-          if (parts.size() < 4)
-            throw std::runtime_error("--crop needs four parameters separated by comma (,)\n"
-                                     "Usage: --crop x,y,width,height\n"
-                                     "E.g. --crop 0,0,32,32");
-
-          cropParams.set("x", parts[0].c_str());
-          cropParams.set("y", parts[1].c_str());
-          cropParams.set("width", parts[2].c_str());
-          cropParams.set("height", parts[3].c_str());
-        }
-        // --filename-format
-        else if (opt == &options.filenameFormat()) {
-          filenameFormat = value.value();
-        }
-        // --save-as <filename>
-        else if (opt == &options.saveAs()) {
-          Document* doc = NULL;
-          if (!ctx->documents().empty())
-            doc = dynamic_cast<Document*>(ctx->documents().lastAdded());
-
-          if (!doc) {
-            console.printf("A document is needed before --save-as argument\n");
-          }
-          else {
-            ctx->setActiveDocument(doc);
-
-            std::string format = filenameFormat;
-
-            Command* saveAsCommand = CommandsModule::instance()->getCommandByName(CommandId::SaveFileCopyAs);
-            Command* trimCommand = CommandsModule::instance()->getCommandByName(CommandId::AutocropSprite);
-            Command* cropCommand = CommandsModule::instance()->getCommandByName(CommandId::CropSprite);
-            Command* undoCommand = CommandsModule::instance()->getCommandByName(CommandId::Undo);
-
-            // --save-as with --split-layers
-            if (splitLayersSaveAs) {
-              std::string fn, fmt;
-              if (format.empty()) {
-                if (doc->sprite()->totalFrames() > frame_t(1))
-                  format = "{path}/{title} ({layer}) {frame}.{extension}";
-                else
-                  format = "{path}/{title} ({layer}).{extension}";
-              }
-
-              // Store in "visibility" the original "visible" state of every layer.
-              std::vector<bool> visibility(doc->sprite()->countLayers());
-              int i = 0;
-              for (Layer* layer : doc->sprite()->layers())
-                visibility[i++] = layer->isVisible();
-
-              // For each layer, hide other ones and save the sprite.
-              i = 0;
-              for (Layer* show : doc->sprite()->layers()) {
-                // If the user doesn't want all layers and this one is hidden.
-                if (!visibility[i++])
-                  continue;     // Just ignore this layer.
-
-                // Make this layer ("show") the only one visible.
-                for (Layer* hide : doc->sprite()->layers())
-                  hide->setVisible(hide == show);
-
-                FilenameInfo fnInfo;
-                fnInfo
-                  .filename(value.value())
-                  .layerName(show->name());
-
-                fn = filename_formatter(format, fnInfo);
-                fmt = filename_formatter(format, fnInfo, false);
-
-                if (!cropParams.empty())
-                  ctx->executeCommand(cropCommand, cropParams);
-
-                // TODO --trim command with --save-as doesn't make too
-                // much sense as we lost the trim rectangle
-                // information (e.g. we don't have sheet .json) Also,
-                // we should trim each frame individually (a process
-                // that can be done only in fop_operate()).
-                if (trim)
-                  ctx->executeCommand(trimCommand);
-
-                Params params;
-                params.set("filename", fn.c_str());
-                params.set("filename-format", fmt.c_str());
-                ctx->executeCommand(saveAsCommand, params);
-
-                if (trim) {     // Undo trim command
-                  ctx->executeCommand(undoCommand);
-
-                  // Just in case allow non-linear history is enabled
-                  // we clear redo information
-                  doc->undoHistory()->clearRedo();
-                }
-              }
-
-              // Restore layer visibility
-              i = 0;
-              for (Layer* layer : doc->sprite()->layers())
-                layer->setVisible(visibility[i++]);
-            }
-            else {
-              // Show only one layer
-              if (!importLayerSaveAs.empty()) {
-                for (Layer* layer : doc->sprite()->layers())
-                  layer->setVisible(layer->name() == importLayerSaveAs);
-              }
-
-              if (!cropParams.empty())
-                ctx->executeCommand(cropCommand, cropParams);
-
-              if (trim)
-                ctx->executeCommand(trimCommand);
-
-              Params params;
-              params.set("filename", value.value().c_str());
-              params.set("filename-format", format.c_str());
-              ctx->executeCommand(saveAsCommand, params);
-
-              if (trim) {       // Undo trim command
-                ctx->executeCommand(undoCommand);
-
-                // Just in case allow non-linear history is enabled
-                // we clear redo information
-                doc->undoHistory()->clearRedo();
-              }
-            }
-          }
-        }
-        // --scale <factor>
-        else if (opt == &options.scale()) {
-          Command* command = CommandsModule::instance()->getCommandByName(CommandId::SpriteSize);
-          double scale = strtod(value.value().c_str(), NULL);
-          static_cast<SpriteSizeCommand*>(command)->setScale(scale, scale);
-
-          // Scale all sprites
-          for (auto doc : ctx->documents()) {
-            ctx->setActiveDocument(static_cast<app::Document*>(doc));
-            ctx->executeCommand(command);
-          }
-        }
-        // --shrink-to <width,height>
-        else if (opt == &options.shrinkTo()) {
-          std::vector<std::string> dimensions;
-          base::split_string(value.value(), dimensions, ",");
-          if (dimensions.size() < 2)
-            throw std::runtime_error("--shrink-to needs two parameters separated by comma (,)\n"
-                                     "Usage: --shrink-to width,height\n"
-                                     "E.g. --shrink-to 128,64");
-
-          double maxWidth = base::convert_to<double>(dimensions[0]);
-          double maxHeight = base::convert_to<double>(dimensions[1]);
-          double scaleWidth, scaleHeight, scale;
-
-          // Shrink all sprites if needed
-          for (auto doc : ctx->documents()) {
-            ctx->setActiveDocument(static_cast<app::Document*>(doc));
-            scaleWidth = (doc->width() > maxWidth ? maxWidth / doc->width() : 1.0);
-            scaleHeight = (doc->height() > maxHeight ? maxHeight / doc->height() : 1.0);
-            if (scaleWidth < 1.0 || scaleHeight < 1.0) {
-              scale = MIN(scaleWidth, scaleHeight);
-              Command* command = CommandsModule::instance()->getCommandByName(CommandId::SpriteSize);
-              static_cast<SpriteSizeCommand*>(command)->setScale(scale, scale);
-              ctx->executeCommand(command);
-            }
-          }
-        }
-#ifdef ENABLE_SCRIPTING
-        // --script <filename>
-        else if (opt == &options.script()) {
-          std::string script = value.value();
-
-          StdoutEngineDelegate delegate;
-          AppScripting engine(&delegate);
-          engine.evalFile(script);
-        }
-#endif
-        // --list-layers
-        else if (opt == &options.listLayers()) {
-          listLayers = true;
-          if (m_exporter)
-            m_exporter->setListLayers(true);
-        }
-        // --list-tags
-        else if (opt == &options.listTags()) {
-          listTags = true;
-          if (m_exporter)
-            m_exporter->setListFrameTags(true);
-        }
-      }
-      // File names aren't associated to any option
-      else {
-        const std::string& filename = base::normalize_path(value.value());
-
-        app::Document* oldDoc = ctx->activeDocument();
-
-        Command* openCommand = CommandsModule::instance()->getCommandByName(CommandId::OpenFile);
-        Params params;
-        params.set("filename", filename.c_str());
-        ctx->executeCommand(openCommand, params);
-
-        app::Document* doc = ctx->activeDocument();
-
-        // If the active document is equal to the previous one, it
-        // means that we couldn't open this specific document.
-        if (doc == oldDoc)
-          doc = nullptr;
-
-        // List layers and/or tags
-        if (doc) {
-          // Show all layers
-          if (allLayers) {
-            for (Layer* layer : doc->sprite()->layers())
-              layer->setVisible(true);
-          }
-
-          if (listLayers) {
-            listLayers = false;
-            for (Layer* layer : doc->sprite()->layers()) {
-              if (layer->isVisible())
-                std::cout << layer->name() << "\n";
-            }
-          }
-
-          if (listTags) {
-            listTags = false;
-            for (FrameTag* tag : doc->sprite()->frameTags())
-              std::cout << tag->name() << "\n";
-          }
-          if (m_exporter) {
-            FrameTag* frameTag = nullptr;
-            if (!frameTagName.empty()) {
-              frameTag = doc->sprite()->frameTags().getByName(frameTagName);
-            }
-            else if (!frameRange.empty()) {
-                std::vector<std::string> splitRange;
-                base::split_string(frameRange, splitRange, ",");
-                if (splitRange.size() < 2)
-                  throw std::runtime_error("--frame-range needs two parameters separated by comma (,)\n"
-                                           "Usage: --frame-range from,to\n"
-                                           "E.g. --frame-range 0,99");
-
-                frameTag = new FrameTag(base::convert_to<frame_t>(splitRange[0]),
-                                        base::convert_to<frame_t>(splitRange[1]));
-            }
-
-            if (!importLayer.empty()) {
-              Layer* foundLayer = NULL;
-              for (Layer* layer : doc->sprite()->layers()) {
-                if (layer->name() == importLayer) {
-                  foundLayer = layer;
-                  break;
-                }
-              }
-              if (foundLayer)
-                m_exporter->addDocument(doc, foundLayer, frameTag);
-            }
-            else if (splitLayers) {
-              for (auto layer : doc->sprite()->layers()) {
-                if (layer->isVisible())
-                  m_exporter->addDocument(doc, layer, frameTag);
-              }
-            }
-            else {
-              m_exporter->addDocument(doc, nullptr, frameTag);
-            }
-          }
-        }
-
-        if (!importLayer.empty())
-          importLayer.clear();
-
-        if (splitLayers)
-          splitLayers = false;
-        if (listLayers)
-          listLayers = false;
-        if (listTags)
-          listTags = false;
-      }
-    }
-
-    if (m_exporter && !filenameFormat.empty())
-      m_exporter->setFilenameFormat(filenameFormat);
-  }
-
-  // Export
-  if (m_exporter) {
-    LOG("APP: Exporting sheet...\n");
-
-    if (sheetType != SpriteSheetType::None)
-      m_exporter->setSpriteSheetType(sheetType);
-
-    if (ignoreEmpty)
-      m_exporter->setIgnoreEmptyCels(true);
-
-    if (trim)
-      m_exporter->setTrimCels(true);
-
-    base::UniquePtr<Document> spriteSheet(m_exporter->exportSheet());
-    m_exporter.reset(NULL);
-
-    LOG("APP: Export sprite sheet: Done\n");
+    CliProcessor cli(delegate.get(), options);
+    cli.process(&m_modules->m_context);
   }
 
   she::instance()->finishLaunching();
@@ -668,8 +278,43 @@ void App::initialize(const AppOptions& options)
 
 void App::run()
 {
+#ifdef ENABLE_UI
   // Run the GUI
   if (isGui()) {
+#ifdef _WIN32
+    // How to interpret one finger on Windows tablets.
+    ui::Manager::getDefault()->getDisplay()
+      ->setInterpretOneFingerGestureAsMouseMovement(
+        Preferences::instance().experimental.oneFingerAsMouseMovement());
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+    // Setup app icon for Linux window managers
+    try {
+      she::Display* display = she::instance()->defaultDisplay();
+      she::SurfaceList icons;
+
+      for (const int size : { 32, 64, 128 }) {
+        ResourceFinder rf;
+        rf.includeDataDir(fmt::format("icons/ase{0}.png", size).c_str());
+        if (rf.findFirst()) {
+          she::Surface* surf = she::instance()->loadRgbaSurface(rf.filename().c_str());
+          if (surf)
+            icons.push_back(surf);
+        }
+      }
+
+      display->setIcons(icons);
+
+      for (auto surf : icons)
+        surf->dispose();
+    }
+    catch (const std::exception&) {
+      // Just ignore the exception, we couldn't change the app icon, no
+      // big deal.
+    }
+#endif
+
     // Initialize Steam API
 #ifdef ENABLE_STEAM
     steam::SteamAPI steam;
@@ -677,8 +322,8 @@ void App::run()
       she::instance()->activateApp();
 #endif
 
-#if _DEBUG
-    // On OS X, when we compile Aseprite on Debug mode, we're using it
+#if ENABLE_DEVMODE
+    // On OS X, when we compile Aseprite on devmode, we're using it
     // outside an app bundle, so we must active the app explicitly.
     she::instance()->activateApp();
 #endif
@@ -702,42 +347,45 @@ void App::run()
     // Run the GUI main message loop
     ui::Manager::getDefault()->run();
   }
+#endif  // ENABLE_UI
 
 #ifdef ENABLE_SCRIPTING
   // Start shell to execute scripts.
   if (m_isShell) {
-    StdoutEngineDelegate delegate;
+    script::StdoutEngineDelegate delegate;
     AppScripting engine(&delegate);
     engine.printLastResult();
     Shell shell;
     shell.run(engine);
   }
-#endif
+#endif  // ENABLE_SCRIPTING
 
   // Destroy all documents in the UIContext.
-  const doc::Documents& docs = m_modules->m_ui_context.documents();
+  const Docs& docs = m_modules->m_context.documents();
   while (!docs.empty()) {
-    doc::Document* doc = docs.back();
+    Doc* doc = docs.back();
 
     // First we close the document. In this way we receive recent
-    // notifications related to the document as an app::Document. If
-    // we delete the document directly, we destroy the app::Document
+    // notifications related to the document as a app::Doc. If
+    // we delete the document directly, we destroy the app::Doc
     // too early, and then doc::~Document() call
-    // DocumentsObserver::onRemoveDocument(). In this way, observers
-    // could think that they have a fully created app::Document when
+    // DocsObserver::onRemoveDocument(). In this way, observers
+    // could think that they have a fully created app::Doc when
     // in reality it's a doc::Document (in the middle of a
     // destruction process).
     //
     // TODO: This problem is because we're extending doc::Document,
-    // in the future, we should remove app::Document.
+    // in the future, we should remove app::Doc.
     doc->close();
     delete doc;
   }
 
+#ifdef ENABLE_UI
   if (isGui()) {
     // Destroy the window.
     m_mainWindow.reset(NULL);
   }
+#endif
 
   // Delete backups (this is a normal shutdown, we are not handling
   // exceptions, and we are not in a destructor).
@@ -757,24 +405,28 @@ App::~App()
     // Fire App Exit signal.
     App::instance()->Exit();
 
+#ifdef ENABLE_UI
     // Finalize modules, configuration and core.
     Editor::destroyEditorSharedInternals();
-
-    // Save brushes
-    m_brushes.reset(nullptr);
 
     if (m_backupIndicator) {
       delete m_backupIndicator;
       m_backupIndicator = nullptr;
     }
 
+    // Save brushes
+    m_brushes.reset(nullptr);
+#endif
+
     delete m_legacy;
     delete m_modules;
     delete m_coreModules;
 
+#ifdef ENABLE_UI
     // Destroy the loaded gui.xml data.
     delete KeyboardShortcuts::instance();
     delete GuiXml::instance();
+#endif
 
     m_instance = NULL;
   }
@@ -789,6 +441,11 @@ App::~App()
 
     // no re-throw
   }
+}
+
+Context* App::context()
+{
+  return &m_modules->m_context;
 }
 
 bool App::isPortable()
@@ -807,23 +464,39 @@ bool App::isPortable()
 tools::ToolBox* App::toolBox() const
 {
   ASSERT(m_modules != NULL);
+#ifdef ENABLE_UI
   return &m_modules->m_toolbox;
+#else
+  return nullptr;
+#endif
 }
 
 tools::Tool* App::activeTool() const
 {
+#ifdef ENABLE_UI
   return m_modules->m_activeToolManager.activeTool();
+#else
+  return nullptr;
+#endif
 }
 
 tools::ActiveToolManager* App::activeToolManager() const
 {
+#ifdef ENABLE_UI
   return &m_modules->m_activeToolManager;
+#else
+  return nullptr;
+#endif
 }
 
 RecentFiles* App::recentFiles() const
 {
+#ifdef ENABLE_UI
   ASSERT(m_modules != NULL);
   return &m_modules->m_recent_files;
+#else
+  return nullptr;
+#endif
 }
 
 Workspace* App::workspace() const
@@ -855,11 +528,17 @@ Preferences& App::preferences() const
   return m_coreModules->m_preferences;
 }
 
+Extensions& App::extensions() const
+{
+  return m_modules->m_extensions;
+}
+
 crash::DataRecovery* App::dataRecovery() const
 {
   return m_modules->recovery();
 }
 
+#ifdef ENABLE_UI
 void App::showNotification(INotificationDelegate* del)
 {
   m_mainWindow->showNotification(del);
@@ -884,7 +563,7 @@ void App::updateDisplayTitleBar()
   std::string defaultTitle = PACKAGE " v" VERSION;
   std::string title;
 
-  DocumentView* docView = UIContext::instance()->activeView();
+  DocView* docView = UIContext::instance()->activeView();
   if (docView) {
     // Prepend the document's filename.
     title += docView->document()->name();
@@ -899,10 +578,12 @@ InputChain& App::inputChain()
 {
   return m_modules->m_inputChain;
 }
+#endif
 
 // Updates palette and redraw the screen.
 void app_refresh_screen()
 {
+#ifdef ENABLE_UI
   Context* context = UIContext::instance();
   ASSERT(context != NULL);
 
@@ -915,6 +596,7 @@ void app_refresh_screen()
 
   // Invalidate the whole screen.
   ui::Manager::getDefault()->invalidate();
+#endif // ENABLE_UI
 }
 
 // TODO remove app_rebuild_documents_tabs() and replace it by
@@ -922,28 +604,36 @@ void app_refresh_screen()
 // document is modified).
 void app_rebuild_documents_tabs()
 {
+#ifdef ENABLE_UI
   if (App::instance()->isGui()) {
     App::instance()->workspace()->updateTabs();
     App::instance()->updateDisplayTitleBar();
   }
+#endif // ENABLE_UI
 }
 
 PixelFormat app_get_current_pixel_format()
 {
+#ifdef ENABLE_UI
   Context* context = UIContext::instance();
   ASSERT(context != NULL);
 
-  Document* document = context->activeDocument();
+  Doc* document = context->activeDocument();
   if (document != NULL)
     return document->sprite()->pixelFormat();
   else
     return IMAGE_RGB;
+#else // ENABLE_UI
+  return IMAGE_RGB;
+#endif
 }
 
 void app_default_statusbar_message()
 {
+#ifdef ENABLE_UI
   StatusBar::instance()
     ->setStatusText(250, "%s %s | %s", PACKAGE, VERSION, COPYRIGHT);
+#endif
 }
 
 int app_get_color_to_clear_layer(Layer* layer)
@@ -954,15 +644,31 @@ int app_get_color_to_clear_layer(Layer* layer)
 
   // The `Background' is erased with the `Background Color'
   if (layer->isBackground()) {
+#ifdef ENABLE_UI
     if (ColorBar::instance())
       color = ColorBar::instance()->getBgColor();
     else
+#endif
       color = app::Color::fromRgb(0, 0, 0); // TODO get background color color from doc::Settings
   }
   else // All transparent layers are cleared with the mask color
     color = app::Color::fromMask();
 
   return color_utils::color_for_layer(color, layer);
+}
+
+std::string memory_dump_filename()
+{
+#ifdef _WIN32
+  static const char* kDefaultCrashName = PACKAGE "-crash-" VERSION ".dmp";
+
+  app::ResourceFinder rf;
+  rf.includeUserDir(kDefaultCrashName);
+  return rf.getFirstOrCreateDefault();
+
+#else
+  return "";
+#endif
 }
 
 } // namespace app

@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2014 David Capello
+// Copyright (c) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -12,14 +12,14 @@
 
 #include "render/render.h"
 
-#include "base/unique_ptr.h"
 #include "doc/cel.h"
-#include "doc/context.h"
 #include "doc/document.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/primitives.h"
+
+#include <memory>
 
 using namespace doc;
 using namespace render;
@@ -65,79 +65,78 @@ TYPED_TEST_CASE(RenderAllModes, ImageAllTraits);
 
 TEST(Render, Basic)
 {
-  Context ctx;
-  Document* doc = ctx.documents().add(2, 2, ColorMode::RGB);
+  Document* doc = new Document;
+  doc->sprites().add(2, 2, ColorMode::INDEXED);
 
-  Image* src = doc->sprite()->layer(0)->cel(0)->image();
+  Image* src = doc->sprite()->root()->firstLayer()->cel(0)->image();
   clear_image(src, 2);
 
-  base::UniquePtr<Image> dst(Image::create(IMAGE_RGB, 2, 2));
-  clear_image(dst, 1);
-  EXPECT_2X2_PIXELS(dst, 1, 1, 1, 1);
+  std::unique_ptr<Image> dst(Image::create(IMAGE_INDEXED, 2, 2));
+  clear_image(dst.get(), 1);
+  EXPECT_2X2_PIXELS(dst.get(), 1, 1, 1, 1);
 
   Render render;
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
-  EXPECT_2X2_PIXELS(dst, 2, 2, 2, 2);
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
+  EXPECT_2X2_PIXELS(dst.get(), 2, 2, 2, 2);
 }
 
 TYPED_TEST(RenderAllModes, CheckDefaultBackgroundMode)
 {
   typedef TypeParam ImageTraits;
 
-  Context ctx;
-  Document* doc = ctx.documents().add(2, 2,
-    ColorMode(ImageTraits::pixel_format));
+  Document* doc = new Document;
+  doc->sprites().add(2, 2, ColorMode(ImageTraits::pixel_format));
 
-  EXPECT_TRUE(!doc->sprite()->layer(0)->isBackground());
-  Image* src = doc->sprite()->layer(0)->cel(0)->image();
+  EXPECT_TRUE(!doc->sprite()->root()->firstLayer()->isBackground());
+  Image* src = doc->sprite()->root()->firstLayer()->cel(0)->image();
   clear_image(src, 0);
   put_pixel(src, 1, 1, 1);
 
-  base::UniquePtr<Image> dst(Image::create(ImageTraits::pixel_format, 2, 2));
-  clear_image(dst, 1);
-  EXPECT_2X2_PIXELS(dst, 1, 1, 1, 1);
+  std::unique_ptr<Image> dst(Image::create(ImageTraits::pixel_format, 2, 2));
+  clear_image(dst.get(), 1);
+  EXPECT_2X2_PIXELS(dst.get(), 1, 1, 1, 1);
 
   Render render;
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
   // Default background mode is to set all pixels to transparent color
-  EXPECT_2X2_PIXELS(dst, 0, 0, 0, 1);
+  EXPECT_2X2_PIXELS(dst.get(), 0, 0, 0, 1);
 }
 
 TEST(Render, DefaultBackgroundModeWithNonzeroTransparentIndex)
 {
-  Context ctx;
-  Document* doc = ctx.documents().add(2, 2, ColorMode::INDEXED);
+  Document* doc = new Document;
+  doc->sprites().add(2, 2, ColorMode::INDEXED);
   doc->sprite()->setTransparentColor(2); // Transparent color is index 2
 
-  EXPECT_TRUE(!doc->sprite()->layer(0)->isBackground());
-  Image* src = doc->sprite()->layer(0)->cel(0)->image();
+  EXPECT_TRUE(!doc->sprite()->root()->firstLayer()->isBackground());
+  Image* src = doc->sprite()->root()->firstLayer()->cel(0)->image();
   clear_image(src, 2);
   put_pixel(src, 1, 1, 1);
 
-  base::UniquePtr<Image> dst(Image::create(IMAGE_INDEXED, 2, 2));
-  clear_image(dst, 1);
-  EXPECT_2X2_PIXELS(dst, 1, 1, 1, 1);
+  std::unique_ptr<Image> dst(Image::create(IMAGE_INDEXED, 2, 2));
+  clear_image(dst.get(), 1);
+  EXPECT_2X2_PIXELS(dst.get(), 1, 1, 1, 1);
 
   Render render;
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
-  EXPECT_2X2_PIXELS(dst, 2, 2, 2, 1); // Indexed transparent
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
+  EXPECT_2X2_PIXELS(dst.get(), 2, 2, 2, 1); // Indexed transparent
 
   dst.reset(Image::create(IMAGE_RGB, 2, 2));
-  clear_image(dst, 1);
-  EXPECT_2X2_PIXELS(dst, 1, 1, 1, 1);
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
+  clear_image(dst.get(), 1);
+  EXPECT_2X2_PIXELS(dst.get(), 1, 1, 1, 1);
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
   color_t c1 = doc->sprite()->palette(0)->entry(1);
   EXPECT_NE(0, c1);
-  EXPECT_2X2_PIXELS(dst, 0, 0, 0, c1); // RGB transparent
+  EXPECT_2X2_PIXELS(dst.get(), 0, 0, 0, c1); // RGB transparent
 }
 
 TEST(Render, CheckedBackground)
 {
-  Context ctx;
-  Document* doc = ctx.documents().add(4, 4, ColorMode::RGB);
+  Document* doc = new Document;
+  doc->sprites().add(4, 4, ColorMode::INDEXED);
 
-  base::UniquePtr<Image> dst(Image::create(IMAGE_RGB, 4, 4));
-  clear_image(dst, 0);
+  std::unique_ptr<Image> dst(Image::create(IMAGE_INDEXED, 4, 4));
+  clear_image(dst.get(), 0);
 
   Render render;
   render.setBgType(BgType::CHECKED);
@@ -146,35 +145,33 @@ TEST(Render, CheckedBackground)
   render.setBgColor2(2);
 
   render.setBgCheckedSize(gfx::Size(1, 1));
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
-  EXPECT_4X4_PIXELS(dst, 
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
+  EXPECT_4X4_PIXELS(dst.get(),
     1, 2, 1, 2,
     2, 1, 2, 1,
     1, 2, 1, 2,
     2, 1, 2, 1);
 
   render.setBgCheckedSize(gfx::Size(2, 2));
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
-  EXPECT_4X4_PIXELS(dst, 
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
+  EXPECT_4X4_PIXELS(dst.get(),
     1, 1, 2, 2,
     1, 1, 2, 2,
     2, 2, 1, 1,
     2, 2, 1, 1);
 
   render.setBgCheckedSize(gfx::Size(3, 3));
-  render.renderSprite(dst, doc->sprite(), frame_t(0));
-  EXPECT_4X4_PIXELS(dst, 
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
+  EXPECT_4X4_PIXELS(dst.get(),
     1, 1, 1, 2,
     1, 1, 1, 2,
     1, 1, 1, 2,
     2, 2, 2, 1);
 
+  render.setProjection(Projection(PixelRatio(1, 1), Zoom(2, 1)));
   render.setBgCheckedSize(gfx::Size(1, 1));
-  render.renderSprite(dst,
-    doc->sprite(), frame_t(0),
-    gfx::Clip(dst->bounds()),
-    Zoom(2, 1));
-  EXPECT_4X4_PIXELS(dst,
+  render.renderSprite(dst.get(), doc->sprite(), frame_t(0));
+  EXPECT_4X4_PIXELS(dst.get(),
     1, 1, 2, 2,
     1, 1, 2, 2,
     2, 2, 1, 1,
@@ -183,19 +180,18 @@ TEST(Render, CheckedBackground)
 
 TEST(Render, ZoomAndDstBounds)
 {
-  Context ctx;
-
   // Create this image:
   // 0 0 0
   // 0 4 4
   // 0 4 4
-  Document* doc = ctx.documents().add(3, 3, ColorMode::RGB);
-  Image* src = doc->sprite()->layer(0)->cel(0)->image();
+  Document* doc = new Document;
+  doc->sprites().add(3, 3, ColorMode::INDEXED);
+  Image* src = doc->sprite()->root()->firstLayer()->cel(0)->image();
   clear_image(src, 0);
   fill_rect(src, 1, 1, 2, 2, 4);
 
-  base::UniquePtr<Image> dst(Image::create(IMAGE_RGB, 4, 4));
-  clear_image(dst, 0);
+  std::unique_ptr<Image> dst(Image::create(IMAGE_INDEXED, 4, 4));
+  clear_image(dst.get(), 0);
 
   Render render;
   render.setBgType(BgType::CHECKED);
@@ -204,14 +200,68 @@ TEST(Render, ZoomAndDstBounds)
   render.setBgColor2(2);
   render.setBgCheckedSize(gfx::Size(1, 1));
 
-  render.renderSprite(dst, doc->sprite(), frame_t(0),
-    gfx::Clip(1, 1, 0, 0, 2, 2),
-    Zoom(1, 1));
-  EXPECT_4X4_PIXELS(dst, 
+  render.renderSprite(
+    dst.get(), doc->sprite(), frame_t(0),
+    gfx::Clip(1, 1, 0, 0, 2, 2));
+  EXPECT_4X4_PIXELS(dst.get(),
     0, 0, 0, 0,
     0, 1, 2, 0,
     0, 2, 4, 0,
     0, 0, 0, 0);
+}
+
+TEST(Render, BugWithMultiplesOf3ZoomFactors)
+{
+  Document* doc = new Document;
+  doc->sprites().add(4, 4, ColorMode::RGB);
+  Image* src = doc->sprite()->root()->firstLayer()->cel(0)->image();
+  clear_image(src, 0);
+  draw_line(src, 0, 0, 3, 3, rgba(255, 0, 0, 255));
+
+  // Added other factors (like 1, 2, 4, etc.) too
+  int zooms[] = { 1, 2, 3, 4, 6, 8, 9, 12, 15, 16, 18, 21, 24, 27,
+                  30, 32, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60,
+                  63, 66, 69, 72, 75, 78, 81 };
+  for (int zoom : zooms) {
+    std::unique_ptr<Image> dst(Image::create(IMAGE_RGB, 4*zoom, 4*zoom));
+    clear_image(dst.get(), 0);
+
+    Render render;
+    render.setBgType(BgType::CHECKED);
+    render.setBgZoom(false);
+    render.setBgColor1(rgba(128, 128, 128, 255));
+    render.setBgColor2(rgba(64, 64, 64, 255));
+    render.setBgCheckedSize(gfx::Size(2, 2));
+    render.setProjection(Projection(PixelRatio(1, 1), Zoom(zoom, 1)));
+    render.renderSprite(
+      dst.get(), doc->sprite(), frame_t(0),
+      gfx::Clip(0, 0, 0, 0, 4*zoom, 4*zoom));
+
+    for (int y=0; y<dst->height(); ++y) {
+      for (int x=0; x<dst->width(); ++x) {
+        color_t c = get_pixel(dst.get(), x, y);
+
+        if (x / zoom == y / zoom) {
+          EXPECT_EQ(c, rgba(255, 0, 0, 255))
+            << " zoom=" << zoom << " x=" << x << " y=" << y;
+        }
+        else {
+          EXPECT_NE(c, rgba(255, 0, 0, 255))
+            << " zoom=" << zoom << " x=" << x << " y=" << y;
+
+          int gridBg = ((x / 2) + (y / 2)) % 2;
+          if (gridBg == 0) {
+            EXPECT_EQ(c, rgba(128, 128, 128, 255))
+              << " zoom=" << zoom << " x=" << x << " y=" << y;
+          }
+          else {
+            EXPECT_EQ(c, rgba(64, 64, 64, 255))
+              << " zoom=" << zoom << " x=" << x << " y=" << y;
+          }
+        }
+      }
+    }
+  }
 }
 
 int main(int argc, char** argv)

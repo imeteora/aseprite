@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -21,6 +21,10 @@ namespace she {
     kKeyUninitializedModifier = 64,
   };
 
+  // TODO These are virtual key code (not scancodes), we should rename
+  //      it to KeyCodes or use Unicode directly as on macOS (some
+  //      special keys like F1, arrow keys, etc. have a special
+  //      unicode value).
   enum KeyScancode {
     kKeyNil          = 0,
     kKeyA            = 1,
@@ -148,7 +152,7 @@ namespace she {
     kKeyLWin         = 120,
     kKeyRWin         = 121,
     kKeyMenu         = 122,
-    kKeyCommand      = 123,  // macOS - TODO This should be inside the modifiers range
+    kKeyCommand      = 123,
     kKeyScrLock      = 124,
     kKeyNumLock      = 125,
     kKeyCapsLock     = 126,

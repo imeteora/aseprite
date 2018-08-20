@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,11 +11,15 @@
 #include "app/commands/command.h"
 #include "app/commands/params.h"
 #include "app/loop_tag.h"
+#include "app/match_words.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/editor/editor_customization_delegate.h"
+#include "app/ui/search_entry.h"
 #include "doc/frame_tag.h"
 #include "doc/sprite.h"
+#include "ui/combobox.h"
 #include "ui/window.h"
 
 #include "goto_frame.xml.h"
@@ -27,8 +31,8 @@ using namespace doc;
 
 class GotoCommand : public Command {
 protected:
-  GotoCommand(const char* short_name, const char* friendly_name)
-    : Command(short_name, friendly_name, CmdRecordableFlag) { }
+  GotoCommand(const char* id)
+    : Command(id, CmdRecordableFlag) { }
 
   bool onEnabled(Context* context) override {
     return (current_editor != NULL);
@@ -46,8 +50,7 @@ protected:
 class GotoFirstFrameCommand : public GotoCommand {
 public:
   GotoFirstFrameCommand()
-    : GotoCommand("GotoFirstFrame",
-                  "Go to First Frame") { }
+    : GotoCommand(CommandId::GotoFirstFrame()) { }
   Command* clone() const override { return new GotoFirstFrameCommand(*this); }
 
 protected:
@@ -59,8 +62,7 @@ protected:
 class GotoPreviousFrameCommand : public GotoCommand {
 public:
   GotoPreviousFrameCommand()
-    : GotoCommand("GotoPreviousFrame",
-                  "Go to Previous Frame") { }
+    : GotoCommand(CommandId::GotoPreviousFrame()) { }
   Command* clone() const override { return new GotoPreviousFrameCommand(*this); }
 
 protected:
@@ -74,8 +76,7 @@ protected:
 
 class GotoNextFrameCommand : public GotoCommand {
 public:
-  GotoNextFrameCommand() : GotoCommand("GotoNextFrame",
-                                       "Go to Next Frame") { }
+  GotoNextFrameCommand() : GotoCommand(CommandId::GotoNextFrame()) { }
   Command* clone() const override { return new GotoNextFrameCommand(*this); }
 
 protected:
@@ -89,14 +90,16 @@ protected:
 
 class GotoNextFrameWithSameTagCommand : public GotoCommand {
 public:
-  GotoNextFrameWithSameTagCommand() : GotoCommand("GotoNextFrameWithSameTag",
-                                                  "Go to Next Frame with same tag") { }
+  GotoNextFrameWithSameTagCommand() : GotoCommand(CommandId::GotoNextFrameWithSameTag()) { }
   Command* clone() const override { return new GotoNextFrameWithSameTagCommand(*this); }
 
 protected:
   frame_t onGetFrame(Editor* editor) override {
     frame_t frame = editor->frame();
-    FrameTag* tag = get_animation_tag(editor->sprite(), frame);
+    FrameTag* tag = editor
+      ->getCustomizationDelegate()
+      ->getFrameTagProvider()
+      ->getFrameTagByFrame(frame, false);
     frame_t first = (tag ? tag->fromFrame(): 0);
     frame_t last = (tag ? tag->toFrame(): editor->sprite()->lastFrame());
 
@@ -106,14 +109,16 @@ protected:
 
 class GotoPreviousFrameWithSameTagCommand : public GotoCommand {
 public:
-  GotoPreviousFrameWithSameTagCommand() : GotoCommand("GotoPreviousFrameWithSameTag",
-                                                      "Go to Previous Frame with same tag") { }
+  GotoPreviousFrameWithSameTagCommand() : GotoCommand(CommandId::GotoPreviousFrameWithSameTag()) { }
   Command* clone() const override { return new GotoPreviousFrameWithSameTagCommand(*this); }
 
 protected:
   frame_t onGetFrame(Editor* editor) override {
     frame_t frame = editor->frame();
-    FrameTag* tag = get_animation_tag(editor->sprite(), frame);
+    FrameTag* tag = editor
+      ->getCustomizationDelegate()
+      ->getFrameTagProvider()
+      ->getFrameTagByFrame(frame, false);
     frame_t first = (tag ? tag->fromFrame(): 0);
     frame_t last = (tag ? tag->toFrame(): editor->sprite()->lastFrame());
 
@@ -123,8 +128,7 @@ protected:
 
 class GotoLastFrameCommand : public GotoCommand {
 public:
-  GotoLastFrameCommand() : GotoCommand("GotoLastFrame",
-                                       "Go to Last Frame") { }
+  GotoLastFrameCommand() : GotoCommand(CommandId::GotoLastFrame()) { }
   Command* clone() const override { return new GotoLastFrameCommand(*this); }
 
 protected:
@@ -135,12 +139,51 @@ protected:
 
 class GotoFrameCommand : public GotoCommand {
 public:
-  GotoFrameCommand() : GotoCommand("GotoFrame",
-                                   "Go to Frame")
+  GotoFrameCommand() : GotoCommand(CommandId::GotoFrame())
                      , m_showUI(true) { }
   Command* clone() const override { return new GotoFrameCommand(*this); }
 
-protected:
+private:
+
+  // TODO this combobox is similar to FileSelector::CustomFileNameEntry
+  class TagsEntry : public ComboBox {
+  public:
+    TagsEntry(FrameTags& frameTags)
+      : m_frameTags(frameTags) {
+      setEditable(true);
+      getEntryWidget()->Change.connect(&TagsEntry::onEntryChange, this);
+      fill(true);
+    }
+
+  private:
+    void fill(bool all) {
+      removeAllItems();
+
+      MatchWords match(getEntryWidget()->text());
+
+      bool matchAny = false;
+      for (const auto& frameTag : m_frameTags) {
+        if (match(frameTag->name())) {
+          matchAny = true;
+          break;
+        }
+      }
+      for (const auto& frameTag : m_frameTags) {
+        if (all || !matchAny || match(frameTag->name()))
+          addItem(frameTag->name());
+      }
+    }
+
+    void onEntryChange() {
+      closeListBox();
+      fill(false);
+      if (getItemCount() > 0)
+        openListBox();
+    }
+
+    FrameTags& m_frameTags;
+  };
+
   void onLoadParams(const Params& params) override {
     std::string frame = params.get("frame");
     if (!frame.empty()) {
@@ -156,13 +199,35 @@ protected:
 
     if (m_showUI) {
       app::gen::GotoFrame window;
-      window.frame()->setTextf(
+      TagsEntry combobox(editor->sprite()->frameTags());
+
+      window.framePlaceholder()->addChild(&combobox);
+
+      combobox.setFocusMagnet(true);
+      combobox.getEntryWidget()->setTextf(
         "%d", editor->frame()+docPref.timeline.firstFrame());
+
       window.openWindowInForeground();
       if (window.closer() != window.ok())
         return editor->frame();
 
-      m_frame = window.frame()->textInt();
+      std::string text = combobox.getEntryWidget()->text();
+      frame_t frameNum = base::convert_to<int>(text);
+      std::string textFromInt = base::convert_to<std::string>(frameNum);
+      if (text == textFromInt) {
+        m_frame = frameNum;
+      }
+      // Search a tag name
+      else {
+        MatchWords match(text);
+        for (const auto& frameTag : editor->sprite()->frameTags()) {
+          if (match(frameTag->name())) {
+            m_frame =
+              frameTag->fromFrame()+docPref.timeline.firstFrame();
+            break;
+          }
+        }
+      }
     }
 
     return MID(0, m_frame-docPref.timeline.firstFrame(), editor->sprite()->lastFrame());

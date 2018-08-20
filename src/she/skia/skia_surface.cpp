@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2016  David Capello
+// Copyright (C) 2016-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -16,6 +16,8 @@
 #include "SkPixelRef.h"
 #include "SkStream.h"
 
+#include <memory>
+
 namespace she {
 
 sk_sp<SkColorSpace> SkiaSurface::m_colorSpace;
@@ -23,11 +25,13 @@ sk_sp<SkColorSpace> SkiaSurface::m_colorSpace;
 // static
 Surface* SkiaSurface::loadSurface(const char* filename)
 {
-  base::FileHandle fp(base::open_file_with_exception(filename, "rb"));
+  FILE* f = base::open_file_raw(filename, "rb");
+  if (!f)
+    return nullptr;
 
-  SkAutoTDelete<SkCodec> codec(
-    SkCodec::NewFromStream(
-      new SkFILEStream(fp.get(), SkFILEStream::kCallerRetains_Ownership)));
+  std::unique_ptr<SkCodec> codec(
+    SkCodec::MakeFromStream(
+      std::unique_ptr<SkFILEStream>(new SkFILEStream(f))));
   if (!codec)
     return nullptr;
 

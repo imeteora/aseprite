@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -40,47 +40,40 @@ EditorView::EditorView(EditorView::Type type)
   : View()
   , m_type(type)
 {
-  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-  int l = theme->parts.editorSelected()->bitmapW()->width();
-  int t = theme->parts.editorSelected()->bitmapN()->height();
-  int r = theme->parts.editorSelected()->bitmapE()->width();
-  int b = theme->parts.editorSelected()->bitmapS()->height();
-
-  setBorder(gfx::Border(l, t, r, b));
-  setBgColor(gfx::rgba(0, 0, 0));
-  setupScrollbars();
-
   m_scrollSettingsConn =
     Preferences::instance().editor.showScrollbars.AfterChange.connect(
       base::Bind(&EditorView::setupScrollbars, this));
+
+  InitTheme.connect(
+    [this]{
+      SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
+      setBgColor(gfx::rgba(0, 0, 0)); // TODO Move this color to theme.xml
+      setStyle(theme->styles.editorView());
+      setupScrollbars();
+    });
+  initTheme();
 }
 
 void EditorView::onPaint(PaintEvent& ev)
 {
-  Graphics* g = ev.graphics();
-  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-  bool selected = false;
-
   switch (m_type) {
 
     // Only show the view selected if it is the current editor
     case CurrentEditorMode:
-      selected = (editor()->isActive());
+      if (editor()->isActive())
+        enableFlags(SELECTED);
+      else
+        disableFlags(SELECTED);
       break;
 
       // Always show selected
     case AlwaysSelected:
-      selected = true;
+      enableFlags(SELECTED);
       break;
 
   }
 
-  theme->drawRect(
-    g, clientBounds(),
-    (selected ?
-     theme->parts.editorSelected().get():
-     theme->parts.editorNormal().get()),
-    bgColor());
+  View::onPaint(ev);
 }
 
 void EditorView::onResize(ResizeEvent& ev)
@@ -120,9 +113,7 @@ void EditorView::onSetViewScroll(const gfx::Point& pt)
 {
   Editor* editor = this->editor();
   if (editor) {
-    // We have to hide the brush preview to scroll (without this,
-    // keyboard shortcuts to scroll when the brush preview is visible
-    // will leave brush previews all over the screen).
+    // Hide the brush preview to avoid leaving a cursor trail.
     HideBrushPreview hide(editor->brushPreview());
     View::onSetViewScroll(pt);
   }
@@ -165,8 +156,10 @@ void EditorView::setupScrollbars()
     horizontalBar()->setBarWidth(barsize);
     verticalBar()->setBarWidth(barsize);
 
-    setup_mini_look(horizontalBar());
-    setup_mini_look(verticalBar());
+    horizontalBar()->setStyle(theme->styles.miniScrollbar());
+    verticalBar()->setStyle(theme->styles.miniScrollbar());
+    horizontalBar()->setThumbStyle(theme->styles.miniScrollbarThumb());
+    verticalBar()->setThumbStyle(theme->styles.miniScrollbarThumb());
 
     showScrollBars();
   }

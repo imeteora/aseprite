@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2015 David Capello
+// Copyright (c) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -28,11 +28,13 @@
 #include "doc/palette.h"
 #include "doc/palette_picks.h"
 #include "doc/pixel_format.h"
+#include "doc/pixel_ratio.h"
 #include "doc/primitives.h"
 #include "doc/primitives_fast.h"
 #include "doc/remap.h"
 #include "doc/rgbmap.h"
-#include "doc/site.h"
+#include "doc/slice.h"
+#include "doc/slices.h"
 #include "doc/sprite.h"
 
 #endif

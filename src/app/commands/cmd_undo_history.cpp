@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2015-2016  David Capello
+// Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,17 +12,19 @@
 #include "app/commands/command.h"
 #include "app/console.h"
 #include "app/context.h"
-#include "app/document.h"
-#include "app/document_access.h"
-#include "app/document_undo.h"
-#include "app/document_undo_observer.h"
+#include "app/context_observer.h"
+#include "app/doc.h"
+#include "app/doc_undo.h"
+#include "app/doc_undo_observer.h"
+#include "app/docs_observer.h"
+#include "app/doc_access.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
+#include "app/site.h"
 #include "base/bind.h"
 #include "base/mem_utils.h"
-#include "doc/context_observer.h"
-#include "doc/documents_observer.h"
-#include "doc/site.h"
+#include "ui/listitem.h"
+#include "ui/message.h"
 #include "undo/undo_state.h"
 
 #include "undo_history.xml.h"
@@ -30,9 +32,9 @@
 namespace app {
 
 class UndoHistoryWindow : public app::gen::UndoHistory,
-                          public doc::ContextObserver,
-                          public doc::DocumentsObserver,
-                          public app::DocumentUndoObserver {
+                          public ContextObserver,
+                          public DocsObserver,
+                          public DocUndoObserver {
 public:
   class Item : public ui::ListItem {
   public:
@@ -52,8 +54,9 @@ public:
   };
 
   UndoHistoryWindow(Context* ctx)
-    : m_ctx(ctx),
-      m_document(nullptr) {
+    : m_ctx(ctx)
+    , m_document(nullptr) {
+    m_title = text();
     actions()->Change.connect(&UndoHistoryWindow::onChangeAction, this);
   }
 
@@ -72,8 +75,7 @@ private:
         if (m_ctx->activeDocument()) {
           m_frame = m_ctx->activeSite().frame();
 
-          attachDocument(
-            static_cast<app::Document*>(m_ctx->activeDocument()));
+          attachDocument(m_ctx->activeDocument());
         }
         break;
 
@@ -96,7 +98,7 @@ private:
     if (m_document &&
         m_document->undoHistory()->currentState() != item->state()) {
       try {
-        DocumentWriter writer(m_document, 100);
+        DocWriter writer(m_document, 100);
         m_document->undoHistory()->moveToState(item->state());
         m_document->generateMaskBoundaries();
 
@@ -114,25 +116,23 @@ private:
   }
 
   // ContextObserver
-  void onActiveSiteChange(const doc::Site& site) override {
+  void onActiveSiteChange(const Site& site) override {
     m_frame = site.frame();
 
     if (m_document == site.document())
       return;
 
-    attachDocument(
-      static_cast<app::Document*>(
-        const_cast<doc::Document*>(site.document())));
+    attachDocument(const_cast<Doc*>(site.document()));
   }
 
-  // DocumentsObserver
-  void onRemoveDocument(doc::Document* doc) override {
+  // DocsObserver
+  void onRemoveDocument(Doc* doc) override {
     if (m_document && m_document == doc)
       detachDocument();
   }
 
-  // DocumentUndoObserver
-  void onAddUndoState(DocumentUndo* history) override {
+  // DocUndoObserver
+  void onAddUndoState(DocUndo* history) override {
     ASSERT(history->currentState());
     Item* item = new Item(history->currentState());
     actions()->addChild(item);
@@ -141,29 +141,45 @@ private:
     actions()->selectChild(item);
   }
 
-  void onAfterUndo(DocumentUndo* history) override {
+  void onDeleteUndoState(DocUndo* history,
+                         undo::UndoState* state) override {
+    for (auto child : actions()->children()) {
+      Item* item = static_cast<Item*>(child);
+      if (item->state() == state) {
+        actions()->removeChild(item);
+        item->deferDelete();
+        break;
+      }
+    }
+
+    actions()->layout();
+    view()->updateView();
+  }
+
+  void onCurrentUndoStateChange(DocUndo* history) override {
     selectState(history->currentState());
   }
 
-  void onAfterRedo(DocumentUndo* history) override {
-    selectState(history->currentState());
-  }
-
-  void onClearRedo(DocumentUndo* history) override {
+  void onClearRedo(DocUndo* history) override {
     refillList(history);
   }
 
-  void attachDocument(app::Document* document) {
+  void onTotalUndoSizeChange(DocUndo* history) override {
+    updateTitle();
+  }
+
+  void attachDocument(Doc* document) {
     detachDocument();
 
     m_document = document;
     if (!document)
       return;
 
-    DocumentUndo* history = m_document->undoHistory();
+    DocUndo* history = m_document->undoHistory();
     history->add_observer(this);
 
     refillList(history);
+    updateTitle();
   }
 
   void detachDocument() {
@@ -173,6 +189,7 @@ private:
     clearList();
     m_document->undoHistory()->remove_observer(this);
     m_document = nullptr;
+    updateTitle();
   }
 
   void clearList() {
@@ -184,7 +201,7 @@ private:
     view()->updateView();
   }
 
-  void refillList(DocumentUndo* history) {
+  void refillList(DocUndo* history) {
     clearList();
 
     // Create an item to reference the initial state (undo state == nullptr)
@@ -217,9 +234,19 @@ private:
     }
   }
 
+  void updateTitle() {
+    if (!m_document)
+      setText(m_title);
+    else
+      setTextf("%s (%s)",
+               m_title.c_str(),
+               base::get_pretty_memory_size(m_document->undoHistory()->totalUndoSize()).c_str());
+  }
+
   Context* m_ctx;
-  app::Document* m_document;
+  Doc* m_document;
   doc::frame_t m_frame;
+  std::string m_title;
 };
 
 class UndoHistoryCommand : public Command {
@@ -234,9 +261,7 @@ protected:
 static UndoHistoryWindow* g_window = NULL;
 
 UndoHistoryCommand::UndoHistoryCommand()
-  : Command("UndoHistory",
-            "Undo History",
-            CmdUIOnlyFlag)
+  : Command(CommandId::UndoHistory(), CmdUIOnlyFlag)
 {
 }
 
@@ -246,7 +271,7 @@ void UndoHistoryCommand::onExecute(Context* ctx)
     g_window = new UndoHistoryWindow(ctx);
 
   if (g_window->isVisible())
-    g_window->setVisible(false);
+    g_window->closeWindow(nullptr);
   else
     g_window->openWindow();
 }

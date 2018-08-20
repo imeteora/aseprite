@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,8 +11,8 @@
 #include "app/util/range_utils.h"
 
 #include "app/context_access.h"
-#include "app/document.h"
-#include "app/document_range.h"
+#include "app/doc.h"
+#include "app/doc_range.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
@@ -23,26 +23,24 @@ namespace app {
 
 using namespace doc;
 
-// TODO the DocumentRange should be "iteratable" to replace this function
-CelList get_unique_cels(Sprite* sprite, const DocumentRange& inrange)
+// TODO the DocRange should be "iteratable" to replace this function
+CelList get_unlocked_unique_cels(Sprite* sprite, const DocRange& inrange)
 {
-  DocumentRange range = inrange;
+  DocRange range = inrange;
   CelList cels;
   if (!range.convertToCels(sprite))
     return cels;
 
   std::set<ObjectId> visited;
 
-  for (LayerIndex layerIdx = range.layerBegin(); layerIdx <= range.layerEnd(); ++layerIdx) {
-    Layer* layer = sprite->indexToLayer(layerIdx);
-    if (!layer || !layer->isImage())
+  for (Layer* layer : range.selectedLayers()) {
+    if (!layer ||
+        !layer->isImage() ||
+        !layer->isEditable())
       continue;
 
     LayerImage* layerImage = static_cast<LayerImage*>(layer);
-    for (frame_t frame = range.frameEnd(),
-           begin = range.frameBegin()-1;
-         frame != begin;
-         --frame) {
+    for (frame_t frame : range.selectedFrames()) {
       Cel* cel = layerImage->cel(frame);
       if (!cel)
         continue;

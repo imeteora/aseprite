@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -35,9 +35,11 @@ ZoomEntry::ZoomEntry()
   , m_locked(false)
 {
   setSuffix("%");
+  setMaxTextLength(6); // strlen("6400.0") == 6
   setup_mini_look(this);
 
   setZoom(render::Zoom(1, 1));
+  initTheme();
 }
 
 void ZoomEntry::setZoom(const render::Zoom& zoom)

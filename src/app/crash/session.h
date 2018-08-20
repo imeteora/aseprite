@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -19,8 +19,7 @@
 #include <vector>
 
 namespace app {
-  class Document;
-
+class Doc;
 namespace crash {
 
   // A class to record/restore session information.
@@ -41,6 +40,7 @@ namespace crash {
     ~Session();
 
     std::string name() const;
+    std::string version();
     const Backups& backups();
 
     bool isRunning();
@@ -49,25 +49,26 @@ namespace crash {
     void create(base::pid pid);
     void removeFromDisk();
 
-    bool saveDocumentChanges(app::Document* doc);
-    void removeDocument(app::Document* doc);
+    bool saveDocumentChanges(Doc* doc);
+    void removeDocument(Doc* doc);
 
     void restoreBackup(Backup* backup);
     void restoreBackupById(const doc::ObjectId id);
+    Doc* restoreBackupDocById(const doc::ObjectId id);
     void restoreRawImages(Backup* backup, RawImagesAs as);
     void deleteBackup(Backup* backup);
 
   private:
+    Doc* restoreBackupDoc(const std::string& backupDir);
     void loadPid();
     std::string pidFilename() const;
     std::string verFilename() const;
     void deleteDirectory(const std::string& dir);
-    void fixFilename(app::Document* doc);
+    void fixFilename(Doc* doc);
 
     base::pid m_pid;
     std::string m_path;
-    std::fstream m_log;
-    std::fstream m_pidFile;
+    std::string m_version;
     Backups m_backups;
 
     DISABLE_COPYING(Session);

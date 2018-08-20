@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -22,6 +22,7 @@
 #include "app/context.h"
 #include "app/modules/gui.h"
 #include "app/ui/status_bar.h"
+#include "ui/system.h"
 
 namespace app {
 
@@ -34,20 +35,28 @@ static Widget* wid_cancel = NULL;
 static int console_counter = 0;
 static bool console_locked;
 static bool want_close_flag = false;
+static bool has_text = false;
 
 Console::Console(Context* ctx)
   : m_withUI(false)
 {
+  if (!ui::is_ui_thread())
+    return;
+
   if (ctx)
     m_withUI = (ctx->isUIAvailable());
   else
     m_withUI =
-      (App::instance()->isGui() &&
+      (App::instance() &&
+       App::instance()->isGui() &&
        Manager::getDefault() &&
        Manager::getDefault()->getDisplay());
 
   if (!m_withUI)
     return;
+
+  if (console_counter == 0)
+    has_text = false;
 
   console_counter++;
   if (wid_console || console_counter > 1)
@@ -59,10 +68,8 @@ Console::Console(Context* ctx)
   TextBox* textbox = new TextBox("", WORDWRAP);
   Button* button = new Button("&Cancel");
 
-  if (!grid || !textbox || !button)
-    return;
-
   // The "button" closes the console
+  button->processMnemonicFromText();
   button->Click.connect(base::Bind<void>(&Window::closeWindow, window, button));
 
   view->attachToView(textbox);
@@ -106,8 +113,15 @@ Console::~Console()
   }
 }
 
+bool Console::hasText() const
+{
+  return has_text;
+}
+
 void Console::printf(const char* format, ...)
 {
+  has_text = true;
+
   std::va_list ap;
   va_start(ap, format);
   std::string msg = base::string_vprintf(format, ap);

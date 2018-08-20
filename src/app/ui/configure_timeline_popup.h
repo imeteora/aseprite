@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -24,7 +24,7 @@ namespace app {
     class TimelineConf;
   }
 
-  class Document;
+  class Doc;
 
   class ConfigureTimelinePopup : public ui::PopupWindow {
   public:
@@ -42,9 +42,14 @@ namespace app {
     void onCurrentLayerChange();
     void onPositionChange();
 
+    void onZoomChange();
+    void onThumbEnabledChange();
+    void onThumbOverlayEnabledChange();
+    void onThumbOverlaySizeChange();
+
   private:
     void updateWidgetsFromCurrentSettings();
-    app::Document* doc();
+    Doc* doc();
     DocumentPreferences& docPref();
 
     app::gen::TimelineConf* m_box;

@@ -1,8 +1,13 @@
 # Aseprite
-# Copyright (C) 2001-2016  David Capello
+# Copyright (C) 2001-2018  David Capello
 
 ######################################################################
 # Compiler-specific flags
+
+if(UNIX)
+  # All warnings except for switch cases with missing enum items
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-switch")
+endif()
 
 if(MSVC)
   # As Skia is compiled with /GL flag (whole program optimization),
@@ -34,13 +39,6 @@ if(USE_ALLEG4_BACKEND AND NOT USE_SHARED_ALLEGRO4)
 endif()
 
 ######################################################################
-# Add C++11 support only for our code (avoid Allegro)
-
-if(UNIX)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-switch -std=gnu++11")
-endif()
-
-######################################################################
 # pthread
 
 if (CMAKE_USE_PTHREADS_INIT)
@@ -55,19 +53,34 @@ if(NOT "${CUSTOM_WEBSITE_URL}" STREQUAL "")
 endif()
 
 ######################################################################
-# Full-version or trial-mode?
+# With static libcurl
 
 if(NOT USE_SHARED_CURL AND CURL_STATICLIB)
   add_definitions(-DCURL_STATICLIB)
 endif()
 
 ######################################################################
-# Full-version or trial-mode?
+# Special versions (full/trial, devmode, UI/CLI, etc.)
 
 if(NOT ENABLE_TRIAL_MODE)
-  add_definitions(-DENABLE_SAVE -DENABLE_DATA_RECOVERY)
+  add_definitions(-DENABLE_SAVE)
 else()
   add_definitions(-DENABLE_TRIAL_MODE)
+endif()
+
+if(ENABLE_DEVMODE)
+  add_definitions(-DENABLE_DEVMODE)
+endif()
+
+if(ENABLE_UI)
+  add_definitions(-DENABLE_UI)
+endif()
+
+if(ENABLE_UI AND NOT ENABLE_TRIAL_MODE)
+  set(ENABLE_DATA_RECOVERY on)
+  add_definitions(-DENABLE_DATA_RECOVERY)
+else()
+  set(ENABLE_DATA_RECOVERY off)
 endif()
 
 ######################################################################
@@ -78,8 +91,10 @@ set(OBSERVABLE_TESTS OFF CACHE BOOL "Compile observable tests")
 add_subdirectory(observable)
 include_directories(observable)
 
-# Disable clip examples
+# Disable clip examples and tests
 set(CLIP_EXAMPLES OFF CACHE BOOL "Compile clip examples")
+set(CLIP_TESTS OFF CACHE BOOL "Compile clip tests")
+set(CLIP_X11_PNG_LIBRARY "${PNG_LIBRARY}")
 add_subdirectory(clip)
 
 # Disable undo tests
@@ -87,7 +102,6 @@ set(UNDO_TESTS OFF CACHE BOOL "Compile undo tests")
 add_subdirectory(undo)
 
 add_subdirectory(cfg)
-add_subdirectory(css)
 add_subdirectory(doc)
 add_subdirectory(filters)
 add_subdirectory(fixmath)
@@ -96,7 +110,8 @@ add_subdirectory(gen)
 add_subdirectory(gfx)
 add_subdirectory(net)
 add_subdirectory(render)
-add_subdirectory(docio)
+add_subdirectory(dio)
+add_subdirectory(ft)
 add_subdirectory(she)
 add_subdirectory(ui)
 
@@ -115,6 +130,10 @@ endif()
 
 if(ENABLE_STEAM)
   add_subdirectory(steam)
+endif()
+
+if(WITH_DESKTOP_INTEGRATION)
+  add_subdirectory(desktop)
 endif()
 
 add_subdirectory(app)
@@ -161,21 +180,25 @@ if(WIN32)
     main/settings.manifest)
 endif()
 
-if(UNIX AND NOT APPLE AND USE_ALLEG4_BACKEND)
-  set(x11_resources main/xpm_icon.c)
+add_executable(aseprite main/main.cpp ${win32_resources})
+if(WIN32 AND ENABLE_UI)
+  set_target_properties(aseprite PROPERTIES WIN32_EXECUTABLE true)
 endif()
-
-add_executable(aseprite WIN32
-  main/main.cpp
-  ${win32_resources}
-  ${x11_resources})
 target_link_libraries(aseprite app-lib ${PLATFORM_LIBS})
 add_dependencies(aseprite copy_data)
 
-if(MSVC AND USE_SKIA_BACKEND)
-  # Add support to expand filename wildcards in argc/argv
-  set_target_properties(aseprite
-    PROPERTIES LINK_FLAGS "-LINK wsetargv.obj -ENTRY:\"wWinMainCRTStartup\"")
+if(MSVC)
+  if(ENABLE_UI)
+    if(USE_SKIA_BACKEND)
+      # Linking with "wsetargv.obj" to add support to expand filename
+      # wildcards in argc/argv.
+      set_target_properties(aseprite
+        PROPERTIES LINK_FLAGS "-LINK wsetargv.obj -ENTRY:\"wWinMainCRTStartup\"")
+    endif()
+  else()
+    set_target_properties(aseprite
+      PROPERTIES LINK_FLAGS "-LINK wsetargv.obj -ENTRY:\"wmainCRTStartup\"")
+  endif()
 endif()
 
 install(TARGETS aseprite
@@ -189,13 +212,17 @@ install(DIRECTORY ../data
 
 if(ENABLE_TESTS)
   include(FindTests)
-
   find_tests(gfx gfx-lib)
   find_tests(doc doc-lib)
   find_tests(render render-lib)
-  find_tests(css css-lib)
   find_tests(ui ui-lib)
+  find_tests(app/cli app-lib)
   find_tests(app/file app-lib)
   find_tests(app app-lib)
   find_tests(. app-lib)
+endif()
+
+if(ENABLE_BENCHMARKS)
+  include(FindBenchmarks)
+  find_benchmarks(doc doc-lib)
 endif()

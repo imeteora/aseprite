@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,19 +8,15 @@
 #define SHE_SURFACE_H_INCLUDED
 #pragma once
 
+#include "base/string.h"
 #include "gfx/color.h"
 #include "gfx/fwd.h"
 #include "she/surface_format.h"
 
 #include <string>
 
-namespace gfx {
-  class Clip;
-}
-
 namespace she {
 
-  class Font;
   class SurfaceLock;
 
   enum class DrawMode {
@@ -37,11 +33,15 @@ namespace she {
     virtual int height() const = 0;
     virtual bool isDirectToScreen() const = 0;
 
-    virtual gfx::Rect getClipBounds() = 0;
-    virtual void setClipBounds(const gfx::Rect& rc) = 0;
-    virtual bool intersectClipRect(const gfx::Rect& rc) = 0;
+    virtual int getSaveCount() const = 0;
+    virtual gfx::Rect getClipBounds() const = 0;
+    virtual void saveClip() = 0;
+    virtual void restoreClip() = 0;
+    virtual bool clipRect(const gfx::Rect& rc) = 0;
 
-    virtual void setDrawMode(DrawMode mode, int param = 0) = 0;
+    virtual void setDrawMode(DrawMode mode, int param = 0,
+                             const gfx::Color a = gfx::ColorNone,
+                             const gfx::Color b = gfx::ColorNone) = 0;
 
     virtual void lock() = 0;
     virtual void unlock() = 0;
@@ -65,10 +65,9 @@ namespace she {
     virtual void scrollTo(const gfx::Rect& rc, int dx, int dy) = 0;
     virtual void drawSurface(const Surface* src, int dstx, int dsty) = 0;
     virtual void drawRgbaSurface(const Surface* src, int dstx, int dsty) = 0;
+    virtual void drawRgbaSurface(const Surface* src, int srcx, int srcy, int dstx, int dsty, int width, int height) = 0;
+    virtual void drawRgbaSurface(const Surface* surface, const gfx::Rect& srcRect, const gfx::Rect& dstRect) = 0;
     virtual void drawColoredRgbaSurface(const Surface* src, gfx::Color fg, gfx::Color bg, const gfx::Clip& clip) = 0;
-
-    virtual void drawChar(Font* font, gfx::Color fg, gfx::Color bg, int x, int y, int chr) = 0;
-    virtual void drawString(Font* font, gfx::Color fg, gfx::Color bg, int x, int y, const std::string& str) = 0;
 
     virtual void applyScale(int scaleFactor) = 0;
     virtual void* nativeHandle() = 0;

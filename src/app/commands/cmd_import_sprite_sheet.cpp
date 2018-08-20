@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,8 +14,9 @@
 #include "app/commands/params.h"
 #include "app/context.h"
 #include "app/context_access.h"
-#include "app/document_access.h"
-#include "app/document_api.h"
+#include "app/doc_access.h"
+#include "app/doc_api.h"
+#include "app/i18n/strings.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
@@ -34,6 +35,7 @@
 #include "doc/palette.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
+#include "render/render.h"
 #include "ui/ui.h"
 
 #include "import_sprite_sheet.xml.h"
@@ -99,7 +101,7 @@ public:
     return closer() == import();
   }
 
-  Document* document() const {
+  Doc* document() const {
     return m_document;
   }
 
@@ -118,12 +120,11 @@ protected:
   }
 
   void onSelectFile() {
-    Document* oldActiveDocument = m_context->activeDocument();
-    Command* openFile = CommandsModule::instance()->getCommandByName(CommandId::OpenFile);
+    Doc* oldActiveDocument = m_context->activeDocument();
+    Command* openFile = Commands::instance()->byId(CommandId::OpenFile());
     Params params;
     params.set("filename", "");
-    openFile->loadParams(params);
-    openFile->execute(m_context);
+    m_context->executeCommand(openFile, params);
 
     // The user have selected another document.
     if (oldActiveDocument != m_context->activeDocument()) {
@@ -189,7 +190,7 @@ protected:
 
 private:
   void selectActiveDocument() {
-    Document* oldDocument = m_document;
+    Doc* oldDocument = m_document;
     m_document = m_context->activeDocument();
 
     // If the user already have selected a file, we have to destroy
@@ -198,7 +199,7 @@ private:
       releaseEditor();
 
       if (m_fileOpened) {
-        DocumentDestroyer destroyer(m_context, oldDocument, 100);
+        DocDestroyer destroyer(m_context, oldDocument, 100);
         destroyer.destroyDocument();
       }
     }
@@ -274,7 +275,7 @@ private:
   }
 
   Context* m_context;
-  Document* m_document;
+  Doc* m_document;
   Editor* m_editor;
   EditorStatePtr m_editorState;
   gfx::Rect m_rect;
@@ -296,9 +297,7 @@ protected:
 };
 
 ImportSpriteSheetCommand::ImportSpriteSheetCommand()
-  : Command("ImportSpriteSheet",
-            "Import Sprite Sheet",
-            CmdRecordableFlag)
+  : Command(CommandId::ImportSpriteSheet(), CmdRecordableFlag)
 {
 }
 
@@ -310,7 +309,7 @@ void ImportSpriteSheetCommand::onExecute(Context* context)
   if (!window.ok())
     return;
 
-  Document* document = window.document();
+  Doc* document = window.document();
   DocumentPreferences* docPref = window.docPref();
   gfx::Rect frameBounds = window.frameBounds();
   bool partialTiles = window.partialTilesValue();
@@ -379,10 +378,7 @@ void ImportSpriteSheetCommand::onExecute(Context* context)
     }
 
     if (animation.size() == 0) {
-      Alert::show("Import Sprite Sheet"
-        "<<The specified rectangle does not create any tile."
-        "<<Select a rectangle inside the sprite region."
-        "||&OK");
+      Alert::show(Strings::alerts_empty_rect_importing_sprite_sheet());
       return;
     }
 
@@ -390,28 +386,28 @@ void ImportSpriteSheetCommand::onExecute(Context* context)
     // operations in a undo-transaction.
     ContextWriter writer(context);
     Transaction transaction(writer.context(), "Import Sprite Sheet", ModifyDocument);
-    DocumentApi api = document->getApi(transaction);
+    DocApi api = document->getApi(transaction);
 
     // Add the layer in the sprite.
-    LayerImage* resultLayer = api.newLayer(sprite, "Sprite Sheet");
+    LayerImage* resultLayer = api.newLayer(sprite->root(), "Sprite Sheet");
 
     // Add all frames+cels to the new layer
     for (size_t i=0; i<animation.size(); ++i) {
       // Create the cel.
-      base::UniquePtr<Cel> resultCel(new Cel(frame_t(i), animation[i]));
+      std::unique_ptr<Cel> resultCel(new Cel(frame_t(i), animation[i]));
 
       // Add the cel in the layer.
-      api.addCel(resultLayer, resultCel);
+      api.addCel(resultLayer, resultCel.get());
       resultCel.release();
     }
 
     // Copy the list of layers (because we will modify it in the iteration).
-    LayerList layers = sprite->folder()->getLayersList();
+    LayerList layers = sprite->root()->layers();
 
     // Remove all other layers
-    for (LayerIterator it=layers.begin(), end=layers.end(); it!=end; ++it) {
-      if (*it != resultLayer)
-        api.removeLayer(*it);
+    for (Layer* child : layers) {
+      if (child != resultLayer)
+        api.removeLayer(child);
     }
 
     // Change the number of frames

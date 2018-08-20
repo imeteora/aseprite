@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -16,7 +16,7 @@
 #include "app/cmd/replace_image.h"
 #include "app/cmd/set_cel_opacity.h"
 #include "app/cmd/set_cel_position.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "doc/cel.h"
 #include "doc/image.h"
 #include "doc/layer.h"
@@ -33,6 +33,7 @@ BackgroundFromLayer::BackgroundFromLayer(Layer* layer)
   ASSERT(layer);
   ASSERT(layer->isVisible());
   ASSERT(layer->isEditable());
+  ASSERT(!layer->isReference());
   ASSERT(layer->sprite() != NULL);
   ASSERT(layer->sprite()->backgroundLayer() == NULL);
 }
@@ -41,7 +42,7 @@ void BackgroundFromLayer::onExecute()
 {
   Layer* layer = this->layer();
   Sprite* sprite = layer->sprite();
-  app::Document* doc = static_cast<app::Document*>(sprite->document());
+  auto doc = static_cast<Doc*>(sprite->document());
   color_t bgcolor = doc->bgColor();
 
   // create a temporary image to draw each frame of the new

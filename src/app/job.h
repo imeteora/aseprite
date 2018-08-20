@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,7 +8,6 @@
 #define APP_JOB_H_INCLUDED
 #pragma once
 
-#include "base/unique_ptr.h"
 #include "ui/alert.h"
 #include "ui/timer.h"
 
@@ -20,7 +19,6 @@ namespace base {
 }
 
 namespace app {
-  class Progress;
 
   class Job {
   public:
@@ -63,8 +61,7 @@ namespace app {
     static void monitor_free(void* data);
 
     base::thread* m_thread;
-    base::UniquePtr<ui::Timer> m_timer;
-    Progress* m_progress;
+    std::unique_ptr<ui::Timer> m_timer;
     base::mutex* m_mutex;
     ui::AlertPtr m_alert_window;
     double m_last_progress;

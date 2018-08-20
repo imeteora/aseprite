@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -34,6 +34,7 @@ namespace app {
 
     void translate(const gfx::Point& delta);
     void rotate(double angle);
+    void flip(doc::algorithm::FlipType flipType);
 
     // EditorState
     virtual void onEnterState(Editor* editor) override;
@@ -72,6 +73,7 @@ namespace app {
     bool isActiveEditor() const;
 
     void removeAsEditorObserver();
+    void removePixelsMovement();
 
     // Helper member to move/translate selection and pixels.
     PixelsMovementPtr m_pixelsMovement;
@@ -82,9 +84,9 @@ namespace app {
     // used to remove the dragged image).
     bool m_discarded;
 
-    obs::scoped_connection m_ctxConn;
-    obs::scoped_connection m_opaqueConn;
-    obs::scoped_connection m_transparentConn;
+    obs::connection m_ctxConn;
+    obs::connection m_opaqueConn;
+    obs::connection m_transparentConn;
   };
 
 } // namespace app

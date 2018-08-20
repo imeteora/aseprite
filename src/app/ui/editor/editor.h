@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,23 +8,25 @@
 #define APP_UI_EDITOR_H_INCLUDED
 #pragma once
 
-#include "app/app_render.h"
 #include "app/color.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/doc_observer.h"
 #include "app/pref/preferences.h"
 #include "app/tools/active_tool_observer.h"
 #include "app/tools/tool_loop_modifiers.h"
 #include "app/ui/color_source.h"
 #include "app/ui/editor/brush_preview.h"
+#include "app/ui/editor/editor_hit.h"
 #include "app/ui/editor/editor_observers.h"
 #include "app/ui/editor/editor_state.h"
 #include "app/ui/editor/editor_states_history.h"
-#include "doc/document_observer.h"
+#include "doc/algorithm/flip_type.h"
 #include "doc/frame.h"
 #include "doc/image_buffer.h"
 #include "filters/tiled_mode.h"
 #include "gfx/fwd.h"
 #include "obs/connection.h"
+#include "render/projection.h"
 #include "render/zoom.h"
 #include "ui/base.h"
 #include "ui/cursor_type.h"
@@ -34,22 +36,24 @@
 
 namespace doc {
   class Layer;
-  class Site;
   class Sprite;
 }
 namespace gfx {
   class Region;
 }
 namespace ui {
+  class Cursor;
   class Graphics;
   class View;
 }
 
 namespace app {
   class Context;
-  class DocumentView;
+  class DocView;
   class EditorCustomizationDelegate;
+  class EditorRender;
   class PixelsMovement;
+  class Site;
 
   namespace tools {
     class Ink;
@@ -61,10 +65,10 @@ namespace app {
     ScrollDir,
   };
 
-  class Editor : public ui::Widget
-               , public doc::DocumentObserver
-               , public IColorSource
-               , public tools::ActiveToolObserver {
+  class Editor : public ui::Widget,
+                 public app::DocObserver,
+                 public IColorSource,
+                 public tools::ActiveToolObserver {
   public:
     enum EditorFlags {
       kNoneFlag = 0,
@@ -74,12 +78,16 @@ namespace app {
       kShowOutside = 8,
       kShowDecorators = 16,
       kShowSymmetryLine = 32,
+      kShowSlices = 64,
+      kUseNonactiveLayersOpacityWhenEnabled = 128,
       kDefaultEditorFlags = (kShowGrid |
                              kShowMask |
                              kShowOnionskin |
                              kShowOutside |
                              kShowDecorators |
-                             kShowSymmetryLine)
+                             kShowSymmetryLine |
+                             kShowSlices |
+                             kUseNonactiveLayersOpacityWhenEnabled)
     };
 
     enum class ZoomBehavior {
@@ -87,15 +95,15 @@ namespace app {
       MOUSE,                    // Zoom from cursor
     };
 
-    Editor(Document* document, EditorFlags flags = kDefaultEditorFlags);
+    Editor(Doc* document, EditorFlags flags = kDefaultEditorFlags);
     ~Editor();
 
     static void destroyEditorSharedInternals();
 
     bool isActive() const;
 
-    DocumentView* getDocumentView() { return m_docView; }
-    void setDocumentView(DocumentView* docView) { m_docView = docView; }
+    DocView* getDocView() { return m_docView; }
+    void setDocView(DocView* docView) { m_docView = docView; }
 
     // Returns the current state.
     EditorStatePtr getState() { return m_state; }
@@ -118,7 +126,7 @@ namespace app {
     EditorFlags editorFlags() const { return m_flags; }
     void setEditorFlags(EditorFlags flags) { m_flags = flags; }
 
-    Document* document() { return m_document; }
+    Doc* document() { return m_document; }
     Sprite* sprite() { return m_sprite; }
     Layer* layer() { return m_layer; }
     frame_t frame() { return m_frame; }
@@ -130,7 +138,8 @@ namespace app {
     void setLayer(const Layer* layer);
     void setFrame(frame_t frame);
 
-    const render::Zoom& zoom() const { return m_zoom; }
+    const render::Projection& projection() const { return m_proj; }
+    const render::Zoom& zoom() const { return m_proj.zoom(); }
     const gfx::Point& padding() const { return m_padding; }
 
     void setZoom(const render::Zoom& zoom);
@@ -144,7 +153,6 @@ namespace app {
 
     // Draws the sprite taking care of the whole clipping region.
     void drawSpriteClipped(const gfx::Region& updateRegion);
-    void drawSpriteUnclippedRect(ui::Graphics* g, const gfx::Rect& rc);
 
     void flashCurrentLayer();
 
@@ -154,6 +162,7 @@ namespace app {
     gfx::PointF editorToScreenF(const gfx::PointF& pt);
     gfx::Rect screenToEditor(const gfx::Rect& rc);
     gfx::Rect editorToScreen(const gfx::Rect& rc);
+    gfx::RectF editorToScreenF(const gfx::RectF& rc);
 
     void add_observer(EditorObserver* observer);
     void remove_observer(EditorObserver* observer);
@@ -164,8 +173,16 @@ namespace app {
       return m_customizationDelegate;
     }
 
+    // Returns the visible area of the viewport in sprite coordinates.
+    gfx::Rect getViewportBounds();
+
     // Returns the visible area of the active sprite.
     gfx::Rect getVisibleSpriteBounds();
+
+    gfx::Size canvasSize() const;
+    gfx::Point mainTilePosition() const;
+    void expandRegionByTiledMode(gfx::Region& rgn,
+                                 const bool withProj) const;
 
     // Changes the scroll to see the given point as the center of the editor.
     void centerInSpritePoint(const gfx::Point& spritePos);
@@ -180,16 +197,21 @@ namespace app {
 
     tools::ToolLoopModifiers getToolLoopModifiers() const { return m_toolLoopModifiers; }
     bool isAutoSelectLayer() const;
-    bool isSecondaryButton() const { return m_secondaryButton; }
-
-    gfx::Point lastDrawingPosition() const { return m_lastDrawingPosition; }
-    void setLastDrawingPosition(const gfx::Point& pos);
 
     // Returns true if we are able to draw in the current doc/sprite/layer/cel.
     bool canDraw();
 
     // Returns true if the cursor is inside the active mask/selection.
     bool isInsideSelection();
+
+    // Returns true if the cursor is inside the selection and the
+    // selection mode is the default one which prioritizes and easy
+    // way to move the selection.
+    bool canStartMovingSelectionPixels();
+
+    // Returns the element that will be modified if the mouse is used
+    // in the given position.
+    EditorHit calcHit(const gfx::Point& mouseScreenPos);
 
     void setZoomAndCenterInMouse(const render::Zoom& zoom,
       const gfx::Point& mousePos, ZoomBehavior zoomBehavior);
@@ -198,10 +220,21 @@ namespace app {
 
     void startSelectionTransformation(const gfx::Point& move, double angle);
 
+    void startFlipTransformation(doc::algorithm::FlipType flipType);
+
     // Used by EditorView to notify changes in the view's scroll
     // position.
     void notifyScrollChanged();
     void notifyZoomChanged();
+
+    // Returns true and changes to ScrollingState when "msg" says "the
+    // user wants to scroll". Same for zoom.
+    bool checkForScroll(ui::MouseMessage* msg);
+    bool checkForZoom(ui::MouseMessage* msg);
+
+    // Start Scrolling/ZoomingState
+    void startScrollingState(ui::MouseMessage* msg);
+    void startZoomingState(ui::MouseMessage* msg);
 
     // Animation control
     void play(const bool playOnce,
@@ -217,20 +250,26 @@ namespace app {
     void setAnimationSpeedMultiplier(double speed);
 
     // Functions to be used in EditorState::onSetCursor()
-    void showMouseCursor(ui::CursorType cursorType);
+    void showMouseCursor(ui::CursorType cursorType,
+                         const ui::Cursor* cursor = nullptr);
     void showBrushPreview(const gfx::Point& pos);
 
     // Gets the brush preview controller.
     BrushPreview& brushPreview() { return m_brushPreview; }
 
-    // Returns the buffer used to render editor viewports.
-    // E.g. It can be re-used by PreviewCommand
-    static ImageBufferPtr getRenderImageBuffer();
-
-    AppRender& renderEngine() { return m_renderEngine; }
+    static EditorRender& renderEngine() { return *m_renderEngine; }
 
     // IColorSource
     app::Color getColorByPosition(const gfx::Point& pos) override;
+
+    void setTagFocusBand(int value) { m_tagFocusBand = value; }
+    int tagFocusBand() const { return m_tagFocusBand; }
+
+    // Returns true if the Shift key to draw straight lines with a
+    // freehand tool is pressed.
+    bool startStraightLineWithFreehandTool(const ui::MouseMessage* msg);
+
+    static void registerCommands();
 
   protected:
     bool onProcessMessage(ui::Message* msg) override;
@@ -240,8 +279,17 @@ namespace app {
     void onInvalidateRegion(const gfx::Region& region) override;
     void onFgColorChange();
     void onContextBarBrushChange();
+    void onTiledModeBeforeChange();
+    void onTiledModeChange();
     void onShowExtrasChange();
-    void onExposeSpritePixels(doc::DocumentEvent& ev) override;
+
+    // DocObserver impl
+    void onExposeSpritePixels(DocEvent& ev) override;
+    void onSpritePixelRatioChanged(DocEvent& ev) override;
+    void onBeforeRemoveLayer(DocEvent& ev) override;
+    void onRemoveCel(DocEvent& ev) override;
+    void onAddFrameTag(DocEvent& ev) override;
+    void onRemoveFrameTag(DocEvent& ev) override;
 
     // ActiveToolObserver impl
     void onActiveToolChange(tools::Tool* tool) override;
@@ -252,10 +300,26 @@ namespace app {
     void updateToolByTipProximity(ui::PointerType pointerType);
     void updateToolLoopModifiersIndicators();
 
+    void drawBackground(ui::Graphics* g);
+    void drawSpriteUnclippedRect(ui::Graphics* g, const gfx::Rect& rc);
     void drawMaskSafe();
     void drawMask(ui::Graphics* g);
     void drawGrid(ui::Graphics* g, const gfx::Rect& spriteBounds, const gfx::Rect& gridBounds,
-      const app::Color& color, int alpha);
+                  const app::Color& color, int alpha);
+    void drawSlices(ui::Graphics* g);
+    void drawCelBounds(ui::Graphics* g, const Cel* cel, const gfx::Color color);
+    void drawCelGuides(ui::Graphics* g, const Cel* cel, const Cel* mouseCel);
+    void drawCelHGuide(ui::Graphics* g,
+                       const int sprX1, const int sprX2,
+                       const int scrX1, const int scrX2, const int scrY,
+                       const gfx::Rect& scrCelBounds, const gfx::Rect& scrCmpBounds,
+                       const int dottedX);
+    void drawCelVGuide(ui::Graphics* g,
+                       const int sprY1, const int sprY2,
+                       const int scrY1, const int scrY2, const int scrX,
+                       const gfx::Rect& scrCelBounds, const gfx::Rect& scrCmpBounds,
+                       const int dottedY);
+    gfx::Rect getCelScreenBounds(const Cel* cel);
 
     void setCursor(const gfx::Point& mouseScreenPos);
 
@@ -264,9 +328,11 @@ namespace app {
     // routine.
     void drawOneSpriteUnclippedRect(ui::Graphics* g, const gfx::Rect& rc, int dx, int dy);
 
-    gfx::Point calcExtraPadding(const render::Zoom& zoom);
+    gfx::Point calcExtraPadding(const render::Projection& proj);
 
     void invalidateIfActive();
+    bool showAutoCelGuides();
+    void updateAutoCelGuides(ui::Message* msg);
 
     // Stack of states. The top element in the stack is the current state (m_state).
     EditorStatesHistory m_statesHistory;
@@ -279,19 +345,15 @@ namespace app {
     // Current decorator (to draw extra UI elements).
     EditorDecorator* m_decorator;
 
-    Document* m_document;         // Active document in the editor
+    Doc* m_document;              // Active document in the editor
     Sprite* m_sprite;             // Active sprite in the editor
     Layer* m_layer;               // Active layer in the editor
     frame_t m_frame;              // Active frame in the editor
-    render::Zoom m_zoom;          // Zoom in the editor
+    render::Projection m_proj;    // Zoom/pixel ratio in the editor
     DocumentPreferences& m_docPref;
 
     // Brush preview
     BrushPreview m_brushPreview;
-
-    // Position used to draw straight lines using freehand tools + Shift key
-    // (EditorCustomizationDelegate::isStraightLineFromLastPoint() modifier)
-    gfx::Point m_lastDrawingPosition;
 
     tools::ToolLoopModifiers m_toolLoopModifiers;
 
@@ -307,6 +369,7 @@ namespace app {
     obs::scoped_connection m_showExtrasConn;
 
     // Slots listeing document preferences.
+    obs::scoped_connection m_tiledConnBefore;
     obs::scoped_connection m_tiledConn;
     obs::scoped_connection m_gridConn;
     obs::scoped_connection m_pixelGridConn;
@@ -321,7 +384,7 @@ namespace app {
     // TODO This field shouldn't be here. It should be removed when
     // editors.cpp are finally replaced with a fully funtional Workspace
     // widget.
-    DocumentView* m_docView;
+    DocView* m_docView;
 
     gfx::Point m_oldPos;
 
@@ -333,13 +396,27 @@ namespace app {
     double m_aniSpeed;
     bool m_isPlaying;
 
-    static doc::ImageBufferPtr m_renderBuffer;
+    // The Cel that is above the mouse if the Ctrl (or Cmd) key is
+    // pressed (move key).
+    Cel* m_showGuidesThisCel;
+
+    // Focused tag band. Used by the Timeline to save/restore the
+    // focused tag band for each sprite/editor.
+    int m_tagFocusBand;
+
+    // Used to restore scroll when the tiled mode is changed.
+    // TODO could we avoid one extra field just to do this?
+    gfx::Point m_oldMainTilePos;
+
+#if ENABLE_DEVMODE
+    gfx::Rect m_perfInfoBounds;
+#endif
 
     // The render engine must be shared between all editors so when a
     // DrawingState is being used in one editor, other editors for the
     // same document can show the same preview image/stroke being drawn
     // (search for Render::setPreviewImage()).
-    static AppRender m_renderEngine;
+    static EditorRender* m_renderEngine;
   };
 
   ui::WidgetType editor_type();

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,9 +11,8 @@
 #include "app/app.h"
 #include "app/commands/command.h"
 #include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
 #include "app/modules/gui.h"
-#include "app/ui/timeline.h"
 #include "app/transaction.h"
 #include "doc/sprite.h"
 #include "ui/ui.h"
@@ -31,9 +30,7 @@ protected:
 };
 
 RemoveFrameCommand::RemoveFrameCommand()
-  : Command("RemoveFrame",
-            "Remove Frame",
-            CmdRecordableFlag)
+  : Command(CommandId::RemoveFrame(), CmdRecordableFlag)
 {
 }
 
@@ -49,19 +46,15 @@ bool RemoveFrameCommand::onEnabled(Context* context)
 void RemoveFrameCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
   {
     Transaction transaction(writer.context(), "Remove Frame");
-    DocumentApi api = document->getApi(transaction);
-
-    // TODO the range of selected frames should be in doc::Site.
-    auto range = App::instance()->timeline()->range();
-    if (range.enabled()) {
-      for (frame_t frame = range.frameEnd(),
-             begin = range.frameBegin()-1;
-           frame != begin;
-           --frame) {
+    DocApi api = document->getApi(transaction);
+    const Site* site = writer.site();
+    if (site->inTimeline() &&
+        !site->selectedFrames().empty()) {
+      for (frame_t frame : site->selectedFrames().reversed()) {
         api.removeFrame(sprite, frame);
       }
     }

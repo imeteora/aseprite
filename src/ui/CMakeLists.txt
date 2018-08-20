@@ -1,5 +1,5 @@
-# ASEPRITE
-# Copyright (C) 2001-2016  David Capello
+# Aseprite UI Library
+# Copyright (C) 2001-2018  David Capello
 
 if(WIN32)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -13,7 +13,6 @@ add_library(ui-lib
   combobox.cpp
   component.cpp
   cursor.cpp
-  custom_label.cpp
   entry.cpp
   event.cpp
   fit_bounds.cpp
@@ -45,6 +44,7 @@ add_library(ui-lib
   size_hint_event.cpp
   slider.cpp
   splitter.cpp
+  style.cpp
   system.cpp
   textbox.cpp
   theme.cpp
@@ -57,7 +57,6 @@ add_library(ui-lib
 
 target_link_libraries(ui-lib
   she
-  clip
   gfx-lib
   laf-base
   obs

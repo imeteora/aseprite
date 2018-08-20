@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,13 +8,14 @@
 #include "config.h"
 #endif
 
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/ini_file.h"
 #include "app/pref/preferences.h"
 #include "app/resource_finder.h"
 #include "app/tools/ink.h"
 #include "app/tools/tool.h"
 #include "doc/sprite.h"
+#include "she/system.h"
 
 namespace app {
 
@@ -34,6 +35,14 @@ Preferences::Preferences()
   singleton = this;
 
   load();
+
+  // Hide the menu bar depending on:
+  // 1. the native menu bar is available
+  // 2. this is the first run of the program
+  if (she::instance()->menus() &&
+      updater.uuid().empty()) {
+    general.showMenuBar(false);
+  }
 }
 
 Preferences::~Preferences()
@@ -68,6 +77,11 @@ void Preferences::save()
   flush_config_file();
 }
 
+bool Preferences::isSet(OptionBase& opt) const
+{
+  return (get_config_string(opt.section(), opt.id(), nullptr) != nullptr);
+}
+
 ToolPreferences& Preferences::tool(tools::Tool* tool)
 {
   ASSERT(tool != NULL);
@@ -92,7 +106,7 @@ ToolPreferences& Preferences::tool(tools::Tool* tool)
   }
 }
 
-DocumentPreferences& Preferences::document(const app::Document* doc)
+DocumentPreferences& Preferences::document(const Doc* doc)
 {
   auto it = m_docs.find(doc);
   if (it != m_docs.end()) {
@@ -124,11 +138,11 @@ DocumentPreferences& Preferences::document(const app::Document* doc)
   }
 }
 
-void Preferences::removeDocument(doc::Document* doc)
+void Preferences::removeDocument(Doc* doc)
 {
-  ASSERT(dynamic_cast<app::Document*>(doc));
+  ASSERT(doc);
 
-  auto it = m_docs.find(static_cast<app::Document*>(doc));
+  auto it = m_docs.find(doc);
   if (it != m_docs.end()) {
     serializeDocPref(it->first, it->second, true);
     delete it->second;
@@ -136,12 +150,12 @@ void Preferences::removeDocument(doc::Document* doc)
   }
 }
 
-void Preferences::onRemoveDocument(doc::Document* doc)
+void Preferences::onRemoveDocument(Doc* doc)
 {
   removeDocument(doc);
 }
 
-std::string Preferences::docConfigFileName(const app::Document* doc)
+std::string Preferences::docConfigFileName(const Doc* doc)
 {
   if (!doc)
     return "";
@@ -157,29 +171,38 @@ std::string Preferences::docConfigFileName(const app::Document* doc)
   return rf.getFirstOrCreateDefault();
 }
 
-void Preferences::serializeDocPref(const app::Document* doc, app::DocumentPreferences* docPref, bool save)
+void Preferences::serializeDocPref(const Doc* doc, app::DocumentPreferences* docPref, bool save)
 {
-  bool specific_file = false;
+  bool flush_config = false;
 
   if (doc) {
-    if (doc->isAssociatedToFile()) {
-      push_config_state();
-      set_config_file(docConfigFileName(doc).c_str());
-      specific_file = true;
-    }
-    else if (save)
+    // We do nothing if the document isn't associated to a file and we
+    // want to save its specific preferences.
+    if (save && !doc->isAssociatedToFile())
       return;
+
+    // We always push a new configuration file in the stack to avoid
+    // modifying the default preferences when a document in "doc" is
+    // specified.
+    push_config_state();
+    if (doc->isAssociatedToFile()) {
+      set_config_file(docConfigFileName(doc).c_str());
+      flush_config = true;
+    }
   }
 
-  if (save)
+  if (save) {
     docPref->save();
+  }
   else {
     // Load default preferences, or preferences from .ini file.
     docPref->load();
   }
 
-  if (specific_file) {
-    flush_config_file();
+  if (doc) {
+    if (flush_config)
+      flush_config_file();
+
     pop_config_state();
   }
 }

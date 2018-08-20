@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -16,16 +16,15 @@
 #include "app/cmd/copy_region.h"
 #include "app/cmd/patch_cel.h"
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/site.h"
 #include "app/transaction.h"
 #include "app/util/range_utils.h"
-#include "base/unique_ptr.h"
 #include "doc/algorithm/shrink_bounds.h"
 #include "doc/cel.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/primitives.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
 
 namespace {
@@ -60,7 +59,7 @@ namespace app {
 ExpandCelCanvas::ExpandCelCanvas(
   Site site, Layer* layer,
   TiledMode tiledMode, Transaction& transaction, Flags flags)
-  : m_document(static_cast<app::Document*>(site.document()))
+  : m_document(site.document())
   , m_sprite(site.sprite())
   , m_layer(layer)
   , m_frame(site.frame())
@@ -160,20 +159,27 @@ void ExpandCelCanvas::commit()
     validateDestCanvas(gfx::Region(m_bounds));
 
     // We can temporary remove the cel.
-    ASSERT(m_layer->isImage());
-    static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
+    if (m_layer->isImage()) {
+      static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
 
-    // Add a copy of m_dstImage in the sprite's image stock
-    gfx::Rect trimBounds = getTrimDstImageBounds();
-    if (!trimBounds.isEmpty()) {
-      ImageRef newImage(trimDstImage(trimBounds));
-      ASSERT(newImage);
+      // Add a copy of m_dstImage in the sprite's image stock
+      gfx::Rect trimBounds = getTrimDstImageBounds();
+      if (!trimBounds.isEmpty()) {
+        ImageRef newImage(trimDstImage(trimBounds));
+        ASSERT(newImage);
 
-      m_cel->data()->setImage(newImage);
-      m_cel->setPosition(m_cel->position() + trimBounds.origin());
+        m_cel->data()->setImage(newImage);
+        m_cel->setPosition(m_cel->position() + trimBounds.origin());
 
-      // And finally we add the cel again in the layer.
-      m_transaction.execute(new cmd::AddCel(m_layer, m_cel));
+        // And finally we add the cel again in the layer.
+        m_transaction.execute(new cmd::AddCel(m_layer, m_cel));
+      }
+    }
+    // We are selecting inside a layer group...
+    else {
+      // Just delete the created layer
+      delete m_cel;
+      m_cel = nullptr;
     }
   }
   else if (m_celImage) {

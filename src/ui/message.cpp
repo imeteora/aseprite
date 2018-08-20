@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -21,10 +21,9 @@ namespace ui {
 
 Message::Message(MessageType type, KeyModifiers modifiers)
   : m_type(type)
-  , m_used(false)
-  , m_fromFilter(false)
+  , m_flags(0)
 {
-  if (modifiers == kKeyUninitializedModifier)
+  if (modifiers == kKeyUninitializedModifier && she::instance())
     m_modifiers = she::instance()->keyModifiers();
   else
     m_modifiers = modifiers;
@@ -77,9 +76,8 @@ KeyMessage::KeyMessage(MessageType type,
   , m_unicodeChar(unicodeChar)
   , m_repeat(repeat)
   , m_isDead(false)
-  , m_propagate_to_children(false)
-  , m_propagate_to_parent(true)
 {
+  setPropagateToParent(true);
 }
 
 } // namespace ui

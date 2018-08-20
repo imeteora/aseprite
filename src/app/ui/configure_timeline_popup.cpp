@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,19 +14,21 @@
 #include "app/commands/commands.h"
 #include "app/context.h"
 #include "app/context_access.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/find_widget.h"
 #include "app/load_widget.h"
 #include "app/loop_tag.h"
 #include "app/transaction.h"
 #include "app/ui/main_window.h"
-#include "app/ui/timeline.h"
+#include "app/ui/timeline/timeline.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
 #include "base/scoped_value.h"
 #include "ui/box.h"
 #include "ui/button.h"
+#include "ui/manager.h"
 #include "ui/message.h"
+#include "ui/scale.h"
 #include "ui/slider.h"
 #include "ui/theme.h"
 
@@ -40,6 +42,11 @@ ConfigureTimelinePopup::ConfigureTimelinePopup()
   : PopupWindow("Timeline Settings", ClickBehavior::CloseOnClickInOtherWindow)
   , m_lockUpdates(false)
 {
+  // TODO we should add a new hot region to automatically close the
+  //      popup if the mouse is moved outside or find other kind of
+  //      dialog/window
+  setHotRegion(gfx::Region(manager()->bounds())); // for the color selector
+
   setAutoRemap(false);
   setBorder(gfx::Border(4*guiscale()));
 
@@ -57,9 +64,18 @@ ConfigureTimelinePopup::ConfigureTimelinePopup()
   m_box->currentLayer()->Click.connect(base::Bind<void>(&ConfigureTimelinePopup::onCurrentLayerChange, this));
   m_box->behind()->Click.connect(base::Bind<void>(&ConfigureTimelinePopup::onPositionChange, this));
   m_box->infront()->Click.connect(base::Bind<void>(&ConfigureTimelinePopup::onPositionChange, this));
+
+  m_box->zoom()->Change.connect(base::Bind<void>(&ConfigureTimelinePopup::onZoomChange, this));
+  m_box->thumbEnabled()->Click.connect(base::Bind<void>(&ConfigureTimelinePopup::onThumbEnabledChange, this));
+  m_box->thumbOverlayEnabled()->Click.connect(base::Bind<void>(&ConfigureTimelinePopup::onThumbOverlayEnabledChange, this));
+  m_box->thumbOverlaySize()->Change.connect(base::Bind<void>(&ConfigureTimelinePopup::onThumbOverlaySizeChange, this));
+
+  const bool visibleThumb = docPref().thumbnails.enabled();
+  m_box->thumbHSeparator()->setVisible(visibleThumb);
+  m_box->thumbBox()->setVisible(visibleThumb);
 }
 
-app::Document* ConfigureTimelinePopup::doc()
+Doc* ConfigureTimelinePopup::doc()
 {
   return UIContext::instance()->activeDocument();
 }
@@ -116,6 +132,20 @@ void ConfigureTimelinePopup::updateWidgetsFromCurrentSettings()
       m_box->infront()->setSelected(true);
       break;
   }
+
+  const bool visibleThumb = docPref.thumbnails.enabled();
+
+  m_box->zoom()->setValue(int(docPref.thumbnails.zoom())); // TODO add a slider for floating points
+  m_box->thumbEnabled()->setSelected(visibleThumb);
+  m_box->thumbHSeparator()->setVisible(visibleThumb);
+  m_box->thumbBox()->setVisible(visibleThumb);
+  m_box->thumbOverlayEnabled()->setSelected(docPref.thumbnails.overlayEnabled());
+  m_box->thumbOverlaySize()->setValue(docPref.thumbnails.overlaySize());
+
+  gfx::Rect prevBounds = bounds();
+  setBounds(gfx::Rect(gfx::Point(bounds().x, bounds().y), sizeHint()));
+  manager()->invalidateRect(prevBounds);
+  invalidate();
 }
 
 bool ConfigureTimelinePopup::onProcessMessage(ui::Message* msg)
@@ -125,7 +155,6 @@ bool ConfigureTimelinePopup::onProcessMessage(ui::Message* msg)
     case kOpenMessage: {
       updateWidgetsFromCurrentSettings();
       break;
-
     }
   }
   return PopupWindow::onProcessMessage(msg);
@@ -206,6 +235,27 @@ void ConfigureTimelinePopup::onPositionChange()
   docPref().onionskin.position(m_box->behind()->isSelected() ?
                                render::OnionskinPosition::BEHIND:
                                render::OnionskinPosition::INFRONT);
+}
+
+void ConfigureTimelinePopup::onZoomChange()
+{
+  docPref().thumbnails.zoom(m_box->zoom()->getValue());
+}
+
+void ConfigureTimelinePopup::onThumbEnabledChange()
+{
+  docPref().thumbnails.enabled(m_box->thumbEnabled()->isSelected());
+  updateWidgetsFromCurrentSettings();
+}
+
+void ConfigureTimelinePopup::onThumbOverlayEnabledChange()
+{
+  docPref().thumbnails.overlayEnabled(m_box->thumbOverlayEnabled()->isSelected());
+}
+
+void ConfigureTimelinePopup::onThumbOverlaySizeChange()
+{
+  docPref().thumbnails.overlaySize(m_box->thumbOverlaySize()->getValue());
 }
 
 } // namespace app

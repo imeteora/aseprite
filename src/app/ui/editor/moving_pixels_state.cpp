@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -35,7 +35,6 @@
 #include "app/util/clipboard.h"
 #include "base/bind.h"
 #include "base/pi.h"
-#include "base/unique_ptr.h"
 #include "doc/algorithm/flip_image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -52,7 +51,8 @@ namespace app {
 using namespace ui;
 
 MovingPixelsState::MovingPixelsState(Editor* editor, MouseMessage* msg, PixelsMovementPtr pixelsMovement, HandleType handle)
-  : m_editor(editor)
+  : m_pixelsMovement(pixelsMovement)
+  , m_editor(editor)
   , m_observingEditor(false)
   , m_discarded(false)
 {
@@ -62,8 +62,6 @@ MovingPixelsState::MovingPixelsState(Editor* editor, MouseMessage* msg, PixelsMo
   //ASSERT(!editor->getCurrentEditorInk()->isSelection());
 
   UIContext* context = UIContext::instance();
-
-  m_pixelsMovement = pixelsMovement;
 
   if (handle != NoHandle) {
     gfx::Point pt = editor->screenToEditor(msg->position());
@@ -111,9 +109,9 @@ MovingPixelsState::~MovingPixelsState()
   contextBar->remove_observer(this);
   contextBar->updateForActiveTool();
 
-  m_pixelsMovement.reset(NULL);
-
+  removePixelsMovement();
   removeAsEditorObserver();
+
   m_editor->manager()->removeMessageFilter(kKeyDownMessage, m_editor);
   m_editor->manager()->removeMessageFilter(kKeyUpMessage, m_editor);
 
@@ -125,7 +123,7 @@ void MovingPixelsState::translate(const gfx::Point& delta)
   if (m_pixelsMovement->isDragging())
     m_pixelsMovement->dropImageTemporarily();
 
-  m_pixelsMovement->catchImageAgain(gfx::Point(0, 0), MoveHandle);
+  m_pixelsMovement->catchImageAgain(gfx::Point(0, 0), MovePixelsHandle);
   m_pixelsMovement->moveImage(delta, PixelsMovement::NormalMovement);
   m_pixelsMovement->dropImageTemporarily();
 }
@@ -133,6 +131,11 @@ void MovingPixelsState::translate(const gfx::Point& delta)
 void MovingPixelsState::rotate(double angle)
 {
   m_pixelsMovement->rotate(angle);
+}
+
+void MovingPixelsState::flip(doc::algorithm::FlipType flipType)
+{
+  m_pixelsMovement->flipImage(flipType);
 }
 
 void MovingPixelsState::onEnterState(Editor* editor)
@@ -160,7 +163,7 @@ EditorState::LeaveAction MovingPixelsState::onLeaveState(Editor* editor, EditorS
       try {
         m_pixelsMovement->dropImage();
       }
-      catch (const LockedDocumentException& ex) {
+      catch (const LockedDocException& ex) {
         // This is one of the worst possible scenarios. We want to
         // drop pixels because we're leaving this state (e.g. the user
         // changed the current frame/layer, so we came from
@@ -176,7 +179,7 @@ EditorState::LeaveAction MovingPixelsState::onLeaveState(Editor* editor, EditorS
 
     editor->document()->resetTransformation();
 
-    m_pixelsMovement.reset(NULL);
+    removePixelsMovement();
 
     editor->releaseMouse();
 
@@ -233,28 +236,31 @@ bool MovingPixelsState::onMouseDown(Editor* editor, MouseMessage* msg)
   // with a couple of Editors, in one is moving pixels and the other
   // one not.
   UIContext* ctx = UIContext::instance();
-  ctx->setActiveView(editor->getDocumentView());
+  ctx->setActiveView(editor->getDocView());
 
   ContextBar* contextBar = App::instance()->contextBar();
   contextBar->updateForMovingPixels();
 
   // Start scroll loop
-  if (checkForScroll(editor, msg) || checkForZoom(editor, msg))
+  if (editor->checkForScroll(msg) ||
+      editor->checkForZoom(msg))
     return true;
 
   // Call the eyedropper command
   tools::Ink* clickedInk = editor->getCurrentEditorInk();
   if (clickedInk->isEyedropper()) {
-    callEyedropper(editor);
+    callEyedropper(editor, msg);
     return true;
   }
 
   Decorator* decorator = static_cast<Decorator*>(editor->decorator());
-  Document* document = editor->document();
+  Doc* document = editor->document();
 
   // Transform selected pixels
   if (document->isMaskVisible() &&
-      decorator->getTransformHandles(editor)) {
+      decorator->getTransformHandles(editor) &&
+      (!Preferences::instance().selection.modifiersDisableHandles() ||
+       msg->modifiers() == kKeyNoneModifier)) {
     TransformHandles* transfHandles = decorator->getTransformHandles(editor);
 
     // Get the handle covered by the mouse.
@@ -286,7 +292,7 @@ bool MovingPixelsState::onMouseDown(Editor* editor, MouseMessage* msg)
 
     // Re-catch the image
     m_pixelsMovement->catchImageAgain(
-      editor->screenToEditor(msg->position()), MoveHandle);
+      editor->screenToEditor(msg->position()), MovePixelsHandle);
 
     editor->captureMouse();
     return true;
@@ -332,7 +338,7 @@ bool MovingPixelsState::onMouseMove(Editor* editor, MouseMessage* msg)
     // Get the customization for the pixels movement (snap to grid, angle snap, etc.).
     KeyContext keyContext = KeyContext::Normal;
     switch (m_pixelsMovement->handle()) {
-      case MoveHandle:
+      case MovePixelsHandle:
         keyContext = KeyContext::TranslatingSelection;
         break;
       case ScaleNWHandle:
@@ -421,7 +427,7 @@ bool MovingPixelsState::onKeyDown(Editor* editor, KeyMessage* msg)
 
     // The escape key drop pixels and deselect the mask.
     if (msg->scancode() == kKeyEsc) { // TODO make this key customizable
-      Command* cmd = CommandsModule::instance()->getCommandByName(CommandId::DeselectMask);
+      Command* cmd = Commands::instance()->byId(CommandId::DeselectMask());
       UIContext::instance()->executeCommand(cmd);
     }
 
@@ -496,24 +502,24 @@ void MovingPixelsState::onBeforeCommandExecution(CommandExecutionEvent& ev)
   }
   // Don't drop pixels if the user zooms/scrolls/picks a color
   // using commands.
-  else if ((command->id() == CommandId::Zoom) ||
-           (command->id() == CommandId::Scroll) ||
-           (command->id() == CommandId::Eyedropper) ||
+  else if ((command->id() == CommandId::Zoom()) ||
+           (command->id() == CommandId::Scroll()) ||
+           (command->id() == CommandId::Eyedropper()) ||
            // DiscardBrush is used by Eyedropper command
-           (command->id() == CommandId::DiscardBrush)) {
+           (command->id() == CommandId::DiscardBrush())) {
     // Do not drop pixels
     return;
   }
   // Intercept the "Cut" or "Copy" command to handle them locally
   // with the current m_pixelsMovement data.
-  else if (command->id() == CommandId::Cut ||
-           command->id() == CommandId::Copy ||
-           command->id() == CommandId::Clear) {
+  else if (command->id() == CommandId::Cut() ||
+           command->id() == CommandId::Copy() ||
+           command->id() == CommandId::Clear()) {
     // Copy the floating image to the clipboard on Cut/Copy.
-    if (command->id() != CommandId::Clear) {
-      Document* document = m_editor->document();
-      base::UniquePtr<Image> floatingImage;
-      base::UniquePtr<Mask> floatingMask;
+    if (command->id() != CommandId::Clear()) {
+      Doc* document = m_editor->document();
+      std::unique_ptr<Image> floatingImage;
+      std::unique_ptr<Mask> floatingMask;
       m_pixelsMovement->getDraggedImageCopy(floatingImage, floatingMask);
 
       clipboard::copy_image(floatingImage.get(),
@@ -522,12 +528,12 @@ void MovingPixelsState::onBeforeCommandExecution(CommandExecutionEvent& ev)
     }
 
     // Clear floating pixels on Cut/Clear.
-    if (command->id() != CommandId::Copy) {
+    if (command->id() != CommandId::Copy()) {
       m_pixelsMovement->trim();
 
       // Should we keep the mask after an Edit > Clear command?
       auto keepMask = PixelsMovement::DontKeepMask;
-      if (command->id() == CommandId::Clear &&
+      if (command->id() == CommandId::Clear() &&
           Preferences::instance().selection.keepSelectionAfterClear()) {
         keepMask = PixelsMovement::KeepMask;
       }
@@ -546,7 +552,7 @@ void MovingPixelsState::onBeforeCommandExecution(CommandExecutionEvent& ev)
   }
   // Flip Horizontally/Vertically commands are handled manually to
   // avoid dropping the floating region of pixels.
-  else if (command->id() == CommandId::Flip) {
+  else if (command->id() == CommandId::Flip()) {
     if (FlipCommand* flipCommand = dynamic_cast<FlipCommand*>(command)) {
       m_pixelsMovement->flipImage(flipCommand->getFlipType());
 
@@ -555,7 +561,7 @@ void MovingPixelsState::onBeforeCommandExecution(CommandExecutionEvent& ev)
     }
   }
   // Rotate is quite simple, we can add the angle to the current transformation.
-  else if (command->id() == CommandId::Rotate) {
+  else if (command->id() == CommandId::Rotate()) {
     if (RotateCommand* rotate = dynamic_cast<RotateCommand*>(command)) {
       if (rotate->flipMask()) {
         m_pixelsMovement->rotate(rotate->angle());
@@ -597,6 +603,8 @@ void MovingPixelsState::onBeforeLayerChanged(Editor* editor)
 
 void MovingPixelsState::onTransparentColorChange()
 {
+  ASSERT(m_pixelsMovement);
+
   bool opaque = Preferences::instance().selection.opaque();
   setTransparentColor(
     opaque,
@@ -637,7 +645,7 @@ void MovingPixelsState::setTransparentColor(bool opaque, const app::Color& color
     m_pixelsMovement->setMaskColor(
       opaque, color_utils::color_for_target_mask(color, ColorTarget(layer)));
   }
-  catch (const LockedDocumentException& ex) {
+  catch (const LockedDocException& ex) {
     Console::showException(ex);
   }
 }
@@ -653,12 +661,17 @@ void MovingPixelsState::dropPixels()
 
 Transformation MovingPixelsState::getTransformation(Editor* editor)
 {
-  return m_pixelsMovement->getTransformation();
+  // m_pixelsMovement can be null in the final onMouseDown(), after we
+  // called dropPixels() and we're just going to the previous state.
+  if (m_pixelsMovement)
+    return m_pixelsMovement->getTransformation();
+  else
+    return StandbyState::getTransformation(editor);
 }
 
 bool MovingPixelsState::isActiveDocument() const
 {
-  Document* doc = UIContext::instance()->activeDocument();
+  Doc* doc = UIContext::instance()->activeDocument();
   return (m_editor->document() == doc);
 }
 
@@ -674,6 +687,14 @@ void MovingPixelsState::removeAsEditorObserver()
     m_observingEditor = false;
     m_editor->remove_observer(this);
   }
+}
+
+void MovingPixelsState::removePixelsMovement()
+{
+  m_pixelsMovement.reset(nullptr);
+  m_ctxConn.disconnect();
+  m_opaqueConn.disconnect();
+  m_transparentConn.disconnect();
 }
 
 } // namespace app

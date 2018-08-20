@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,12 +9,11 @@
 #pragma once
 
 #include "app/color.h"
+#include "app/context_observer.h"
+#include "app/doc_observer.h"
+#include "app/docs_observer.h"
 #include "app/tools/active_tool_observer.h"
 #include "base/time.h"
-#include "doc/context_observer.h"
-#include "doc/document_observer.h"
-#include "doc/documents_observer.h"
-#include "doc/layer_index.h"
 #include "ui/base.h"
 #include "ui/box.h"
 
@@ -43,9 +42,9 @@ namespace app {
   }
 
   class StatusBar : public ui::HBox
-                  , public doc::ContextObserver
-                  , public doc::DocumentsObserver
-                  , public doc::DocumentObserver
+                  , public ContextObserver
+                  , public DocsObserver
+                  , public DocObserver
                   , public tools::ActiveToolObserver {
     static StatusBar* m_instance;
   public:
@@ -70,16 +69,17 @@ namespace app {
     void showBackupIcon(BackupIcon icon);
 
   protected:
+    void onInitTheme(ui::InitThemeEvent& ev) override;
     void onResize(ui::ResizeEvent& ev) override;
 
     // ContextObserver impl
-    void onActiveSiteChange(const doc::Site& site) override;
+    void onActiveSiteChange(const Site& site) override;
 
-    // DocumentObservers impl
-    void onRemoveDocument(doc::Document* doc) override;
+    // DocObservers impl
+    void onRemoveDocument(Doc* doc) override;
 
-    // DocumentObserver impl
-    void onPixelFormatChanged(DocumentEvent& ev) override;
+    // DocObserver impl
+    void onPixelFormatChanged(DocEvent& ev) override;
 
     // ActiveToolObserver impl
     void onSelectedToolChange(tools::Tool* tool) override;
@@ -88,6 +88,7 @@ namespace app {
     void onCelOpacitySliderChange();
     void newFrame();
     void onChangeZoom(const render::Zoom& zoom);
+    void updateSnapToGridWindowPosition();
 
     base::tick_t m_timeout;
 
@@ -98,11 +99,12 @@ namespace app {
 
     // Box of main commands
     ui::Widget* m_docControls;
+    ui::Box* m_commandsBox;
     ui::Label* m_frameLabel;
     ui::Entry* m_currentFrame;        // Current frame and go to frame entry
     ui::Button* m_newFrame;           // Button to create a new frame
     ZoomEntry* m_zoomEntry;
-    doc::Document* m_doc;      // Document used to show the cel slider
+    Doc* m_doc;                // Document used to show the cel slider
 
     // Tip window
     class CustomizedTipWindow;

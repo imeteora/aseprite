@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +13,8 @@
 #include "app/color_utils.h"
 #include "app/commands/command.h"
 #include "app/console.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/i18n/strings.h"
 #include "app/modules/editors.h"
 #include "app/modules/palettes.h"
 #include "app/pref/preferences.h"
@@ -21,7 +22,8 @@
 #include "app/ui/workspace.h"
 #include "app/ui_context.h"
 #include "app/util/clipboard.h"
-#include "base/unique_ptr.h"
+#include "app/util/pixel_ratio.h"
+#include "base/bind.h"
 #include "doc/cel.h"
 #include "doc/image.h"
 #include "doc/layer.h"
@@ -48,9 +50,7 @@ protected:
 static int _sprite_counter = 0;
 
 NewFileCommand::NewFileCommand()
-  : Command("NewFile",
-            "New File",
-            CmdRecordableFlag)
+  : Command(CommandId::NewFile(), CmdRecordableFlag)
 {
 }
 
@@ -101,6 +101,26 @@ void NewFileCommand::onExecute(Context* context)
   // Select background color
   window.bgColor()->setSelectedItem(bg);
 
+  // Advance options
+  bool advanced = pref.newFile.advanced();
+  window.advancedCheck()->setSelected(advanced);
+  window.advancedCheck()->Click.connect(
+    base::Bind<void>(
+      [&]{
+        gfx::Rect bounds = window.bounds();
+        window.advanced()->setVisible(window.advancedCheck()->isSelected());
+        window.setBounds(gfx::Rect(window.bounds().origin(),
+                                   window.sizeHint()));
+        window.layout();
+
+        window.manager()->invalidateRect(bounds);
+      }));
+  window.advanced()->setVisible(advanced);
+  if (advanced)
+    window.pixelRatio()->setValue(pref.newFile.pixelRatio());
+  else
+    window.pixelRatio()->setValue("1:1");
+
   // Open the window
   window.openWindowInForeground();
 
@@ -117,8 +137,8 @@ void NewFileCommand::onExecute(Context* context)
     static_assert(IMAGE_INDEXED == 2, "Indexed pixel format should be 2");
 
     format = MID(IMAGE_RGB, format, IMAGE_INDEXED);
-    w = MID(1, w, 65535);
-    h = MID(1, h, 65535);
+    w = MID(1, w, DOC_SPRITE_MAX_WIDTH);
+    h = MID(1, h, DOC_SPRITE_MAX_HEIGHT);
     bg = MID(0, bg, 2);
 
     // Select the color
@@ -135,12 +155,19 @@ void NewFileCommand::onExecute(Context* context)
       pref.newFile.height(h);
       pref.newFile.colorMode(format);
       pref.newFile.backgroundColor(bg);
+      pref.newFile.advanced(window.advancedCheck()->isSelected());
+      pref.newFile.pixelRatio(window.pixelRatio()->getValue());
 
       // Create the new sprite
       ASSERT(format == IMAGE_RGB || format == IMAGE_GRAYSCALE || format == IMAGE_INDEXED);
       ASSERT(w > 0 && h > 0);
 
-      base::UniquePtr<Sprite> sprite(Sprite::createBasicSprite(format, w, h, ncolors));
+      std::unique_ptr<Sprite> sprite(Sprite::createBasicSprite(format, w, h, ncolors));
+
+      if (window.advancedCheck()->isSelected()) {
+        sprite->setPixelRatio(
+          base::convert_to<PixelRatio>(window.pixelRatio()->getValue()));
+      }
 
       if (sprite->pixelFormat() != IMAGE_GRAYSCALE)
         get_default_palette()->copyColorsTo(sprite->palette(frame_t(0)));
@@ -148,7 +175,7 @@ void NewFileCommand::onExecute(Context* context)
       // If the background color isn't transparent, we have to
       // convert the `Layer 1' in a `Background'
       if (color.getType() != app::Color::MaskType) {
-        Layer* layer = sprite->folder()->getFirstLayer();
+        Layer* layer = sprite->root()->firstLayer();
 
         if (layer && layer->isImage()) {
           LayerImage* layerImage = static_cast<LayerImage*>(layer);
@@ -172,7 +199,7 @@ void NewFileCommand::onExecute(Context* context)
       }
 
       // Show the sprite to the user
-      base::UniquePtr<Document> doc(new Document(sprite));
+      std::unique_ptr<Doc> doc(new Doc(sprite.get()));
       sprite.release();
       sprintf(buf, "Sprite-%04d", ++_sprite_counter);
       doc->setFilename(buf);

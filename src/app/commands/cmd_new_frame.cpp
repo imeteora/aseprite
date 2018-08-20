@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,19 +14,21 @@
 #include "app/commands/params.h"
 #include "app/console.h"
 #include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
+#include "app/i18n/strings.h"
 #include "app/modules/gui.h"
 #include "app/transaction.h"
-#include "app/ui/document_view.h"
+#include "app/ui/doc_view.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/main_window.h"
 #include "app/ui/status_bar.h"
-#include "app/ui/timeline.h"
+#include "app/ui/timeline/timeline.h"
 #include "app/ui_context.h"
 #include "doc/cel.h"
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
+#include "fmt/format.h"
 #include "ui/ui.h"
 
 #include <stdexcept>
@@ -56,9 +58,7 @@ private:
 };
 
 NewFrameCommand::NewFrameCommand()
-  : Command("NewFrame",
-            "New Frame",
-            CmdRecordableFlag)
+  : Command(CommandId::NewFrame(), CmdRecordableFlag)
 {
 }
 
@@ -87,11 +87,11 @@ bool NewFrameCommand::onEnabled(Context* context)
 void NewFrameCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
   {
     Transaction transaction(writer.context(), friendlyName());
-    DocumentApi api = document->getApi(transaction);
+    DocApi api = document->getApi(transaction);
 
     switch (m_content) {
 
@@ -105,34 +105,39 @@ void NewFrameCommand::onExecute(Context* context)
 
       case Content::DUPLICATE_CELS:
       case Content::DUPLICATE_CELS_BLOCK: {
-        // TODO the range of selected frames should be in doc::Site.
-        Timeline* timeline = App::instance()->timeline();
-        Timeline::Range range = timeline->range();
-        if (range.enabled()) {
+        const Site* site = writer.site();
+        if (site->inTimeline() &&
+            !site->selectedLayers().empty() &&
+            !site->selectedFrames().empty()) {
           std::map<CelData*, Cel*> relatedCels;
+
+          auto timeline = App::instance()->timeline();
           timeline->prepareToMoveRange();
+          DocRange range = timeline->range();
 
-          LayerIndex layerBegin = range.layerBegin();
-          LayerIndex layerEnd = range.layerEnd();
-
-          if (range.type() == DocumentRange::kFrames) {
-            layerBegin = writer.sprite()->firstLayer();
-            layerEnd = writer.sprite()->lastLayer();
+          SelectedLayers selLayers;
+          if (site->inFrames())
+            selLayers.selectAllLayers(writer.sprite()->root());
+          else {
+            selLayers = site->selectedLayers();
+            selLayers.expandCollapsedGroups();
           }
 
-          for (LayerIndex layer = layerBegin; layer <= layerEnd; ++layer) {
-            Layer* layerPtr = writer.sprite()->indexToLayer(layer);
-            if (layerPtr->isImage()) {
-              for (frame_t frame = range.frameEnd(); frame >= range.frameBegin(); --frame) {
-                frame_t srcFrame = frame;
-                frame_t dstFrame = frame+range.frames();
+          frame_t frameRange =
+            (site->selectedFrames().lastFrame() -
+             site->selectedFrames().firstFrame() + 1);
+
+          for (Layer* layer : selLayers) {
+            if (layer->isImage()) {
+              for (frame_t srcFrame : site->selectedFrames().reversed()) {
+                frame_t dstFrame = srcFrame+frameRange;
                 bool continuous;
                 CelData* srcCelData = nullptr;
 
                 if (m_content == Content::DUPLICATE_CELS_BLOCK) {
                   continuous = false;
 
-                  Cel* srcCel = static_cast<LayerImage*>(layerPtr)->cel(srcFrame);
+                  Cel* srcCel = static_cast<LayerImage*>(layer)->cel(srcFrame);
                   if (srcCel) {
                     srcCelData = srcCel->data();
 
@@ -144,19 +149,19 @@ void NewFrameCommand::onExecute(Context* context)
                   }
                 }
                 else
-                  continuous = layerPtr->isContinuous();
+                  continuous = layer->isContinuous();
 
                 api.copyCel(
-                  static_cast<LayerImage*>(layerPtr), srcFrame,
-                  static_cast<LayerImage*>(layerPtr), dstFrame, continuous);
+                  static_cast<LayerImage*>(layer), srcFrame,
+                  static_cast<LayerImage*>(layer), dstFrame, continuous);
 
                 if (srcCelData && !relatedCels[srcCelData])
-                  relatedCels[srcCelData] = layerPtr->cel(dstFrame);
+                  relatedCels[srcCelData] = layer->cel(dstFrame);
               }
             }
           }
 
-          range.displace(0, range.frames());
+          range.displace(0, frameRange);
           timeline->moveRange(range);
         }
         else {
@@ -164,9 +169,9 @@ void NewFrameCommand::onExecute(Context* context)
             static_cast<LayerImage*>(writer.layer()), writer.frame(),
             static_cast<LayerImage*>(writer.layer()), writer.frame()+1);
 
-          // TODO should we use DocumentObserver?
+          // TODO should we use DocObserver?
           if (UIContext::instance() == context) {
-            if (DocumentView* view = UIContext::instance()->activeView())
+            if (DocView* view = UIContext::instance()->activeView())
               view->editor()->setFrame(writer.frame()+1);
           }
         }
@@ -188,20 +193,20 @@ void NewFrameCommand::onExecute(Context* context)
 
 std::string NewFrameCommand::onGetFriendlyName() const
 {
-  std::string text = "New Frame";
+  std::string text;
 
   switch (m_content) {
     case Content::DUPLICATE_FRAME:
-      text = "New Frame";
+      text = Strings::commands_NewFrame();
       break;
     case Content::NEW_EMPTY_FRAME:
-      text = "New Empty Frame";
+      text = Strings::commands_NewFrame_NewEmptyFrame();
       break;
     case Content::DUPLICATE_CELS:
-      text = "Duplicate Linked Cels";
+      text = Strings::commands_NewFrame_DuplicateCels();
       break;
     case Content::DUPLICATE_CELS_BLOCK:
-      text = "Duplicate Cels";
+      text = Strings::commands_NewFrame_DuplicateCelsBlock();
       break;
   }
 

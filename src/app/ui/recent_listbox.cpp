@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,13 +13,14 @@
 #include "app/app.h"
 #include "app/commands/commands.h"
 #include "app/commands/params.h"
+#include "app/i18n/strings.h"
 #include "app/pref/preferences.h"
 #include "app/recent_files.h"
 #include "app/ui/skin/skin_theme.h"
-#include "app/ui/skin/style.h"
 #include "app/ui_context.h"
 #include "base/bind.h"
 #include "base/fs.h"
+#include "ui/alert.h"
 #include "ui/graphics.h"
 #include "ui/link_label.h"
 #include "ui/listitem.h"
@@ -40,19 +41,30 @@ using namespace skin;
 class RecentFileItem : public LinkLabel {
 public:
   RecentFileItem(const std::string& file)
-    : LinkLabel(file)
+    : LinkLabel("")
+    , m_fullpath(file)
     , m_name(base::get_file_name(file))
     , m_path(base::get_file_path(file)) {
+    initTheme();
   }
 
 protected:
+  void onInitTheme(InitThemeEvent& ev) override {
+    LinkLabel::onInitTheme(ev);
+    setStyle(SkinTheme::instance()->styles.recentItem());
+  }
+
   void onSizeHint(SizeHintEvent& ev) override {
     SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-    Style* style = theme->styles.recentFile();
-    Style* styleDetail = theme->styles.recentFileDetail();
-    Style::State state;
-    gfx::Size sz1 = style->sizeHint(m_name.c_str(), state);
-    gfx::Size sz2 = styleDetail->sizeHint(m_path.c_str(), state);
+    ui::Style* style = theme->styles.recentFile();
+    ui::Style* styleDetail = theme->styles.recentFileDetail();
+
+    setTextQuiet(m_name);
+    gfx::Size sz1 = theme->calcSizeHint(this, style);
+
+    setTextQuiet(m_path);
+    gfx::Size sz2 = theme->calcSizeHint(this, styleDetail);
+
     ev.setSizeHint(gfx::Size(sz1.w+sz2.w, MAX(sz1.h, sz2.h)));
   }
 
@@ -60,30 +72,28 @@ protected:
     SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
     Graphics* g = ev.graphics();
     gfx::Rect bounds = clientBounds();
-    Style* style = theme->styles.recentFile();
-    Style* styleDetail = theme->styles.recentFileDetail();
+    ui::Style* style = theme->styles.recentFile();
+    ui::Style* styleDetail = theme->styles.recentFileDetail();
 
-    Style::State state;
-    if (hasMouse() && !manager()->getCapture()) state += Style::hover();
-    if (isSelected()) state += Style::active();
-    if (parent()->hasCapture()) state += Style::clicked();
-
-    style->paint(g, bounds, m_name.c_str(), state);
+    setTextQuiet(m_name.c_str());
+    theme->paintWidget(g, this, style, bounds);
 
     if (Preferences::instance().general.showFullPath()) {
-      gfx::Size textSize = style->sizeHint(m_name.c_str(), state);
+      gfx::Size textSize = theme->calcSizeHint(this, style);
       gfx::Rect detailsBounds(
         bounds.x+textSize.w, bounds.y,
         bounds.w-textSize.w, bounds.h);
-      styleDetail->paint(g, detailsBounds, m_path.c_str(), state);
+      setTextQuiet(m_path.c_str());
+      theme->paintWidget(g, this, styleDetail, detailsBounds);
     }
   }
 
   void onClick() override {
-    static_cast<RecentListBox*>(parent())->onClick(text());
+    static_cast<RecentListBox*>(parent())->onClick(m_fullpath);
   }
 
 private:
+  std::string m_fullpath;
   std::string m_name;
   std::string m_path;
 };
@@ -138,7 +148,13 @@ void RecentFilesListBox::onRebuildList()
 
 void RecentFilesListBox::onClick(const std::string& path)
 {
-  Command* command = CommandsModule::instance()->getCommandByName(CommandId::OpenFile);
+  if (!base::is_file(path)) {
+    ui::Alert::show(Strings::alerts_recent_file_doesnt_exist());
+    App::instance()->recentFiles()->removeRecentFile(path);
+    return;
+  }
+
+  Command* command = Commands::instance()->byId(CommandId::OpenFile());
   Params params;
   params.set("filename", path.c_str());
   UIContext::instance()->executeCommand(command, params);
@@ -163,7 +179,13 @@ void RecentFoldersListBox::onRebuildList()
 
 void RecentFoldersListBox::onClick(const std::string& path)
 {
-  Command* command = CommandsModule::instance()->getCommandByName(CommandId::OpenFile);
+  if (!base::is_directory(path)) {
+    ui::Alert::show(Strings::alerts_recent_folder_doesnt_exist());
+    App::instance()->recentFiles()->removeRecentFolder(path);
+    return;
+  }
+
+  Command* command = Commands::instance()->byId(CommandId::OpenFile());
   Params params;
   params.set("folder", path.c_str());
   UIContext::instance()->executeCommand(command, params);

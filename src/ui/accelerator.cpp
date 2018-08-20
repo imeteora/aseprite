@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -14,7 +14,6 @@
 #include "base/replace_string.h"
 #include "base/split_string.h"
 #include "base/string.h"
-#include "base/unique_ptr.h"
 #include "she/system.h"
 
 #include <cctype>
@@ -197,9 +196,6 @@ Accelerator::Accelerator(const std::string& str)
     else if (tok == base::string_to_lower(kWinKeyName)) {
       m_modifiers = (KeyModifiers)((int)m_modifiers | (int)kKeyWinModifier);
     }
-
-    // Scancode
-
     // Word with one character
     else if (base::utf8_length(tok) == 1) {
       std::wstring wstr = base::from_utf8(tok);
@@ -210,77 +206,74 @@ Accelerator::Accelerator(const std::string& str)
       m_unicodeChar = std::tolower(wstr[0]);
       m_scancode = kKeyNil;
     }
-    // Other ones
-    else {
-      // F1, F2, ..., F11, F12
-      if (tok[0] == 'f' && (tok.size() <= 3)) {
-        int num = std::strtol(tok.c_str()+1, NULL, 10);
-        if ((num >= 1) && (num <= 12))
-          m_scancode = (KeyScancode)((int)kKeyF1 + num - 1);
-      }
-      else if ((tok == "escape") || (tok == "esc"))
-        m_scancode = kKeyEsc;
-      else if (tok == "backspace")
-        m_scancode = kKeyBackspace;
-      else if (tok == "tab")
-        m_scancode = kKeyTab;
-      else if (tok == "enter")
-        m_scancode = kKeyEnter;
-      else if (tok == "space")
-        m_scancode = kKeySpace;
-      else if ((tok == "insert") || (tok == "ins"))
-        m_scancode = kKeyInsert;
-      else if ((tok == "delete") || (tok == "del"))
-        m_scancode = kKeyDel;
-      else if (tok == "home")
-        m_scancode = kKeyHome;
-      else if (tok == "end")
-        m_scancode = kKeyEnd;
-      else if ((tok == "page up") || (tok == "pgup"))
-        m_scancode = kKeyPageUp;
-      else if ((tok == "page down") || (tok == "pgdn"))
-        m_scancode = kKeyPageDown;
-      else if (tok == "left")
-        m_scancode = kKeyLeft;
-      else if (tok == "right")
-        m_scancode = kKeyRight;
-      else if (tok == "up")
-        m_scancode = kKeyUp;
-      else if (tok == "down")
-        m_scancode = kKeyDown;
-      else if (tok == "0 pad")
-        m_scancode = kKey0Pad;
-      else if (tok == "1 pad")
-        m_scancode = kKey1Pad;
-      else if (tok == "2 pad")
-        m_scancode = kKey2Pad;
-      else if (tok == "3 pad")
-        m_scancode = kKey3Pad;
-      else if (tok == "4 pad")
-        m_scancode = kKey4Pad;
-      else if (tok == "5 pad")
-        m_scancode = kKey5Pad;
-      else if (tok == "6 pad")
-        m_scancode = kKey6Pad;
-      else if (tok == "7 pad")
-        m_scancode = kKey7Pad;
-      else if (tok == "8 pad")
-        m_scancode = kKey8Pad;
-      else if (tok == "9 pad")
-        m_scancode = kKey9Pad;
-      else if (tok == "/ pad" || tok == "slash pad")
-        m_scancode = kKeySlashPad;
-      else if (tok == "* pad" || tok == "asterisk pad" || tok == "asterisk")
-        m_scancode = kKeyAsterisk;
-      else if (tok == "- pad" || tok == "minus pad")
-        m_scancode = kKeyMinusPad;
-      else if (tok == "+ pad" || tok == "plus pad")
-        m_scancode = kKeyPlusPad;
-      else if (tok == "del pad" || tok == "delete pad")
-        m_scancode = kKeyDelPad;
-      else if (tok == "enter pad")
-        m_scancode = kKeyEnterPad;
+    // F1, F2, ..., F11, F12
+    else if (tok[0] == 'f' && (tok.size() <= 3)) {
+      int num = std::strtol(tok.c_str()+1, NULL, 10);
+      if ((num >= 1) && (num <= 12))
+        m_scancode = (KeyScancode)((int)kKeyF1 + num - 1);
     }
+    else if ((tok == "escape") || (tok == "esc"))
+      m_scancode = kKeyEsc;
+    else if (tok == "backspace")
+      m_scancode = kKeyBackspace;
+    else if (tok == "tab")
+      m_scancode = kKeyTab;
+    else if (tok == "enter")
+      m_scancode = kKeyEnter;
+    else if (tok == "space")
+      m_scancode = kKeySpace;
+    else if ((tok == "insert") || (tok == "ins"))
+      m_scancode = kKeyInsert;
+    else if ((tok == "delete") || (tok == "del"))
+      m_scancode = kKeyDel;
+    else if (tok == "home")
+      m_scancode = kKeyHome;
+    else if (tok == "end")
+      m_scancode = kKeyEnd;
+    else if ((tok == "page up") || (tok == "pgup"))
+      m_scancode = kKeyPageUp;
+    else if ((tok == "page down") || (tok == "pgdn"))
+      m_scancode = kKeyPageDown;
+    else if (tok == "left")
+      m_scancode = kKeyLeft;
+    else if (tok == "right")
+      m_scancode = kKeyRight;
+    else if (tok == "up")
+      m_scancode = kKeyUp;
+    else if (tok == "down")
+      m_scancode = kKeyDown;
+    else if (tok == "0 pad")
+      m_scancode = kKey0Pad;
+    else if (tok == "1 pad")
+      m_scancode = kKey1Pad;
+    else if (tok == "2 pad")
+      m_scancode = kKey2Pad;
+    else if (tok == "3 pad")
+      m_scancode = kKey3Pad;
+    else if (tok == "4 pad")
+      m_scancode = kKey4Pad;
+    else if (tok == "5 pad")
+      m_scancode = kKey5Pad;
+    else if (tok == "6 pad")
+      m_scancode = kKey6Pad;
+    else if (tok == "7 pad")
+      m_scancode = kKey7Pad;
+    else if (tok == "8 pad")
+      m_scancode = kKey8Pad;
+    else if (tok == "9 pad")
+      m_scancode = kKey9Pad;
+    else if (tok == "/ pad" || tok == "slash pad")
+      m_scancode = kKeySlashPad;
+    else if (tok == "* pad" || tok == "asterisk pad" || tok == "asterisk")
+      m_scancode = kKeyAsterisk;
+    else if (tok == "- pad" || tok == "minus pad")
+      m_scancode = kKeyMinusPad;
+    else if (tok == "+ pad" || tok == "plus pad")
+      m_scancode = kKeyPlusPad;
+    else if (tok == "del pad" || tok == "delete pad")
+      m_scancode = kKeyDelPad;
+    else if (tok == "enter pad")
+      m_scancode = kKeyEnterPad;
   }
 }
 
@@ -324,7 +317,8 @@ std::string Accelerator::toString() const
     buf += base::to_utf8(wideUnicodeChar);
   }
   else if (m_scancode > 0 &&
-           m_scancode < scancode_to_string_size)
+           m_scancode < scancode_to_string_size &&
+           scancode_to_string[m_scancode])
     buf += scancode_to_string[m_scancode];
   else if (!buf.empty() && buf[buf.size()-1] == '+')
     buf.erase(buf.size()-1);

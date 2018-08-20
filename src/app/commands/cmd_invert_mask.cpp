@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,7 +14,6 @@
 #include "app/context_access.h"
 #include "app/modules/gui.h"
 #include "app/transaction.h"
-#include "base/unique_ptr.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/primitives.h"
@@ -33,9 +32,7 @@ protected:
 };
 
 InvertMaskCommand::InvertMaskCommand()
-  : Command("InvertMask",
-            "Invert Mask",
-            CmdRecordableFlag)
+  : Command(CommandId::InvertMask(), CmdRecordableFlag)
 {
 }
 
@@ -58,17 +55,17 @@ void InvertMaskCommand::onExecute(Context* context)
   if (!hasMask) {
     // so we select all
     Command* mask_all_cmd =
-      CommandsModule::instance()->getCommandByName(CommandId::MaskAll);
+      Commands::instance()->byId(CommandId::MaskAll());
     context->executeCommand(mask_all_cmd);
   }
   // invert the current mask
   else {
     ContextWriter writer(context);
-    Document* document(writer.document());
+    Doc* document(writer.document());
     Sprite* sprite(writer.sprite());
 
     // Select all the sprite area
-    base::UniquePtr<Mask> mask(new Mask());
+    std::unique_ptr<Mask> mask(new Mask());
     mask->replace(sprite->bounds());
 
     // Remove in the new mask the current sprite marked region
@@ -97,7 +94,7 @@ void InvertMaskCommand::onExecute(Context* context)
 
     // Set the new mask
     Transaction transaction(writer.context(), "Mask Invert", DoesntModifyDocument);
-    transaction.execute(new cmd::SetMask(document, mask));
+    transaction.execute(new cmd::SetMask(document, mask.get()));
     transaction.commit();
 
     document->generateMaskBoundaries();

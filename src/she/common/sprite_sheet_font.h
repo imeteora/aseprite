@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -41,15 +41,11 @@ public:
     return getCharBounds(' ').h;
   }
 
-  int charWidth(int chr) const override {
-    return getCharBounds(chr).w;
-  }
-
   int textLength(const std::string& str) const override {
     base::utf8_const_iterator it(str.begin()), end(str.end());
     int x = 0;
     while (it != end) {
-      x += charWidth(*it);
+      x += getCharBounds(*it).w;
       ++it;
     }
     return x;
@@ -67,6 +63,11 @@ public:
     // Do nothing
   }
 
+  bool hasCodePoint(int codepoint) const override {
+    codepoint -= (int)' ';
+    return (codepoint >= 0 && codepoint < (int)m_chars.size());
+  }
+
   Surface* getSurfaceSheet() const {
     return m_sheet;
   }
@@ -75,6 +76,8 @@ public:
     chr -= (int)' ';
     if (chr >= 0 && chr < (int)m_chars.size())
       return m_chars[chr];
+    else if (chr != 128)
+      return getCharBounds(128);
     else
       return gfx::Rect();
   }

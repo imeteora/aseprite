@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,10 +10,10 @@
 
 #include "app/commands/command.h"
 #include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
 #include "app/modules/gui.h"
-#include "app/ui/color_bar.h"
 #include "app/transaction.h"
+#include "app/ui/color_bar.h"
 #include "app/util/autocrop.h"
 #include "doc/image.h"
 #include "doc/layer.h"
@@ -37,9 +37,7 @@ private:
 };
 
 CropSpriteCommand::CropSpriteCommand()
-  : Command("CropSprite",
-            "Crop Sprite",
-            CmdRecordableFlag)
+  : Command(CommandId::CropSprite(), CmdRecordableFlag)
 {
 }
 
@@ -63,7 +61,7 @@ bool CropSpriteCommand::onEnabled(Context* context)
 void CropSpriteCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
 
   gfx::Rect bounds;
@@ -78,7 +76,10 @@ void CropSpriteCommand::onExecute(Context* context)
     transaction.commit();
   }
   document->generateMaskBoundaries();
+
+#ifdef ENABLE_UI
   update_screen_for_document(document);
+#endif
 }
 
 class AutocropSpriteCommand : public Command {
@@ -92,9 +93,7 @@ protected:
 };
 
 AutocropSpriteCommand::AutocropSpriteCommand()
-  : Command("AutocropSprite",
-            "Trim Sprite",
-            CmdRecordableFlag)
+  : Command(CommandId::AutocropSprite(), CmdRecordableFlag)
 {
 }
 
@@ -107,7 +106,7 @@ bool AutocropSpriteCommand::onEnabled(Context* context)
 void AutocropSpriteCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
   {
     Transaction transaction(writer.context(), "Trim Sprite");
@@ -115,7 +114,10 @@ void AutocropSpriteCommand::onExecute(Context* context)
     transaction.commit();
   }
   document->generateMaskBoundaries();
+
+#ifdef ENABLE_UI
   update_screen_for_document(document);
+#endif
 }
 
 Command* CommandFactory::createCropSpriteCommand()

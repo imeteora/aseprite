@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,22 +9,22 @@
 #endif
 
 #include "app/app.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/modules/editors.h"
 #include "app/pref/preferences.h"
+#include "app/site.h"
 #include "app/ui/color_bar.h"
-#include "app/ui/document_view.h"
+#include "app/ui/doc_view.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/input_chain.h"
 #include "app/ui/main_window.h"
 #include "app/ui/preview_editor.h"
 #include "app/ui/status_bar.h"
-#include "app/ui/timeline.h"
+#include "app/ui/timeline/timeline.h"
 #include "app/ui/workspace.h"
 #include "app/ui/workspace_tabs.h"
 #include "app/ui_context.h"
 #include "base/mutex.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
 
 namespace app {
@@ -32,8 +32,7 @@ namespace app {
 UIContext* UIContext::m_instance = nullptr;
 
 UIContext::UIContext()
-  : m_lastSelectedDoc(nullptr)
-  , m_lastSelectedView(nullptr)
+  : m_lastSelectedView(nullptr)
 {
   documents().add_observer(&Preferences::instance());
 
@@ -59,7 +58,7 @@ bool UIContext::isUIAvailable() const
   return App::instance()->isGui();
 }
 
-DocumentView* UIContext::activeView() const
+DocView* UIContext::activeView() const
 {
   if (!isUIAvailable())
     return nullptr;
@@ -69,18 +68,24 @@ DocumentView* UIContext::activeView() const
     return nullptr;
 
   WorkspaceView* view = workspace->activeView();
-  if (DocumentView* docView = dynamic_cast<DocumentView*>(view))
+  if (DocView* docView = dynamic_cast<DocView*>(view))
     return docView;
   else
     return nullptr;
 }
 
-void UIContext::setActiveView(DocumentView* docView)
+void UIContext::setActiveView(DocView* docView)
 {
   MainWindow* mainWin = App::instance()->mainWindow();
 
+  // This can happen when the main window is being destroyed when we
+  // close the app, and the active view is changing because we are
+  // closing down every single tab.
+  if (!mainWin)
+    return;
+
   // Prioritize workspace for user input.
-  App::instance()->inputChain().prioritize(mainWin->getWorkspace());
+  App::instance()->inputChain().prioritize(mainWin->getWorkspace(), nullptr);
 
   // Do nothing cases: 1) the view is already selected, or 2) the view
   // is the a preview.
@@ -121,12 +126,12 @@ void UIContext::setActiveView(DocumentView* docView)
   notifyActiveSiteChanged();
 }
 
-void UIContext::setActiveDocument(Document* document)
+void UIContext::onSetActiveDocument(Doc* document)
 {
-  bool notify = (m_lastSelectedDoc != document);
-  m_lastSelectedDoc = document;
+  bool notify = (lastSelectedDoc() != document);
+  app::Context::onSetActiveDocument(document);
 
-  DocumentView* docView = getFirstDocumentView(document);
+  DocView* docView = getFirstDocView(document);
   if (docView) {     // The view can be null if we are in --batch mode
     setActiveView(docView);
     notify = false;
@@ -136,14 +141,14 @@ void UIContext::setActiveDocument(Document* document)
     notifyActiveSiteChanged();
 }
 
-DocumentView* UIContext::getFirstDocumentView(doc::Document* document) const
+DocView* UIContext::getFirstDocView(Doc* document) const
 {
   Workspace* workspace = App::instance()->workspace();
   if (!workspace) // Workspace (main window) can be null if we are in --batch mode
     return nullptr;
 
   for (WorkspaceView* view : *workspace) {
-    if (DocumentView* docView = dynamic_cast<DocumentView*>(view)) {
+    if (DocView* docView = dynamic_cast<DocView*>(view)) {
       if (docView->document() == document) {
         return docView;
       }
@@ -153,13 +158,13 @@ DocumentView* UIContext::getFirstDocumentView(doc::Document* document) const
   return nullptr;
 }
 
-DocumentViews UIContext::getAllDocumentViews(doc::Document* document) const
+DocViews UIContext::getAllDocViews(Doc* document) const
 {
   Workspace* workspace = App::instance()->workspace();
-  DocumentViews docViews;
+  DocViews docViews;
 
   for (WorkspaceView* view : *workspace) {
-    if (DocumentView* docView = dynamic_cast<DocumentView*>(view)) {
+    if (DocView* docView = dynamic_cast<DocView*>(view)) {
       if (docView->document() == document) {
         docViews.push_back(docView);
       }
@@ -169,27 +174,46 @@ DocumentViews UIContext::getAllDocumentViews(doc::Document* document) const
   return docViews;
 }
 
+Editors UIContext::getAllEditorsIncludingPreview(Doc* document) const
+{
+  std::vector<Editor*> editors;
+  for (DocView* docView : getAllDocViews(document)) {
+    if (docView->editor())
+      editors.push_back(docView->editor());
+  }
+
+  if (MainWindow* mainWin = App::instance()->mainWindow()) {
+    PreviewEditorWindow* previewWin = mainWin->getPreviewEditor();
+    if (previewWin) {
+      Editor* miniEditor = previewWin->previewEditor();
+      if (miniEditor && miniEditor->document() == document)
+        editors.push_back(miniEditor);
+    }
+  }
+  return editors;
+}
+
 Editor* UIContext::activeEditor()
 {
-  DocumentView* view = activeView();
+  DocView* view = activeView();
   if (view)
     return view->editor();
   else
     return NULL;
 }
 
-void UIContext::onAddDocument(doc::Document* doc)
+void UIContext::onAddDocument(Doc* doc)
 {
-  m_lastSelectedDoc = static_cast<app::Document*>(doc);
+  app::Context::onAddDocument(doc);
 
   // We don't create views in batch mode.
   if (!App::instance()->isGui())
     return;
 
   // Add a new view for this document
-  DocumentView* view = new DocumentView(
-    m_lastSelectedDoc,
-    DocumentView::Normal,
+  DocView* view = new DocView(
+    lastSelectedDoc(),
+    DocView::Normal,
     App::instance()->mainWindow()->getPreviewEditor());
 
   // Add a tab with the new view for the document
@@ -199,16 +223,15 @@ void UIContext::onAddDocument(doc::Document* doc)
   view->editor()->setDefaultScroll();
 }
 
-void UIContext::onRemoveDocument(doc::Document* doc)
+void UIContext::onRemoveDocument(Doc* doc)
 {
-  if (doc == m_lastSelectedDoc)
-    m_lastSelectedDoc = nullptr;
+  app::Context::onRemoveDocument(doc);
 
   // We don't destroy views in batch mode.
   if (isUIAvailable()) {
     Workspace* workspace = App::instance()->workspace();
 
-    for (DocumentView* docView : getAllDocumentViews(doc)) {
+    for (DocView* docView : getAllDocViews(doc)) {
       workspace->removeView(docView);
       delete docView;
     }
@@ -217,18 +240,37 @@ void UIContext::onRemoveDocument(doc::Document* doc)
 
 void UIContext::onGetActiveSite(Site* site) const
 {
-  DocumentView* view = activeView();
+  DocView* view = activeView();
   if (view) {
     view->getSite(site);
-  }
-  // Default/dummy site (maybe for batch/command line mode)
-  else if (!isUIAvailable()) {
-    if (Document* doc = m_lastSelectedDoc) {
-      site->document(doc);
-      site->sprite(doc->sprite());
-      site->layer(doc->sprite()->indexToLayer(LayerIndex(0)));
-      site->frame(0);
+
+    if (site->sprite()) {
+      // Selected layers
+      Timeline* timeline = App::instance()->timeline();
+      if (timeline &&
+          timeline->range().enabled()) {
+        switch (timeline->range().type()) {
+          case DocRange::kCels:   site->focus(Site::InCels); break;
+          case DocRange::kFrames: site->focus(Site::InFrames); break;
+          case DocRange::kLayers: site->focus(Site::InLayers); break;
+        }
+        site->selectedLayers(timeline->selectedLayers());
+        site->selectedFrames(timeline->selectedFrames());
+      }
+      else {
+        ColorBar* colorBar = ColorBar::instance();
+        if (colorBar &&
+            colorBar->getPaletteView()->getSelectedEntriesCount() > 0) {
+          site->focus(Site::InColorBar);
+        }
+        else {
+          site->focus(Site::InEditor);
+        }
+      }
     }
+  }
+  else if (!isUIAvailable()) {
+    return app::Context::onGetActiveSite(site);
   }
 }
 

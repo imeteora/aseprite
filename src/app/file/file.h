@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,23 +9,26 @@
 #pragma once
 
 #include "base/mutex.h"
+#include "base/paths.h"
 #include "base/shared_ptr.h"
 #include "doc/frame.h"
 #include "doc/image_ref.h"
 #include "doc/pixel_format.h"
+#include "doc/selected_frames.h"
 
-#include <stdio.h>
+#include <cstdio>
 #include <string>
-#include <vector>
 
+// Flags for FileOp::createLoadDocumentOperation()
 #define FILE_LOAD_SEQUENCE_NONE         0x00000001
 #define FILE_LOAD_SEQUENCE_ASK          0x00000002
 #define FILE_LOAD_SEQUENCE_ASK_CHECKBOX 0x00000004
 #define FILE_LOAD_SEQUENCE_YES          0x00000008
 #define FILE_LOAD_ONE_FRAME             0x00000010
+#define FILE_LOAD_DATA_FILE             0x00000020
 
 namespace doc {
-  class Document;
+  class FrameTag;
 }
 
 namespace doc {
@@ -34,12 +37,14 @@ namespace doc {
   class Layer;
   class LayerImage;
   class Palette;
+  class Slice;
   class Sprite;
 }
 
 namespace app {
+
   class Context;
-  class Document;
+  class Doc;
   class FileFormat;
   class FormatOptions;
 
@@ -57,6 +62,33 @@ namespace app {
     virtual void ackFileOpProgress(double progress) = 0;
   };
 
+  class FileOpROI {             // Region of interest
+  public:
+    FileOpROI();
+    FileOpROI(const Doc* doc,
+              const std::string& sliceName,
+              const std::string& frameTagName,
+              const doc::SelectedFrames& selFrames,
+              const bool adjustByFrameTag);
+
+    const Doc* document() const { return m_document; }
+    doc::Slice* slice() const { return m_slice; }
+    doc::FrameTag* frameTag() const { return m_frameTag; }
+    doc::frame_t fromFrame() const { return m_selFrames.firstFrame(); }
+    doc::frame_t toFrame() const { return m_selFrames.lastFrame(); }
+    const doc::SelectedFrames& selectedFrames() const { return m_selFrames; }
+
+    doc::frame_t frames() const {
+      return (doc::frame_t)m_selFrames.size();
+    }
+
+  private:
+    const Doc* m_document;
+    doc::Slice* m_slice;
+    doc::FrameTag* m_frameTag;
+    doc::SelectedFrames m_selFrames;
+  };
+
   // Structure to load & save files.
   //
   // TODO This class do to many things. There should be a previous
@@ -65,8 +97,14 @@ namespace app {
   // input of this one.
   class FileOp {
   public:
-    static FileOp* createLoadDocumentOperation(Context* context, const char* filename, int flags);
-    static FileOp* createSaveDocumentOperation(const Context* context, const Document* document, const char* filename, const char* fn_format);
+    static FileOp* createLoadDocumentOperation(Context* context,
+                                               const std::string& filename,
+                                               int flags);
+
+    static FileOp* createSaveDocumentOperation(const Context* context,
+                                               const FileOpROI& roi,
+                                               const std::string& filename,
+                                               const std::string& filenameFormat);
 
     ~FileOp();
 
@@ -74,14 +112,16 @@ namespace app {
     bool isOneFrame() const { return m_oneframe; }
 
     const std::string& filename() const { return m_filename; }
-    const std::vector<std::string>& filenames() const { return m_seq.filename_list; }
+    const base::paths& filenames() const { return m_seq.filename_list; }
     Context* context() const { return m_context; }
-    Document* document() const { return m_document; }
-    Document* releaseDocument() {
-      Document* doc = m_document;
+    Doc* document() const { return m_document; }
+    Doc* releaseDocument() {
+      Doc* doc = m_document;
       m_document = nullptr;
       return doc;
     }
+
+    const FileOpROI& roi() const { return m_roi; }
 
     void createDocument(Sprite* spr);
     void operate(IFileOpProgress* progress = nullptr);
@@ -94,10 +134,12 @@ namespace app {
     // Does extra post-load processing which may require user intervention.
     void postLoad();
 
+    // Special options specific to the file format.
+    base::SharedPtr<FormatOptions> formatOptions() const;
+    void setFormatOptions(const base::SharedPtr<FormatOptions>& opts);
+
     // Helpers for file decoder/encoder (FileFormat) with
     // FILE_SUPPORT_SEQUENCES flag.
-    base::SharedPtr<FormatOptions> sequenceGetFormatOptions() const;
-    void sequenceSetFormatOptions(const base::SharedPtr<FormatOptions>& formatOptions);
     void sequenceSetNColors(int ncolors);
     int sequenceGetNColors() const;
     void sequenceSetColor(int index, int r, int g, int b);
@@ -123,6 +165,8 @@ namespace app {
     double progress() const;
     void setProgress(double progress);
 
+    void getFilenameList(base::paths& output) const;
+
   private:
     FileOp();                   // Undefined
     FileOp(FileOpType type, Context* context);
@@ -132,8 +176,10 @@ namespace app {
     Context* m_context;
     // TODO this should be a shared pointer (and we should remove
     //      releaseDocument() member function)
-    Document* m_document;       // Loaded document, or document to be saved.
+    Doc* m_document;            // Loaded document, or document to be saved.
     std::string m_filename;     // File-name to load/save.
+    std::string m_dataFilename; // File-name for a special XML .aseprite-data where extra sprite data can be stored
+    FileOpROI m_roi;
 
     // Shared fields between threads.
     mutable base::mutex m_mutex; // Mutex to access to the next two fields.
@@ -146,9 +192,11 @@ namespace app {
                                 // that support animation like
                                 // GIF/FLI/ASE).
 
+    base::SharedPtr<FormatOptions> m_formatOptions;
+
     // Data for sequences.
     struct {
-      std::vector<std::string> filename_list; // All file names to load/save.
+      base::paths filename_list;  // All file names to load/save.
       Palette* palette;           // Palette of the sequence.
       ImageRef image;             // Image to be saved/loaded.
       // For the progress bar.
@@ -159,7 +207,6 @@ namespace app {
       bool has_alpha;
       LayerImage* layer;
       Cel* last_cel;
-      base::SharedPtr<FormatOptions> format_options;
       // Flags after the user choose what to do with the sequence.
       int flags;
     } m_seq;
@@ -168,14 +215,17 @@ namespace app {
   };
 
   // Available extensions for each load/save operation.
-
-  std::string get_readable_extensions();
-  std::string get_writable_extensions();
+  base::paths get_readable_extensions();
+  base::paths get_writable_extensions();
 
   // High-level routines to load/save documents.
+  Doc* load_document(Context* context, const std::string& filename);
+  int save_document(Context* context, Doc* document);
 
-  app::Document* load_document(Context* context, const char* filename);
-  int save_document(Context* context, doc::Document* document);
+  // Returns true if the given filename contains a file extension that
+  // can be used to save only static images (i.e. animations are saved
+  // as sequence of files).
+  bool is_static_image_format(const std::string& filename);
 
 } // namespace app
 

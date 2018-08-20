@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2016 David Capello
+// Copyright (c) 2016-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,12 +11,12 @@
 #include "base/fstream_path.h"
 #include "base/hex.h"
 #include "base/trim_string.h"
-#include "base/unique_ptr.h"
 #include "doc/palette.h"
 
 #include <cctype>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -29,7 +29,7 @@ Palette* load_hex_file(const char *filename)
   if (f.bad())
     return nullptr;
 
-  base::UniquePtr<Palette> pal(new Palette(frame_t(0), 0));
+  std::unique_ptr<Palette> pal(new Palette(frame_t(0), 0));
 
   // Read line by line, each line one color, ignore everything that
   // doesn't look like a hex color.
@@ -43,8 +43,8 @@ Palette* load_hex_file(const char *filename)
       continue;
 
     // Find 6 consecutive hex digits
-    for (int i=0; i<line.size(); ++i) {
-      int j = i;
+    for (std::string::size_type i=0; i != line.size(); ++i) {
+      std::string::size_type j = i;
       for (; j<i+6; ++j) {
         if (!base::is_hex_digit(line[j]))
           break;

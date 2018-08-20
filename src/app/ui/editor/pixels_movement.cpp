@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -16,10 +16,11 @@
 #include "app/cmd/set_mask.h"
 #include "app/cmd/trim_cel.h"
 #include "app/console.h"
-#include "app/document.h"
-#include "app/document_api.h"
+#include "app/doc.h"
+#include "app/doc_api.h"
 #include "app/modules/gui.h"
 #include "app/pref/preferences.h"
+#include "app/site.h"
 #include "app/snap_to_grid.h"
 #include "app/ui/editor/pivot_helpers.h"
 #include "app/ui/status_bar.h"
@@ -36,7 +37,6 @@
 #include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/mask.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
 #include "gfx/region.h"
 #include "render/render.h"
@@ -56,7 +56,7 @@ PixelsMovement::PixelsMovement(
   const char* operationName)
   : m_reader(context)
   , m_site(site)
-  , m_document(static_cast<app::Document*>(site.document()))
+  , m_document(site.document())
   , m_sprite(site.sprite())
   , m_layer(site.layer())
   , m_transaction(context, operationName)
@@ -255,7 +255,7 @@ void PixelsMovement::moveImage(const gfx::Point& pos, MoveModifier moveModifier)
 
   switch (m_handle) {
 
-    case MoveHandle:
+    case MovePixelsHandle:
       if ((moveModifier & LockAxisMovement) == LockAxisMovement) {
         if (ABS(dx) < ABS(dy))
           dx = 0.0;
@@ -454,18 +454,18 @@ void PixelsMovement::moveImage(const gfx::Point& pos, MoveModifier moveModifier)
   }
 }
 
-void PixelsMovement::getDraggedImageCopy(base::UniquePtr<Image>& outputImage,
-                                         base::UniquePtr<Mask>& outputMask)
+void PixelsMovement::getDraggedImageCopy(std::unique_ptr<Image>& outputImage,
+                                         std::unique_ptr<Mask>& outputMask)
 {
   gfx::Rect bounds = m_currentData.transformedBounds();
-  base::UniquePtr<Image> image(Image::create(m_sprite->pixelFormat(), bounds.w, bounds.h));
+  std::unique_ptr<Image> image(Image::create(m_sprite->pixelFormat(), bounds.w, bounds.h));
 
-  drawImage(image, bounds.origin(), false);
+  drawImage(image.get(), bounds.origin(), false);
 
   // Draw mask without shrinking it, so the mask size is equal to the
   // "image" render.
-  base::UniquePtr<Mask> mask(new Mask);
-  drawMask(mask, false);
+  std::unique_ptr<Mask> mask(new Mask);
+  drawMask(mask.get(), false);
 
   // Now we can shrink and crop the image.
   gfx::Rect oldMaskBounds = mask->bounds();
@@ -474,7 +474,7 @@ void PixelsMovement::getDraggedImageCopy(base::UniquePtr<Image>& outputImage,
   if (newMaskBounds != oldMaskBounds) {
     newMaskBounds.x -= oldMaskBounds.x;
     newMaskBounds.y -= oldMaskBounds.y;
-    image.reset(crop_image(image,
+    image.reset(crop_image(image.get(),
                            newMaskBounds.x,
                            newMaskBounds.y,
                            newMaskBounds.w,
@@ -634,7 +634,7 @@ void PixelsMovement::setMaskColor(bool opaque, color_t mask_color)
 
 void PixelsMovement::redrawExtraImage()
 {
-  int t, opacity = static_cast<LayerImage*>(m_layer)->opacity();
+  int t, opacity = (m_layer->isImage() ? static_cast<LayerImage*>(m_layer)->opacity(): 255);
   Cel* cel = m_site.cel();
   if (cel) opacity = MUL_UN8(opacity, cel->opacity(), t);
 
@@ -643,7 +643,9 @@ void PixelsMovement::redrawExtraImage()
   m_extraCel.reset(new ExtraCel);
   m_extraCel->create(m_document->sprite(), bounds, m_site.frame(), opacity);
   m_extraCel->setType(render::ExtraType::PATCH);
-  m_extraCel->setBlendMode(static_cast<LayerImage*>(m_layer)->blendMode());
+  m_extraCel->setBlendMode(m_layer->isImage() ?
+                           static_cast<LayerImage*>(m_layer)->blendMode():
+                           BlendMode::NORMAL);
   m_document->setExtraCel(m_extraCel);
 
   // Draw the transformed pixels in the extra-cel which is the chunk

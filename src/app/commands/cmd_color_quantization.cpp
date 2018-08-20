@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -17,11 +17,10 @@
 #include "app/job.h"
 #include "app/modules/palettes.h"
 #include "app/pref/preferences.h"
+#include "app/sprite_job.h"
 #include "app/transaction.h"
 #include "app/ui/color_bar.h"
 #include "app/ui_context.h"
-#include "base/unique_ptr.h"
-#include "base/unique_ptr.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
 #include "render/quantization.h"
@@ -41,41 +40,8 @@ protected:
   void onExecute(Context* context) override;
 };
 
-class ColorQuantizationJob : public Job,
-                             public render::PaletteOptimizerDelegate {
-public:
-  ColorQuantizationJob(Sprite* sprite, bool withAlpha, Palette* palette)
-    : Job("Creating Palette")
-    , m_sprite(sprite)
-    , m_withAlpha(withAlpha)
-    , m_palette(palette) {
-  }
-
-private:
-
-  void onJob() override {
-    render::create_palette_from_sprite(
-      m_sprite, 0, m_sprite->lastFrame(),
-      m_withAlpha, m_palette, this);
-  }
-
-  bool onPaletteOptimizerContinue() override {
-    return !isCanceled();
-  }
-
-  void onPaletteOptimizerProgress(double progress) override {
-    jobProgress(progress);
-  }
-
-  Sprite* m_sprite;
-  bool m_withAlpha;
-  Palette* m_palette;
-};
-
 ColorQuantizationCommand::ColorQuantizationCommand()
-  : Command("ColorQuantization",
-            "Create Palette from Current Sprite (Color Quantization)",
-            CmdRecordableFlag)
+  : Command(CommandId::ColorQuantization(), CmdRecordableFlag)
 {
 }
 
@@ -143,13 +109,21 @@ void ColorQuantizationCommand::onExecute(Context* context)
       return;
 
     Palette tmpPalette(frame, entries.picks());
-    ColorQuantizationJob job(sprite, withAlpha, &tmpPalette);
-    job.startJob();
+
+    ContextReader reader(context);
+    SpriteJob job(reader, "Color Quantization");
+    job.startJobWithCallback(
+      [sprite, withAlpha, &tmpPalette, &job]{
+        render::create_palette_from_sprite(
+          sprite, 0, sprite->lastFrame(),
+          withAlpha, &tmpPalette,
+          &job);              // SpriteJob is a render::TaskDelegate
+      });
     job.waitJob();
     if (job.isCanceled())
       return;
 
-    base::UniquePtr<Palette> newPalette(
+    std::unique_ptr<Palette> newPalette(
       new Palette(createPal ? tmpPalette:
                               *get_current_palette()));
 
@@ -165,17 +139,13 @@ void ColorQuantizationCommand::onExecute(Context* context)
       ++i;
     }
 
-    if (*curPalette != *newPalette) {
-      ContextWriter writer(UIContext::instance(), 500);
-      Transaction transaction(writer.context(), "Color Quantization", ModifyDocument);
-      transaction.execute(new cmd::SetPalette(sprite, frame, newPalette.get()));
-      transaction.commit();
+    if (*curPalette != *newPalette)
+      job.transaction().execute(new cmd::SetPalette(sprite, frame, newPalette.get()));
 
-      set_current_palette(newPalette.get(), false);
-      ui::Manager::getDefault()->invalidate();
-    }
+    set_current_palette(newPalette.get(), false);
+    ui::Manager::getDefault()->invalidate();
   }
-  catch (base::Exception& e) {
+  catch (const base::Exception& e) {
     Console::showException(e);
   }
 }

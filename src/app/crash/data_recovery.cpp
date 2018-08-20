@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -21,7 +21,7 @@
 namespace app {
 namespace crash {
 
-DataRecovery::DataRecovery(doc::Context* ctx)
+DataRecovery::DataRecovery(Context* ctx)
   : m_inProgress(nullptr)
   , m_backup(nullptr)
 {
@@ -38,7 +38,10 @@ DataRecovery::DataRecovery(doc::Context* ctx)
 
       SessionPtr session(new Session(itempath));
       if (!session->isRunning()) {
-        if (!session->isEmpty()) {
+        if (session->version() != VERSION) {
+          TRACE("cannot be loaded (incompatible version)\n");
+        }
+        else if (!session->isEmpty()) {
           TRACE("to be loaded\n");
           m_sessions.push_back(session);
         }

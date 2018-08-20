@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,12 +9,14 @@
 #pragma once
 
 #include "app/file_system.h"
+#include "base/paths.h"
 #include "base/time.h"
 #include "obs/signal.h"
 #include "ui/timer.h"
 #include "ui/widget.h"
 
 #include <string>
+#include <vector>
 
 namespace she {
   class Surface;
@@ -27,14 +29,19 @@ namespace app {
     FileList();
     virtual ~FileList();
 
-    const std::string& extensions() const { return m_exts; }
-    void setExtensions(const char* extensions);
+    const base::paths& extensions() const { return m_exts; }
+    void setExtensions(const base::paths& extensions);
 
-    IFileItem* getCurrentFolder() const { return m_currentFolder; }
+    IFileItem* currentFolder() const { return m_currentFolder; }
     void setCurrentFolder(IFileItem* folder);
 
-    IFileItem* getSelectedFileItem() const { return m_selected; }
-    const FileItemList& getFileList() const { return m_list; }
+    IFileItem* selectedFileItem() const { return m_selected; }
+    const FileItemList& fileList() const { return m_list; }
+    FileItemList selectedFileItems() const;
+    void deselectedFileItems();
+
+    bool multipleSelection() { return m_multiselect; }
+    void setMultipleSelection(bool multiple);
 
     void goUp();
 
@@ -58,17 +65,19 @@ namespace app {
     gfx::Size getFileItemSize(IFileItem* fi) const;
     void makeSelectedFileitemVisible();
     void regenerateList();
-    int getSelectedIndex();
+    int selectedIndex() const;
     void selectIndex(int index);
     void generatePreviewOfSelectedItem();
     int thumbnailY();
 
     IFileItem* m_currentFolder;
     FileItemList m_list;
+
     bool m_req_valid;
     int m_req_w, m_req_h;
     IFileItem* m_selected;
-    std::string m_exts;
+    std::vector<bool> m_selectedItems;
+    base::paths m_exts;
 
     // Incremental-search
     std::string m_isearch;
@@ -86,6 +95,10 @@ namespace app {
     IFileItem* m_itemToGenerateThumbnail;
 
     she::Surface* m_thumbnail;
+
+    // True if this listbox accepts selecting multiple items at the
+    // same time.
+    bool m_multiselect;
   };
 
 } // namespace app

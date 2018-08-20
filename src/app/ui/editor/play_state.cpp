@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,8 +14,11 @@
 #include "app/commands/commands.h"
 #include "app/loop_tag.h"
 #include "app/pref/preferences.h"
+#include "app/tools/ink.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/editor/editor_customization_delegate.h"
 #include "app/ui/editor/scrolling_state.h"
+#include "app/ui/skin/skin_theme.h"
 #include "app/ui_context.h"
 #include "doc/frame_tag.h"
 #include "doc/handle_anidir.h"
@@ -58,7 +61,10 @@ void PlayState::onEnterState(Editor* editor)
 
   // Get the tag
   if (!m_playAll)
-    m_tag = get_animation_tag(m_editor->sprite(), m_refFrame);
+    m_tag = m_editor
+      ->getCustomizationDelegate()
+      ->getFrameTagProvider()
+      ->getFrameTagByFrame(m_refFrame, true);
 
   // Go to the first frame of the animation or active frame tag
   if (m_playOnce) {
@@ -86,13 +92,13 @@ void PlayState::onEnterState(Editor* editor)
 
 EditorState::LeaveAction PlayState::onLeaveState(Editor* editor, EditorState* newState)
 {
+  // We don't stop the timer if we are going to the ScrollingState
+  // (we keep playing the animation).
   if (!m_toScroll) {
+    m_playTimer.stop();
+
     if (m_playOnce || Preferences::instance().general.rewindOnStop())
       m_editor->setFrame(m_refFrame);
-
-    // We don't stop the timer if we are going to the ScrollingState
-    // (we keep playing the animation).
-    m_playTimer.stop();
   }
   return KeepState;
 }
@@ -104,7 +110,7 @@ bool PlayState::onMouseDown(Editor* editor, MouseMessage* msg)
 
   // When an editor is clicked the current view is changed.
   UIContext* context = UIContext::instance();
-  context->setActiveView(editor->getDocumentView());
+  context->setActiveView(editor->getDocView());
 
   // A click with right-button stops the animation
   if (msg->buttons() == kButtonRight) {
@@ -116,10 +122,12 @@ bool PlayState::onMouseDown(Editor* editor, MouseMessage* msg)
   // some time, so we don't change the current frame.
   m_toScroll = true;
 
+  // If the active tool is the Zoom tool, we start zooming.
+  if (editor->checkForZoom(msg))
+    return true;
+
   // Start scroll loop
-  EditorStatePtr newState(new ScrollingState());
-  editor->setState(newState);
-  newState->onMouseDown(editor, msg);
+  editor->startScrollingState(msg);
   return true;
 }
 
@@ -145,8 +153,24 @@ bool PlayState::onKeyUp(Editor* editor, KeyMessage* msg)
   return false;
 }
 
+bool PlayState::onSetCursor(Editor* editor, const gfx::Point& mouseScreenPos)
+{
+  tools::Ink* ink = editor->getCurrentEditorInk();
+  if (ink) {
+    if (ink->isZoom()) {
+      editor->showMouseCursor(
+        kCustomCursor, skin::SkinTheme::instance()->cursors.magnifier());
+      return true;
+    }
+  }
+  editor->showMouseCursor(kScrollCursor);
+  return true;
+}
+
 void PlayState::onPlaybackTick()
 {
+  ASSERT(m_playTimer.isRunning());
+
   if (m_nextFrameTime < 0)
     return;
 
@@ -188,7 +212,6 @@ void PlayState::onPlaybackTick()
 
     m_editor->setFrame(frame);
     m_nextFrameTime += getNextFrameTime();
-    m_editor->invalidate();
   }
 
   m_curFrameTick = base::current_tick();
@@ -214,9 +237,10 @@ void PlayState::onBeforeCommandExecution(CommandExecutionEvent& ev)
   //
   // There are other commands that just doesn't stop the animation
   // (zoom, scroll, etc.)
-  if (ev.command()->id() == CommandId::PlayAnimation ||
-      ev.command()->id() == CommandId::Zoom ||
-      ev.command()->id() == CommandId::Scroll) {
+  if (ev.command()->id() == CommandId::PlayAnimation() ||
+      ev.command()->id() == CommandId::Zoom() ||
+      ev.command()->id() == CommandId::Scroll() ||
+      ev.command()->id() == CommandId::Timeline()) {
     return;
   }
 

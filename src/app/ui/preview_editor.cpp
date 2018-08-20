@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,16 +11,16 @@
 #include "app/ui/preview_editor.h"
 
 #include "app/app.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/ini_file.h"
 #include "app/loop_tag.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
 #include "app/pref/preferences.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/editor/editor_customization_delegate.h"
 #include "app/ui/editor/editor_view.h"
 #include "app/ui/editor/navigate_state.h"
-#include "app/ui/skin/skin_button.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
 #include "app/ui/toolbar.h"
@@ -41,40 +41,40 @@ namespace app {
 using namespace app::skin;
 using namespace ui;
 
-class MiniCenterButton : public SkinButton<CheckBox> {
+class MiniCenterButton : public CheckBox {
 public:
-  MiniCenterButton()
-    : SkinButton<CheckBox>(
-      SkinTheme::instance()->parts.windowCenterButtonNormal(),
-      SkinTheme::instance()->parts.windowCenterButtonHot(),
-      SkinTheme::instance()->parts.windowCenterButtonSelected())
-  {
-    setup_bevels(this, 0, 0, 0, 0);
+  MiniCenterButton() : CheckBox("") {
     setDecorative(true);
     setSelected(true);
+    initTheme();
   }
 
 protected:
+  void onInitTheme(ui::InitThemeEvent& ev) override {
+    CheckBox::onInitTheme(ev);
+    setStyle(SkinTheme::instance()->styles.windowCenterButton());
+  }
+
   void onSetDecorativeWidgetBounds() override {
     SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
     Widget* window = parent();
     gfx::Rect rect(0, 0, 0, 0);
-    gfx::Size iconSize = theme->parts.windowPlayButtonNormal()->size();
-    gfx::Size closeSize = theme->parts.windowCloseButtonNormal()->size();
+    gfx::Size centerSize = this->sizeHint();
+    gfx::Size playSize = theme->calcSizeHint(this, theme->styles.windowPlayButton());
+    gfx::Size closeSize = theme->calcSizeHint(this, theme->styles.windowCloseButton());
 
-    rect.w = iconSize.w;
-    rect.h = iconSize.h;
-
-    rect.offset(window->bounds().x2() - 3*guiscale()
-      - iconSize.w - 1*guiscale()
-      - iconSize.w - 1*guiscale() - closeSize.w,
-      window->bounds().y + 3*guiscale());
+    rect.w = centerSize.w;
+    rect.h = centerSize.h;
+    rect.offset(window->bounds().x2()
+                - theme->styles.windowCloseButton()->margin().width() - closeSize.w
+                - theme->styles.windowPlayButton()->margin().width() - playSize.w
+                - style()->margin().right() - centerSize.w,
+                window->bounds().y + style()->margin().top());
 
     setBounds(rect);
   }
 
-  bool onProcessMessage(Message* msg) override
-  {
+  bool onProcessMessage(Message* msg) override {
     switch (msg->type()) {
 
       case kSetCursorMessage:
@@ -82,21 +82,16 @@ protected:
         return true;
     }
 
-    return SkinButton<CheckBox>::onProcessMessage(msg);
+    return CheckBox::onProcessMessage(msg);
   }
 };
 
-class MiniPlayButton : public SkinButton<Button> {
+class MiniPlayButton : public Button {
 public:
-  MiniPlayButton()
-    : SkinButton<Button>(SkinPartPtr(nullptr),
-                         SkinPartPtr(nullptr),
-                         SkinPartPtr(nullptr))
-    , m_isPlaying(false) {
+  MiniPlayButton() : Button(""), m_isPlaying(false) {
     enableFlags(CTRL_RIGHT_CLICK);
-    setupIcons();
-    setup_bevels(this, 0, 0, 0, 0);
     setDecorative(true);
+    initTheme();
   }
 
   bool isPlaying() const { return m_isPlaying; }
@@ -109,27 +104,32 @@ public:
   obs::signal<void()> Popup;
 
 private:
+  void onInitTheme(ui::InitThemeEvent& ev) override {
+    Button::onInitTheme(ev);
+    setupIcons();
+  }
 
   void onClick(Event& ev) override {
     m_isPlaying = !m_isPlaying;
     setupIcons();
 
-    SkinButton<Button>::onClick(ev);
+    Button::onClick(ev);
   }
 
   void onSetDecorativeWidgetBounds() override {
     SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
     Widget* window = parent();
     gfx::Rect rect(0, 0, 0, 0);
-    gfx::Size playSize = theme->parts.windowPlayButtonNormal()->size();
-    gfx::Size closeSize = theme->parts.windowCloseButtonNormal()->size();
+    gfx::Size playSize = this->sizeHint();
+    gfx::Size closeSize = theme->calcSizeHint(this, theme->styles.windowCloseButton());
+    gfx::Border margin(0, 0, 0, 0);
 
     rect.w = playSize.w;
     rect.h = playSize.h;
-
-    rect.offset(window->bounds().x2() - 3*guiscale()
-      - playSize.w - 1*guiscale() - closeSize.w,
-      window->bounds().y + 3*guiscale());
+    rect.offset(window->bounds().x2()
+                - theme->styles.windowCloseButton()->margin().width() - closeSize.w
+                - style()->margin().right() - playSize.w,
+                window->bounds().y + style()->margin().top());
 
     setBounds(rect);
   }
@@ -156,20 +156,15 @@ private:
       }
     }
 
-    return SkinButton<Button>::onProcessMessage(msg);
+    return Button::onProcessMessage(msg);
   }
 
   void setupIcons() {
     SkinTheme* theme = SkinTheme::instance();
-
     if (m_isPlaying)
-      setParts(theme->parts.windowStopButtonNormal(),
-               theme->parts.windowStopButtonHot(),
-               theme->parts.windowStopButtonSelected());
+      setStyle(theme->styles.windowStopButton());
     else
-      setParts(theme->parts.windowPlayButtonNormal(),
-               theme->parts.windowPlayButtonHot(),
-               theme->parts.windowPlayButtonSelected());
+      setStyle(theme->styles.windowPlayButton());
   }
 
   bool m_isPlaying;
@@ -184,7 +179,6 @@ PreviewEditorWindow::PreviewEditorWindow()
   , m_aniSpeed(1.0)
   , m_relatedEditor(nullptr)
 {
-  setChildSpacing(0);
   setAutoRemap(false);
   setWantFocus(false);
 
@@ -196,6 +190,8 @@ PreviewEditorWindow::PreviewEditorWindow()
 
   addChild(m_centerButton);
   addChild(m_playButton);
+
+  initTheme();
 }
 
 PreviewEditorWindow::~PreviewEditorWindow()
@@ -208,6 +204,13 @@ void PreviewEditorWindow::setPreviewEnabled(bool state)
   m_isEnabled = state;
 
   updateUsingEditor(current_editor);
+}
+
+void PreviewEditorWindow::pressPlayButton()
+{
+  m_playButton->setSelected(
+    !m_playButton->isSelected());
+  onPlayClicked();
 }
 
 bool PreviewEditorWindow::onProcessMessage(ui::Message* msg)
@@ -242,12 +245,18 @@ bool PreviewEditorWindow::onProcessMessage(ui::Message* msg)
   return Window::onProcessMessage(msg);
 }
 
+void PreviewEditorWindow::onInitTheme(ui::InitThemeEvent& ev)
+{
+  Window::onInitTheme(ev);
+  setChildSpacing(0);
+}
+
 void PreviewEditorWindow::onClose(ui::CloseEvent& ev)
 {
-  Button* closeButton = dynamic_cast<Button*>(ev.getSource());
-  if (closeButton != NULL &&
-      closeButton->id() == SkinTheme::kThemeCloseButtonId) {
-    // Here we don't use "setMiniEditorEnabled" to change the state of
+  ButtonBase* closeButton = dynamic_cast<ButtonBase*>(ev.getSource());
+  if (closeButton &&
+      closeButton->type() == kWindowCloseButtonWidget) {
+    // Here we don't use "setPreviewEnabled" to change the state of
     // "m_isEnabled" because we're coming from a close event of the
     // window.
     m_isEnabled = false;
@@ -264,7 +273,7 @@ void PreviewEditorWindow::onWindowResize()
 {
   Window::onWindowResize();
 
-  DocumentView* view = UIContext::instance()->activeView();
+  DocView* view = UIContext::instance()->activeView();
   if (view)
     updateUsingEditor(view->editor());
 }
@@ -276,7 +285,7 @@ bool PreviewEditorWindow::hasDocument() const
 
 DocumentPreferences& PreviewEditorWindow::docPref()
 {
-  Document* doc = (m_docView ? m_docView->document(): nullptr);
+  Doc* doc = (m_docView ? m_docView->document(): nullptr);
   return Preferences::instance().document(doc);
 }
 
@@ -302,8 +311,11 @@ void PreviewEditorWindow::onPlayClicked()
     miniEditor->play(Preferences::instance().preview.playOnce(),
                      Preferences::instance().preview.playAll());
   }
-  else
+  else {
     miniEditor->stop();
+    if (m_relatedEditor)
+      miniEditor->setFrame(m_relatedEditor->frame());
+  }
 }
 
 void PreviewEditorWindow::onPopupSpeed()
@@ -321,6 +333,11 @@ void PreviewEditorWindow::onPopupSpeed()
   m_aniSpeed = miniEditor->getAnimationSpeedMultiplier();
 }
 
+Editor* PreviewEditorWindow::previewEditor() const
+{
+  return (m_docView ? m_docView->editor(): nullptr);
+}
+
 void PreviewEditorWindow::updateUsingEditor(Editor* editor)
 {
   if (!m_isEnabled || !editor) {
@@ -334,7 +351,7 @@ void PreviewEditorWindow::updateUsingEditor(Editor* editor)
 
   m_relatedEditor = editor;
 
-  Document* document = editor->document();
+  Doc* document = editor->document();
   Editor* miniEditor = (m_docView ? m_docView->editor(): nullptr);
 
   if (!isVisible())
@@ -348,7 +365,7 @@ void PreviewEditorWindow::updateUsingEditor(Editor* editor)
   if (!miniEditor || miniEditor->document() != document) {
     destroyDocView();
 
-    m_docView = new DocumentView(document, DocumentView::Preview, this);
+    m_docView = new DocView(document, DocView::Preview, this);
     addChild(m_docView);
 
     miniEditor = m_docView->editor();
@@ -379,10 +396,20 @@ void PreviewEditorWindow::updateUsingEditor(Editor* editor)
   }
   else {
     if (miniEditor->isPlaying()) {
-      doc::FrameTag* tag = get_animation_tag(editor->sprite(), editor->frame());
-      doc::FrameTag* playingTag = get_animation_tag(editor->sprite(), m_refFrame);
-      if (tag != playingTag)
-        miniEditor->stop();
+      doc::FrameTag* tag = editor
+        ->getCustomizationDelegate()
+        ->getFrameTagProvider()
+        ->getFrameTagByFrame(editor->frame(), true);
+
+      doc::FrameTag* playingTag = editor
+        ->getCustomizationDelegate()
+        ->getFrameTagProvider()
+        ->getFrameTagByFrame(m_refFrame, true);
+
+      if (tag == playingTag)
+        return;
+
+      miniEditor->stop();
     }
 
     if (!miniEditor->isPlaying())

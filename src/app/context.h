@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,16 +10,20 @@
 
 #include "app/commands/params.h"
 #include "app/context_flags.h"
+#include "app/context_observer.h"
+#include "app/docs.h"
+#include "app/docs_observer.h"
 #include "base/disable_copying.h"
 #include "base/exception.h"
-#include "doc/context.h"
+#include "obs/observable.h"
 #include "obs/signal.h"
 
 #include <vector>
 
 namespace app {
   class Command;
-  class Document;
+  class Doc;
+  class DocView;
 
   class CommandPreconditionException : public base::Exception {
   public:
@@ -47,9 +51,14 @@ namespace app {
     bool m_canceled;
   };
 
-  class Context : public doc::Context {
+  class Context : public obs::observable<ContextObserver>,
+                  public DocsObserver {
   public:
     Context();
+    virtual ~Context();
+
+    const Docs& documents() const { return m_docs; }
+    Docs& documents() { return m_docs; }
 
     virtual bool isUIAvailable() const     { return false; }
     virtual bool isRecordingMacro() const  { return false; }
@@ -59,23 +68,39 @@ namespace app {
     bool checkFlags(uint32_t flags) const { return m_flags.check(flags); }
     void updateFlags() { m_flags.update(this); }
 
-    void sendDocumentToTop(doc::Document* document);
+    void sendDocumentToTop(Doc* document);
 
-    app::Document* activeDocument() const;
+    Site activeSite() const;
+    Doc* activeDocument() const;
+    void setActiveDocument(Doc* document);
     bool hasModifiedDocuments() const;
+    void notifyActiveSiteChanged();
 
     void executeCommand(const char* commandName);
     virtual void executeCommand(Command* command, const Params& params = Params());
+
+    virtual DocView* getFirstDocView(Doc* document) const {
+      return nullptr;
+    }
 
     obs::signal<void (CommandExecutionEvent&)> BeforeCommandExecution;
     obs::signal<void (CommandExecutionEvent&)> AfterCommandExecution;
 
   protected:
-    virtual void onCreateDocument(doc::CreateDocumentArgs* args) override;
+    // DocsObserver impl
+    void onCreateDocument(CreateDocArgs* args) override;
+    void onAddDocument(Doc* doc) override;
+    void onRemoveDocument(Doc* doc) override;
+
+    virtual void onGetActiveSite(Site* site) const;
+    virtual void onSetActiveDocument(Doc* doc);
+
+    Doc* lastSelectedDoc() { return m_lastSelectedDoc; }
 
   private:
-    // Last updated flags.
-    ContextFlags m_flags;
+    Docs m_docs;
+    ContextFlags m_flags;       // Last updated flags.
+    Doc* m_lastSelectedDoc;
 
     DISABLE_COPYING(Context);
   };

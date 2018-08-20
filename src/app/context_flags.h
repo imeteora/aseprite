@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,13 +10,10 @@
 
 #include "base/ints.h"
 
-namespace doc {
-  class Site;
-}
-
 namespace app {
 
   class Context;
+  class Site;
 
   class ContextFlags {
   public:
@@ -34,6 +31,7 @@ namespace app {
       ActiveLayerIsBackground     = 1 << 10,
       ActiveLayerIsVisible        = 1 << 11,
       ActiveLayerIsEditable       = 1 << 12,
+      ActiveLayerIsReference      = 1 << 13,
     };
 
     ContextFlags();
@@ -42,7 +40,7 @@ namespace app {
     void update(Context* context);
 
   private:
-    void updateFlagsFromSite(const doc::Site& site);
+    void updateFlagsFromSite(const Site& site);
 
     uint32_t m_flags;
   };

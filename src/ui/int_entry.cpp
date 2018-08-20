@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -17,6 +17,7 @@
 #include "ui/manager.h"
 #include "ui/message.h"
 #include "ui/popup_window.h"
+#include "ui/scale.h"
 #include "ui/size_hint_event.h"
 #include "ui/slider.h"
 #include "ui/system.h"
@@ -29,16 +30,17 @@ namespace ui {
 using namespace gfx;
 
 IntEntry::IntEntry(int min, int max, SliderDelegate* sliderDelegate)
-  : Entry(int(std::ceil(std::log10((double)max)))+1, "")
+  : Entry(int(std::floor(std::log10(double(max))))+1, "")
   , m_min(min)
   , m_max(max)
   , m_slider(m_min, m_max, m_min, sliderDelegate)
-  , m_popupWindow(NULL)
+  , m_popupWindow(nullptr)
   , m_changeFromSlider(false)
 {
   m_slider.setFocusStop(false); // In this way the IntEntry doesn't lost the focus
   m_slider.setTransparent(true);
   m_slider.Change.connect(&IntEntry::onChangeSlider, this);
+  initTheme();
 }
 
 IntEntry::~IntEntry()
@@ -131,12 +133,23 @@ bool IntEntry::onProcessMessage(Message* msg)
   return Entry::onProcessMessage(msg);
 }
 
+void IntEntry::onInitTheme(InitThemeEvent& ev)
+{
+  Entry::onInitTheme(ev);
+  m_slider.initTheme();       // The slider might not be in the popup window
+  if (m_popupWindow)
+    m_popupWindow->initTheme();
+}
+
 void IntEntry::onSizeHint(SizeHintEvent& ev)
 {
-  int min_w = font()->textLength(m_slider.convertValueToText(m_min));
-  int max_w = font()->textLength(m_slider.convertValueToText(m_max));
+  int trailing = font()->textLength(getSuffix());
+  trailing = MAX(trailing, 2*theme()->getEntryCaretSize(this).w);
 
-  int w = MAX(min_w, max_w) + font()->charWidth('%');
+  int min_w = font()->textLength(m_slider.convertValueToText(m_min));
+  int max_w = font()->textLength(m_slider.convertValueToText(m_max)) + trailing;
+
+  int w = MAX(min_w, max_w);
   int h = textHeight();
 
   w += border().width();
@@ -160,31 +173,26 @@ void IntEntry::openPopup()
 {
   m_slider.setValue(getValue());
 
+  m_popupWindow = new TransparentPopupWindow(PopupWindow::ClickBehavior::CloseOnClickInOtherWindow);
+  m_popupWindow->setAutoRemap(false);
+  m_popupWindow->addChild(&m_slider);
+  m_popupWindow->Close.connect(&IntEntry::onPopupClose, this);
+
   Rect rc = bounds();
-  int sliderH = m_slider.sizeHint().h;
-
-  if (rc.y+rc.h+sliderH < ui::display_h())
-    rc.y += rc.h;
-  else
-    rc.y -= sliderH;
-
-  rc.h = sliderH;
+  gfx::Size sz = m_popupWindow->sizeHint();
   rc.w = 128*guiscale();
   if (rc.x+rc.w > ui::display_w())
-    rc.x = rc.x - rc.w + bounds().w;
-
-  m_popupWindow = new PopupWindow("", PopupWindow::ClickBehavior::CloseOnClickInOtherWindow);
-  m_popupWindow->setAutoRemap(false);
-  m_popupWindow->setTransparent(true);
-  m_popupWindow->setBgColor(gfx::ColorNone);
+    rc.x = rc.x-rc.w+bounds().w;
+  if (rc.y+rc.h+sz.h < ui::display_h())
+    rc.y += rc.h;
+  else
+    rc.y -= sz.h;
   m_popupWindow->setBounds(rc);
-  m_popupWindow->Close.connect(&IntEntry::onPopupClose, this);
 
   Region rgn(rc.createUnion(bounds()));
   rgn.createUnion(rgn, Region(bounds()));
   m_popupWindow->setHotRegion(rgn);
 
-  m_popupWindow->addChild(&m_slider);
   m_popupWindow->openWindow();
 }
 

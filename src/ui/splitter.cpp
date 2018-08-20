@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -13,9 +13,10 @@
 #include "ui/load_layout_event.h"
 #include "ui/manager.h"
 #include "ui/message.h"
-#include "ui/size_hint_event.h"
 #include "ui/resize_event.h"
 #include "ui/save_layout_event.h"
+#include "ui/scale.h"
+#include "ui/size_hint_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
 
@@ -29,6 +30,7 @@ Splitter::Splitter(Type type, int align)
   : Widget(kSplitterWidget)
   , m_type(type)
   , m_pos(50)
+  , m_guiscale(guiscale())
 {
   setAlign(align);
   initTheme();
@@ -38,6 +40,7 @@ void Splitter::setPosition(double pos)
 {
   m_pos = pos;
   limitPos();
+  onPositionChange();
 
   invalidate();
 }
@@ -117,7 +120,7 @@ bool Splitter::onProcessMessage(Message* msg)
         }
 
         limitPos();
-        layout();
+        onPositionChange();
         return true;
       }
       break;
@@ -177,11 +180,20 @@ bool Splitter::onProcessMessage(Message* msg)
   return Widget::onProcessMessage(msg);
 }
 
+void Splitter::onInitTheme(InitThemeEvent& ev)
+{
+  if (m_type == ByPixel) m_pos /= m_guiscale;
+  m_guiscale = ui::guiscale();
+  if (m_type == ByPixel) m_pos *= m_guiscale;
+
+  Widget::onInitTheme(ev);
+}
+
 void Splitter::onResize(ResizeEvent& ev)
 {
 #define LAYOUT_TWO_CHILDREN(x, y, w, h, l, t, r, b)                     \
   {                                                                     \
-    avail = rc.w - this->childSpacing();                                \
+    avail = rc.w - childSpacing();                                      \
                                                                         \
     pos.x = rc.x;                                                       \
     pos.y = rc.y;                                                       \
@@ -201,7 +213,7 @@ void Splitter::onResize(ResizeEvent& ev)
     child1->setBounds(pos);                                             \
     gfx::Rect child1Pos = child1->bounds();                             \
                                                                         \
-    pos.x = child1Pos.x + child1Pos.w + this->childSpacing();           \
+    pos.x = child1Pos.x + child1Pos.w + childSpacing();                 \
     pos.y = rc.y;                                                       \
     pos.w = avail - child1Pos.w;                                        \
     pos.h = rc.h;                                                       \
@@ -233,11 +245,6 @@ void Splitter::onResize(ResizeEvent& ev)
     child2->setBounds(rc);
 }
 
-void Splitter::onPaint(PaintEvent& ev)
-{
-  theme()->paintSplitter(ev);
-}
-
 void Splitter::onSizeHint(SizeHintEvent& ev)
 {
 #define GET_CHILD_SIZE(w, h)                    \
@@ -249,7 +256,7 @@ void Splitter::onSizeHint(SizeHintEvent& ev)
 #define FINAL_SIZE(w)                                     \
   do {                                                    \
     w *= visibleChildren;                                 \
-    w += this->childSpacing() * (visibleChildren-1);      \
+    w += childSpacing() * (visibleChildren-1);            \
   } while(0)
 
   int visibleChildren;
@@ -294,13 +301,18 @@ void Splitter::onLoadLayout(LoadLayoutEvent& ev)
   ev.stream() >> m_pos;
   if (m_pos < 0) m_pos = 0;
   if (m_type == ByPixel)
-    m_pos *= guiscale();
+    m_pos *= m_guiscale;
 }
 
 void Splitter::onSaveLayout(SaveLayoutEvent& ev)
 {
-  double pos = (m_type == ByPixel ? m_pos / guiscale(): m_pos);
+  double pos = (m_type == ByPixel ? m_pos / m_guiscale: m_pos);
   ev.stream() << pos;
+}
+
+void Splitter::onPositionChange()
+{
+  layout();
 }
 
 Widget* Splitter::panel1() const

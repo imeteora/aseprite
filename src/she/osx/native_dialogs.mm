@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/fs.h"
+#include "she/common/file_dialog.h"
 #include "she/display.h"
 #include "she/keys.h"
 #include "she/native_cursor.h"
@@ -78,42 +79,17 @@
 
 namespace she {
 
-class FileDialogOSX : public FileDialog {
+class FileDialogOSX : public CommonFileDialog {
 public:
-  FileDialogOSX()
-    : m_save(false)
-  {
-  }
-
-  void dispose() override {
-    delete this;
-  }
-
-  void toOpenFile() override {
-    m_save = false;
-  }
-
-  void toSaveFile() override {
-    m_save = true;
-  }
-
-  void setTitle(const std::string& title) override {
-    m_title = title;
-  }
-
-  void setDefaultExtension(const std::string& extension) override {
-    m_defExtension = extension;
-  }
-
-  void addFilter(const std::string& extension, const std::string& description) override {
-    if (m_defExtension.empty())
-      m_defExtension = extension;
-
-    m_filters.push_back(std::make_pair(description, extension));
+  FileDialogOSX() {
   }
 
   std::string fileName() override {
     return m_filename;
+  }
+
+  void getMultipleFileNames(base::paths& output) override {
+    output = m_filenames;
   }
 
   void setFileName(const std::string& filename) override {
@@ -121,63 +97,69 @@ public:
   }
 
   bool show(Display* display) override {
-    NSSavePanel* panel = nil;
+    bool retValue = false;
+    @autoreleasepool {
+      NSSavePanel* panel = nil;
 
-    if (m_save) {
-      panel = [NSSavePanel savePanel];
+      if (m_type == Type::SaveFile) {
+        panel = [NSSavePanel new];
+      }
+      else {
+        panel = [NSOpenPanel new];
+        [(NSOpenPanel*)panel setAllowsMultipleSelection:(m_type == Type::OpenFiles ? YES: NO)];
+        [(NSOpenPanel*)panel setCanChooseFiles:(m_type != Type::OpenFolder ? YES: NO)];
+        [(NSOpenPanel*)panel setCanChooseDirectories:(m_type == Type::OpenFolder ? YES: NO)];
+      }
+
+      [panel setTitle:[NSString stringWithUTF8String:m_title.c_str()]];
+      [panel setCanCreateDirectories:YES];
+
+      std::string defPath = base::get_file_path(m_filename);
+      std::string defName = base::get_file_name(m_filename);
+      if (!defPath.empty())
+        [panel setDirectoryURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:defPath.c_str()]]];
+      if (!defName.empty())
+        [panel setNameFieldStringValue:[NSString stringWithUTF8String:defName.c_str()]];
+
+      if (m_type != Type::OpenFolder && !m_filters.empty()) {
+        NSMutableArray* types = [[NSMutableArray alloc] init];
+        // The first extension in the array is used as the default one.
+        if (!m_defExtension.empty())
+          [types addObject:[NSString stringWithUTF8String:m_defExtension.c_str()]];
+        for (const auto& filter : m_filters)
+          [types addObject:[NSString stringWithUTF8String:filter.first.c_str()]];
+        [panel setAllowedFileTypes:types];
+        if (m_type == Type::SaveFile)
+          [panel setAllowsOtherFileTypes:NO];
+      }
+
+      OpenSaveHelper* helper = [OpenSaveHelper new];
+      [helper setPanel:panel];
+      [helper setDisplay:display];
+      [helper performSelectorOnMainThread:@selector(runModal) withObject:nil waitUntilDone:YES];
+
+      if ([helper result] == NSFileHandlingPanelOKButton) {
+        if (m_type == Type::OpenFiles) {
+          for (NSURL* url in [(NSOpenPanel*)panel URLs]) {
+            m_filename = [[url path] UTF8String];
+            m_filenames.push_back(m_filename);
+          }
+        }
+        else {
+          NSURL* url = [panel URL];
+          m_filename = [[url path] UTF8String];
+          m_filenames.push_back(m_filename);
+        }
+        retValue = true;
+      }
     }
-    else {
-      panel = [NSOpenPanel openPanel];
-      [(NSOpenPanel*)panel setAllowsMultipleSelection:NO];
-      [(NSOpenPanel*)panel setCanChooseDirectories:NO];
-    }
-
-    [panel setTitle:[NSString stringWithUTF8String:m_title.c_str()]];
-    [panel setCanCreateDirectories:YES];
-
-    std::string defPath = base::get_file_path(m_filename);
-    std::string defName = base::get_file_name(m_filename);
-    if (!defPath.empty())
-      [panel setDirectoryURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:defPath.c_str()]]];
-    if (!defName.empty())
-      [panel setNameFieldStringValue:[NSString stringWithUTF8String:defName.c_str()]];
-
-    NSMutableArray* types = [[NSMutableArray alloc] init];
-    // The first extension in the array is used as the default one.
-    if (!m_defExtension.empty())
-      [types addObject:[NSString stringWithUTF8String:m_defExtension.c_str()]];
-    for (const auto& filter : m_filters)
-      [types addObject:[NSString stringWithUTF8String:filter.second.c_str()]];
-    [panel setAllowedFileTypes:types];
-
-    OpenSaveHelper* helper = [[OpenSaveHelper alloc] init];
-    [helper setPanel:panel];
-    [helper setDisplay:display];
-    [helper performSelectorOnMainThread:@selector(runModal) withObject:nil waitUntilDone:YES];
-
-    bool retValue;
-    if ([helper result] == NSFileHandlingPanelOKButton) {
-      NSURL* url = [panel URL];
-      m_filename = [[url path] UTF8String];
-      retValue = true;
-    }
-    else
-      retValue = false;
-
-#if !__has_feature(objc_arc)
-    [helper release];
-    [types release];
-#endif
     return retValue;
   }
 
 private:
 
-  std::vector<std::pair<std::string, std::string>> m_filters;
-  std::string m_defExtension;
   std::string m_filename;
-  std::string m_title;
-  bool m_save;
+  base::paths m_filenames;
 };
 
 NativeDialogsOSX::NativeDialogsOSX()

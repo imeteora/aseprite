@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,7 +10,7 @@
 #include "config.h"
 #endif
 
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/file/file.h"
 #include "app/file/file_format.h"
 #include "app/file/format_options.h"
@@ -24,9 +24,19 @@ namespace app {
 using namespace base;
 
 class IcoFormat : public FileFormat {
-  const char* onGetName() const override { return "ico"; }
-  const char* onGetExtensions() const override { return "ico"; }
-  docio::FileFormat onGetDocioFormat() const override { return docio::FileFormat::ICO_IMAGES; }
+
+  const char* onGetName() const override {
+    return "ico";
+  }
+
+  void onGetExtensions(base::paths& exts) const override {
+    exts.push_back("ico");
+  }
+
+  dio::FileFormat onGetDioFormat() const override {
+    return dio::FileFormat::ICO_IMAGES;
+  }
+
   int onGetFlags() const override {
     return
       FILE_SUPPORT_LOAD |
@@ -127,7 +137,7 @@ bool IcoFormat::onLoad(FileOp* fop)
   // Create the sprite with one background layer
   Sprite* sprite = new Sprite(pixelFormat, width, height, numcolors);
   LayerImage* layer = new LayerImage(sprite);
-  sprite->folder()->addLayer(layer);
+  sprite->root()->addLayer(layer);
 
   // Create the first image/cel
   ImageRef image(Image::create(pixelFormat, width, height));
@@ -151,6 +161,7 @@ bool IcoFormat::onLoad(FileOp* fop)
   bmpHeader.yPelsPerMeter        = fgetl(f); // unused for ico
   bmpHeader.clrUsed              = fgetl(f); // unused for ico
   bmpHeader.clrImportant         = fgetl(f); // unused for ico
+  (void)bmpHeader;                           // unused
 
   // Read the palette
   if (entry.bpp <= 8) {
@@ -233,7 +244,7 @@ bool IcoFormat::onSave(FileOp* fop)
   int c, x, y, b, m, v;
   frame_t n, num = sprite->totalFrames();
 
-  FileHandle handle(open_file_with_exception(fop->filename(), "wb"));
+  FileHandle handle(open_file_with_exception_sync_on_close(fop->filename(), "wb"));
   FILE* f = handle.get();
 
   offset = 6 + num*16;  // ICONDIR + ICONDIRENTRYs
@@ -266,14 +277,14 @@ bool IcoFormat::onSave(FileOp* fop)
     offset += size;
   }
 
-  base::UniquePtr<Image> image(Image::create(
+  std::unique_ptr<Image> image(Image::create(
       sprite->pixelFormat(),
       sprite->width(),
       sprite->height()));
 
   render::Render render;
   for (n=frame_t(0); n<num; ++n) {
-    render.renderSprite(image, sprite, n);
+    render.renderSprite(image.get(), sprite, n);
 
     bpp = (sprite->pixelFormat() == IMAGE_INDEXED) ? 8 : 24;
     bw = (((image->width() * bpp / 8) + 3) / 4) * 4;
@@ -316,21 +327,21 @@ bool IcoFormat::onSave(FileOp* fop)
         switch (image->pixelFormat()) {
 
           case IMAGE_RGB:
-            c = get_pixel(image, x, y);
+            c = get_pixel(image.get(), x, y);
             fputc(rgba_getb(c), f);
             fputc(rgba_getg(c), f);
             fputc(rgba_getr(c), f);
             break;
 
           case IMAGE_GRAYSCALE:
-            c = get_pixel(image, x, y);
+            c = get_pixel(image.get(), x, y);
             fputc(graya_getv(c), f);
             fputc(graya_getv(c), f);
             fputc(graya_getv(c), f);
             break;
 
           case IMAGE_INDEXED:
-            c = get_pixel(image, x, y);
+            c = get_pixel(image.get(), x, y);
             fputc(c, f);
             break;
         }
@@ -350,7 +361,7 @@ bool IcoFormat::onSave(FileOp* fop)
         v = 128;
 
         for (b=0; b<8; b++) {
-          c = get_pixel(image, x*8+b, y);
+          c = get_pixel(image.get(), x*8+b, y);
 
           switch (image->pixelFormat()) {
 

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -18,6 +18,7 @@ namespace app {
     enum class ColorModel {
       RGB,
       RYB,
+      NORMAL_MAP,
     };
 
     enum class Harmony {
@@ -34,20 +35,28 @@ namespace app {
 
     ColorWheel();
 
-    // IColorSource
-    app::Color getColorByPosition(const gfx::Point& pos) override;
-
     bool isDiscrete() const { return m_discrete; }
     void setDiscrete(bool state);
 
     void setColorModel(ColorModel colorModel);
     void setHarmony(Harmony harmony);
 
+  protected:
+    app::Color getMainAreaColor(const int u, const int umax,
+                                const int v, const int vmax) override;
+    app::Color getBottomBarColor(const int u, const int umax) override;
+    void onPaintMainArea(ui::Graphics* g, const gfx::Rect& rc) override;
+    void onPaintBottomBar(ui::Graphics* g, const gfx::Rect& rc) override;
+    void onPaintSurfaceInBgThread(she::Surface* s,
+                                  const gfx::Rect& main,
+                                  const gfx::Rect& bottom,
+                                  const gfx::Rect& alpha,
+                                  bool& stop) override;
+    int onNeedsSurfaceRepaint(const app::Color& newColor) override;
+    bool subColorPicked() override { return m_harmonyPicked; }
+
   private:
-    app::Color getColorInClientPos(const gfx::Point& pos);
     void onResize(ui::ResizeEvent& ev) override;
-    void onPaint(ui::PaintEvent& ev) override;
-    bool onProcessMessage(ui::Message* msg) override;
     void onOptions();
     int getHarmonies() const;
     app::Color getColorInHarmony(int i) const;
@@ -57,13 +66,13 @@ namespace app {
     // With dir == -1, the angle came from HSV and is converted to the current color model.
     int convertHueAngle(int angle, int dir) const;
 
-    gfx::Rect m_clientBounds;
     gfx::Rect m_wheelBounds;
+    gfx::Color m_bgColor;
     int m_wheelRadius;
     bool m_discrete;
     ColorModel m_colorModel;
     Harmony m_harmony;
-    ui::ButtonBase m_options;
+    ui::Button m_options;
 
     // Internal flag used to know if after pickColor() we selected an
     // harmony.

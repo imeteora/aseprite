@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -47,10 +47,16 @@ WidgetType buttonset_item_type()
 ButtonSet::Item::Item()
   : Widget(buttonset_item_type())
   , m_icon(NULL)
+  , m_hotColor(gfx::ColorNone)
 {
   setup_mini_font(this);
   setAlign(CENTER | MIDDLE);
   setFocusStop(true);
+}
+
+void ButtonSet::Item::setHotColor(gfx::Color color)
+{
+  m_hotColor = color;
 }
 
 void ButtonSet::Item::setIcon(const SkinPartPtr& icon, bool mono)
@@ -70,7 +76,7 @@ void ButtonSet::Item::onPaint(ui::PaintEvent& ev)
   SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
   Graphics* g = ev.graphics();
   gfx::Rect rc = clientBounds();
-  gfx::Color fg, bg;
+  gfx::Color fg;
   SkinPartPtr nw;
   gfx::Rect boxRc, textRc, iconRc;
   gfx::Size iconSize;
@@ -96,35 +102,47 @@ void ButtonSet::Item::onPaint(ui::PaintEvent& ev)
 
   if (isSelected() || hasMouseOver()) {
     if (hasCapture()) {
-      nw = theme->parts.toolbuttonPushed();
+      nw = theme->parts.buttonsetItemPushed();
       fg = theme->colors.buttonSelectedText();
-      bg = theme->colors.buttonSelectedFace();
     }
     else {
-      nw = (hasFocus() ? theme->parts.toolbuttonHotFocused():
-                         theme->parts.toolbuttonHot());
+      nw = (hasFocus() ? theme->parts.buttonsetItemHotFocused():
+                         theme->parts.buttonsetItemHot());
       fg = theme->colors.buttonHotText();
-      bg = theme->colors.buttonHotFace();
     }
   }
   else {
-    nw = (hasFocus() ? theme->parts.toolbuttonFocused():
-                       theme->parts.toolbuttonLast());
+    nw = (hasFocus() ? theme->parts.buttonsetItemFocused():
+                       theme->parts.buttonsetItemNormal());
     fg = theme->colors.buttonNormalText();
-    bg = theme->colors.buttonNormalFace();
   }
 
   if (!isLastCol)
     rc.w += 1*guiscale();
 
   if (!isLastRow) {
-    if (nw == theme->parts.toolbuttonHotFocused())
+    if (nw == theme->parts.buttonsetItemHotFocused())
       rc.h += 2*guiscale();
     else
       rc.h += 3*guiscale();
   }
 
-  theme->drawRect(g, rc, nw.get(), bg);
+  theme->drawRect(g, rc, nw.get(),
+                  gfx::is_transparent(m_hotColor));
+
+  if (!gfx::is_transparent(m_hotColor)) {
+    gfx::Rect rc2(rc);
+    gfx::Rect sprite(nw->spriteBounds());
+    gfx::Rect slices(nw->slicesBounds());
+    rc2.shrink(
+      gfx::Border(
+        slices.x-1, // TODO this "-1" is an ugly hack for the pal edit
+                    //      button, replace all this with styles
+        slices.y-1,
+        sprite.w-slices.w-slices.x-1,
+        sprite.h-slices.h-slices.y));
+    g->fillRect(m_hotColor, rc2);
+  }
 
   if (m_icon) {
     she::Surface* bmp = m_icon->bitmap(0);
@@ -141,8 +159,7 @@ void ButtonSet::Item::onPaint(ui::PaintEvent& ev)
 
   if (hasText()) {
     g->setFont(font());
-    g->drawUIString(text(), fg, gfx::ColorNone, textRc.origin(),
-                    false);
+    g->drawUIText(text(), fg, gfx::ColorNone, textRc.origin(), 0);
   }
 }
 
@@ -162,11 +179,11 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
       if (isEnabled() && hasText()) {
         KeyMessage* keymsg = static_cast<KeyMessage*>(msg);
         bool mnemonicPressed = (msg->altPressed() &&
-                                mnemonicCharPressed(keymsg));
+                                isMnemonicPressed(keymsg));
 
         if (mnemonicPressed ||
             (hasFocus() && keymsg->scancode() == kKeySpace)) {
-          buttonSet()->setSelectedItem(this);
+          buttonSet()->onSelectItem(this, true, msg);
           onClick();
         }
       }
@@ -183,7 +200,7 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
       }
 
       captureMouse();
-      buttonSet()->setSelectedItem(this);
+      buttonSet()->onSelectItem(this, true, msg);
       invalidate();
 
       if (static_cast<MouseMessage*>(msg)->left() &&
@@ -217,10 +234,15 @@ bool ButtonSet::Item::onProcessMessage(ui::Message* msg)
             // Only for ButtonSets trigerred on mouse up.
             if (buttonSet()->m_triggerOnMouseUp &&
                 g_itemBeforeCapture >= 0) {
-              // As we never received a kMouseUpMessage (so we never
-              // called onClick()), we have to restore the selected
-              // item at the point when we received the mouse capture.
-              buttonSet()->setSelectedItem(g_itemBeforeCapture);
+              if (g_itemBeforeCapture < (int)children().size()) {
+                Item* item = dynamic_cast<Item*>(at(g_itemBeforeCapture));
+                ASSERT(item);
+
+                // As we never received a kMouseUpMessage (so we never
+                // called onClick()), we have to restore the selected
+                // item at the point when we received the mouse capture.
+                buttonSet()->onSelectItem(item, true, msg);
+              }
               g_itemBeforeCapture = -1;
             }
           }
@@ -278,7 +300,11 @@ ButtonSet::ButtonSet(int columns)
   , m_triggerOnMouseUp(false)
   , m_multipleSelection(false)
 {
-  noBorderNoChildSpacing();
+  InitTheme.connect(
+    [this]{
+      noBorderNoChildSpacing();
+    });
+  initTheme();
 }
 
 ButtonSet::Item* ButtonSet::addItem(const std::string& text, int hspan, int vspan)
@@ -308,6 +334,17 @@ ButtonSet::Item* ButtonSet::getItem(int index)
   return dynamic_cast<Item*>(at(index));
 }
 
+int ButtonSet::getItemIndex(const Item* item) const
+{
+  int index = 0;
+  for (Widget* child : children()) {
+    if (child == item)
+      return index;
+    ++index;
+  }
+  return -1;
+}
+
 int ButtonSet::selectedItem() const
 {
   int index = 0;
@@ -328,6 +365,11 @@ void ButtonSet::setSelectedItem(int index, bool focusItem)
 }
 
 void ButtonSet::setSelectedItem(Item* item, bool focusItem)
+{
+  onSelectItem(item, focusItem, nullptr);
+}
+
+void ButtonSet::onSelectItem(Item* item, bool focusItem, ui::Message* msg)
 {
   if (!m_multipleSelection) {
     if (item && item->isSelected())

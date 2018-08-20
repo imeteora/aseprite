@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,6 +11,7 @@
 #include "gfx/point.h"
 #include "gfx/size.h"
 #include "ui/base.h"
+#include "ui/clipboard_delegate.h"
 
 namespace doc {
   class Image;
@@ -20,10 +21,10 @@ namespace doc {
 }
 
 namespace app {
-  class Document;
+  class Doc;
   class ContextReader;
   class ContextWriter;
-  class DocumentRange;
+  class DocRange;
 
   namespace clipboard {
     using namespace doc;
@@ -31,28 +32,33 @@ namespace app {
     enum ClipboardFormat {
       ClipboardNone,
       ClipboardImage,
-      ClipboardDocumentRange,
+      ClipboardDocRange,
       ClipboardPaletteEntries,
     };
 
     // TODO Horrible API: refactor it (maybe a merge with she::clipboard).
 
-    class ClipboardManager {
+    class ClipboardManager : public ui::ClipboardDelegate {
     public:
+      static ClipboardManager* instance();
+
       ClipboardManager();
       ~ClipboardManager();
 
-      static ClipboardManager* instance();
+      void setClipboardText(const std::string& text) override;
+      bool getClipboardText(std::string& text) override;
+    private:
+      std::string m_text; // Text used when the native clipboard is disabled
     };
 
     ClipboardFormat get_current_format();
-    void get_document_range_info(Document** document, DocumentRange* range);
+    void get_document_range_info(Doc** document, DocRange* range);
 
     void clear_content();
     void cut(ContextWriter& context);
     void copy(const ContextReader& context);
     void copy_merged(const ContextReader& context);
-    void copy_range(const ContextReader& context, const DocumentRange& range);
+    void copy_range(const ContextReader& context, const DocRange& range);
     void copy_image(const Image* image, const Mask* mask, const Palette* palette);
     void copy_palette(const Palette* palette, const PalettePicks& picks);
     void paste();

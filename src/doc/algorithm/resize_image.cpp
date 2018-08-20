@@ -1,5 +1,5 @@
 // Aseprite Document Library
-// Copyright (c) 2001-2016 David Capello
+// Copyright (c) 2001-2018 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -36,7 +36,7 @@ void resize_image_nearest(const Image* src, Image* dst)
     py = std::floor(y * y_ratio);
     for (int x=0; x<dst->width(); ++x, ++dstIt) {
       px = std::floor(x * x_ratio);
-      *dstIt = get_pixel_fast<ImageTraits>(src, px, py);
+      *dstIt = get_pixel_fast<ImageTraits>(src, int(px), int(py));
     }
   }
 }
@@ -184,7 +184,7 @@ void fixup_image_transparent_colors(Image* image)
         for (x=0; x<image->width(); ++x, ++it) {
           uint32_t c = *it;
 
-          // if this is a completelly-transparent pixel...
+          // if this is a completely-transparent pixel...
           if (rgba_geta(c) == 0) {
             count = 0;
             r = g = b = 0;
@@ -224,7 +224,7 @@ void fixup_image_transparent_colors(Image* image)
         for (x=0; x<image->width(); ++x, ++it) {
           uint16_t c = *it;
 
-          // If this is a completelly-transparent pixel...
+          // If this is a completely-transparent pixel...
           if (graya_geta(c) == 0) {
             count = 0;
             k = 0;

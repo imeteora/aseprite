@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,12 +11,12 @@
 #include "app/context_flags.h"
 
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "app/modules/editors.h"
+#include "app/site.h"
 #include "app/ui/editor/editor.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
-#include "doc/site.h"
 #include "doc/sprite.h"
 
 namespace app {
@@ -29,14 +29,14 @@ ContextFlags::ContextFlags()
 void ContextFlags::update(Context* context)
 {
   Site site = context->activeSite();
-  Document* document = static_cast<Document*>(site.document());
+  Doc* document = site.document();
 
   m_flags = 0;
 
   if (document) {
     m_flags |= HasActiveDocument;
 
-    if (document->lock(Document::ReadLock, 0)) {
+    if (document->lock(Doc::ReadLock, 0)) {
       m_flags |= ActiveDocumentIsReadable;
 
       if (document->isMaskVisible())
@@ -50,6 +50,7 @@ void ContextFlags::update(Context* context)
       document->unlock();
     }
 
+#ifdef ENABLE_UI
     // TODO this is a hack, try to find a better design to handle this
     // "moving pixels" state.
     if (current_editor &&
@@ -63,6 +64,7 @@ void ContextFlags::update(Context* context)
 
       updateFlagsFromSite(current_editor->getSite());
     }
+#endif // ENABLE_UI
   }
 }
 
@@ -87,11 +89,14 @@ void ContextFlags::updateFlagsFromSite(const Site& site)
   if (layer->isBackground())
     m_flags |= ActiveLayerIsBackground;
 
-  if (layer->isVisible())
+  if (layer->isVisibleHierarchy())
     m_flags |= ActiveLayerIsVisible;
 
-  if (layer->isEditable())
+  if (layer->isEditableHierarchy())
     m_flags |= ActiveLayerIsEditable;
+
+  if (layer->isReference())
+    m_flags |= ActiveLayerIsReference;
 
   if (layer->isImage()) {
     m_flags |= ActiveLayerIsImage;

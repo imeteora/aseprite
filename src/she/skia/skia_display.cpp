@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -100,6 +100,7 @@ int SkiaDisplay::scale() const
 
 void SkiaDisplay::setScale(int scale)
 {
+  ASSERT(scale > 0);
   m_window.setScale(scale);
 }
 
@@ -136,6 +137,13 @@ void SkiaDisplay::setTitleBar(const std::string& title)
   m_window.setTitle(title);
 }
 
+void SkiaDisplay::setIcons(const SurfaceList& icons)
+{
+#if !defined(_WIN32) && !defined(__APPLE__)
+  m_window.setIcons(icons);
+#endif
+}
+
 NativeCursor SkiaDisplay::nativeMouseCursor()
 {
   return m_nativeCursor;
@@ -151,12 +159,7 @@ bool SkiaDisplay::setNativeMouseCursor(const she::Surface* surface,
                                        const gfx::Point& focus,
                                        const int scale)
 {
-#if defined(_WIN32) || defined(__APPLE__)
   return m_window.setNativeMouseCursor(surface, focus, scale);
-#else
-  // TODO impl this for Linux
-  return false;
-#endif
 }
 
 void SkiaDisplay::setMousePosition(const gfx::Point& position)
@@ -182,6 +185,13 @@ std::string SkiaDisplay::getLayout()
 void SkiaDisplay::setLayout(const std::string& layout)
 {
   m_window.setLayout(layout);
+}
+
+void SkiaDisplay::setInterpretOneFingerGestureAsMouseMovement(bool state)
+{
+#ifdef _WIN32
+  m_window.setInterpretOneFingerGestureAsMouseMovement(state);
+#endif
 }
 
 void SkiaDisplay::setTranslateDeadKeys(bool state)

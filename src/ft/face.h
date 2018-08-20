@@ -1,5 +1,5 @@
 // Aseprite FreeType Wrapper
-// Copyright (c) 2016 David Capello
+// Copyright (c) 2016-2017 David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,9 +10,7 @@
 
 #include "base/debug.h"
 #include "base/disable_copying.h"
-#include "base/string.h"
 #include "ft/freetype_headers.h"
-#include "gfx/rect.h"
 
 #include <map>
 
@@ -22,6 +20,8 @@ namespace ft {
     FT_UInt glyph_index;
     FT_Glyph ft_glyph;
     FT_Bitmap* bitmap;
+    double startX;
+    double endX;
     double bearingX;
     double bearingY;
     double x;
@@ -29,12 +29,14 @@ namespace ft {
   };
 
   template<typename Cache>
-  class FaceBase {
+  class FaceFT {
   public:
-    FaceBase(FT_Face face) : m_face(face) {
+    typedef ft::Glyph Glyph;
+
+    FaceFT(FT_Face face) : m_face(face) {
     }
 
-    ~FaceBase() {
+    ~FaceFT() {
       if (m_face)
         FT_Done_Face(m_face);
     }
@@ -81,80 +83,24 @@ namespace ft {
       return int(m_face->descender * y_scale);
     }
 
+    bool hasCodePoint(int codepoint) const {
+      if (m_face) {
+        codepoint = FT_Get_Char_Index(m_face, codepoint);
+        return (codepoint != 0);
+      }
+      else
+        return false;
+    }
+
+    Cache& cache() { return m_cache; }
+
   protected:
     FT_Face m_face;
     bool m_antialias;
     Cache m_cache;
 
   private:
-    DISABLE_COPYING(FaceBase);
-  };
-
-  template<typename Cache>
-  class FaceFT : public FaceBase<Cache> {
-  public:
-    using FaceBase<Cache>::m_face;
-    using FaceBase<Cache>::m_cache;
-
-    FaceFT(FT_Face face)
-      : FaceBase<Cache>(face) {
-    }
-
-    template<typename Callback>
-    void forEachGlyph(const std::string& str, Callback callback) {
-      bool use_kerning = (FT_HAS_KERNING(this->m_face) ? true: false);
-      FT_UInt prev_glyph = 0;
-      double x = 0, y = 0;
-
-      auto it = base::utf8_const_iterator(str.begin());
-      auto end = base::utf8_const_iterator(str.end());
-      for (; it != end; ++it) {
-        FT_UInt glyph_index = this->m_cache.getGlyphIndex(
-          this->m_face, *it);
-
-        if (use_kerning && prev_glyph && glyph_index) {
-          FT_Vector kerning;
-          FT_Get_Kerning(this->m_face, prev_glyph, glyph_index,
-                         FT_KERNING_DEFAULT, &kerning);
-          x += kerning.x / 64.0;
-        }
-
-        Glyph* glyph = this->m_cache.loadGlyph(
-          this->m_face, glyph_index, this->m_antialias);
-        if (glyph) {
-          glyph->bitmap = &FT_BitmapGlyph(glyph->ft_glyph)->bitmap;
-          glyph->x = x + glyph->bearingX;
-          glyph->y = y
-            + this->height()
-            + this->descender() // descender is negative
-            - glyph->bearingY;
-
-          callback(*glyph);
-
-          x += glyph->ft_glyph->advance.x / double(1 << 16);
-          y += glyph->ft_glyph->advance.y / double(1 << 16);
-
-          this->m_cache.doneGlyph(glyph);
-        }
-
-        prev_glyph = glyph_index;
-      }
-    }
-
-    gfx::Rect calcTextBounds(const std::string& str) {
-      gfx::Rect bounds(0, 0, 0, 0);
-
-      forEachGlyph(
-        str,
-        [&bounds, this](Glyph& glyph) {
-          bounds |= gfx::Rect(int(glyph.x),
-                              int(glyph.y),
-                              glyph.bitmap->width,
-                              glyph.bitmap->rows);
-        });
-
-      return bounds;
-    }
+    DISABLE_COPYING(FaceFT);
   };
 
   class NoCache {
@@ -250,8 +196,6 @@ namespace ft {
   private:
     std::map<FT_UInt, Glyph*> m_glyphMap;
   };
-
-  typedef FaceFT<SimpleCache> Face;
 
 } // namespace ft
 

@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -48,6 +48,7 @@ public:
   bool isMaximized() const override;
   bool isMinimized() const override;
   void setTitleBar(const std::string& title) override;
+  void setIcons(const SurfaceList& icons) override;
   NativeCursor nativeMouseCursor() override;
   bool setNativeMouseCursor(NativeCursor cursor) override;
   bool setNativeMouseCursor(const she::Surface* surface,
@@ -59,6 +60,8 @@ public:
 
   std::string getLayout() override;
   void setLayout(const std::string& layout) override;
+
+  void setInterpretOneFingerGestureAsMouseMovement(bool state) override;
 
   void setTranslateDeadKeys(bool state);
 

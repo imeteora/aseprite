@@ -1,8 +1,15 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
+
+// Uncomment if you want to test the backup process each 5 secondsh
+//#define TEST_BACKUPS_WITH_A_SHORT_PERIOD
+
+// Uncomment if you want to check that backups are correctly saved
+// after being saved.
+//#define TEST_BACKUP_INTEGRITY
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -11,14 +18,20 @@
 #include "app/crash/backup_observer.h"
 
 #include "app/app.h"
+#include "app/context.h"
 #include "app/crash/session.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/doc_access.h"
+#include "app/doc_diff.h"
 #include "app/pref/preferences.h"
 #include "base/bind.h"
 #include "base/chrono.h"
 #include "base/remove_from_container.h"
 #include "base/scoped_lock.h"
-#include "doc/context.h"
+
+#ifdef TEST_BACKUP_INTEGRITY
+#include "ui/system.h"
+#endif
 
 namespace app {
 namespace crash {
@@ -41,7 +54,7 @@ public:
 
 }
 
-BackupObserver::BackupObserver(Session* session, doc::Context* ctx)
+BackupObserver::BackupObserver(Session* session, Context* ctx)
   : m_session(session)
   , m_ctx(ctx)
   , m_done(false)
@@ -63,28 +76,28 @@ void BackupObserver::stop()
   m_done = true;
 }
 
-void BackupObserver::onAddDocument(doc::Document* document)
+void BackupObserver::onAddDocument(Doc* document)
 {
   TRACE("RECO: Observe document %p\n", document);
   base::scoped_lock hold(m_mutex);
-  m_documents.push_back(static_cast<app::Document*>(document));
+  m_documents.push_back(document);
 }
 
-void BackupObserver::onRemoveDocument(doc::Document* document)
+void BackupObserver::onRemoveDocument(Doc* document)
 {
-  TRACE("RECO:: Remove document %p\n", document);
+  TRACE("RECO: Remove document %p\n", document);
   {
     base::scoped_lock hold(m_mutex);
-    base::remove_from_container(m_documents, static_cast<app::Document*>(document));
+    base::remove_from_container(m_documents, document);
   }
-  m_session->removeDocument(static_cast<app::Document*>(document));
+  m_session->removeDocument(document);
 }
 
 void BackupObserver::backgroundThread()
 {
   int normalPeriod = int(60.0*Preferences::instance().general.dataRecoveryPeriod());
   int lockedPeriod = 5;
-#if 0                           // Just for testing purposes
+#ifdef TEST_BACKUPS_WITH_A_SHORT_PERIOD
   normalPeriod = 5;
   lockedPeriod = 5;
 #endif
@@ -102,13 +115,44 @@ void BackupObserver::backgroundThread()
       base::Chrono chrono;
       bool somethingLocked = false;
 
-      for (app::Document* doc : m_documents) {
+      for (Doc* doc : m_documents) {
         try {
           if (doc->needsBackup()) {
-            if (!m_session->saveDocumentChanges(doc)) {
+            if (doc->inhibitBackup()) {
+              TRACE("RECO: Document '%d' backup is temporarily inhibited\n", doc->id());
+              somethingLocked = true;
+            }
+            else if (!m_session->saveDocumentChanges(doc)) {
               TRACE("RECO: Document '%d' backup was canceled by UI\n", doc->id());
               somethingLocked = true;
             }
+#ifdef TEST_BACKUP_INTEGRITY
+            else {
+              DocReader reader(doc, 500);
+              std::unique_ptr<Doc> copy(
+                m_session->restoreBackupDocById(doc->id()));
+              DocDiff diff = compare_docs(doc, copy.get());
+              if (diff.anything) {
+                TRACE("RECO: Differences (%s/%s/%s/%s/%s/%s/%s)\n",
+                      diff.canvas ? "canvas": "",
+                      diff.totalFrames ? "totalFrames": "",
+                      diff.frameDuration ? "frameDuration": "",
+                      diff.frameTags ? "frameTags": "",
+                      diff.palettes ? "palettes": "",
+                      diff.layers ? "layers": "",
+                      diff.cels ? "cels": "");
+
+                Doc* copyDoc = copy.release();
+                ui::execute_from_ui_thread(
+                  [this, copyDoc] {
+                    m_ctx->documents().add(copyDoc);
+                  });
+              }
+              else {
+                TRACE("RECO: No differences\n");
+              }
+            }
+#endif
           }
         }
         catch (const std::exception&) {

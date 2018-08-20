@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -16,6 +16,7 @@
 #include "ui/manager.h"
 #include "ui/message.h"
 #include "ui/paint_event.h"
+#include "ui/scale.h"
 #include "ui/size_hint_event.h"
 #include "ui/system.h"
 #include "ui/theme.h"
@@ -266,8 +267,8 @@ bool ColorCurveEditor::editNodeManually(gfx::Point& viewPt)
   window.openWindowInForeground();
 
   if (window.closer() == window.ok()) {
-    viewPt.x = int(window.x()->textDouble());
-    viewPt.y = int(window.y()->textDouble());
+    viewPt.x = window.x()->textInt();
+    viewPt.y = window.y()->textInt();
     viewPt.x = MID(0, viewPt.x, 255);
     viewPt.y = MID(0, viewPt.y, 255);
     return true;

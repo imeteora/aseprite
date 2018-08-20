@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -8,6 +8,7 @@
 #define APP_WIDGET_LOADER_H_INCLUDED
 #pragma once
 
+#include "app/i18n/xml_translator.h"
 #include "app/widget_type_mismatch.h"
 
 #include <map>
@@ -69,6 +70,7 @@ namespace app {
 
     TypeCreatorsMap m_typeCreators;
     ui::TooltipManager* m_tooltipManager;
+    XmlTranslator m_xmlTranslator;
   };
 
 } // namespace app

@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2016  David Capello
+// Copyright (C) 2016-2017  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,15 +11,17 @@
 #include "she/common/freetype_font.h"
 
 #include "base/string.h"
+#include "ft/algorithm.h"
 #include "gfx/point.h"
 #include "gfx/size.h"
 
 namespace she {
 
-FreeTypeFont::FreeTypeFont(const char* filename, int height)
-  : m_face(m_ft.open(filename))
+FreeTypeFont::FreeTypeFont(ft::Lib& lib,
+                           const char* filename,
+                           const int height)
+  : m_face(lib.open(filename))
 {
-  ASSERT(m_face.isValid());
   if (m_face.isValid())
     m_face.setSize(height);
 }
@@ -48,17 +50,9 @@ int FreeTypeFont::height() const
   return int(m_face.height());
 }
 
-int FreeTypeFont::charWidth(int chr) const
-{
-  // TODO avoid creating a temporary string
-  std::wstring tmp;
-  tmp.push_back(chr);
-  return m_face.calcTextBounds(base::to_utf8(tmp)).w;
-}
-
 int FreeTypeFont::textLength(const std::string& str) const
 {
-  return m_face.calcTextBounds(str).w;
+  return ft::calc_text_bounds(m_face, str).w;
 }
 
 bool FreeTypeFont::isScalable() const
@@ -76,9 +70,16 @@ void FreeTypeFont::setAntialias(bool antialias)
   m_face.setAntialias(antialias);
 }
 
-FreeTypeFont* loadFreeTypeFont(const char* filename, int height)
+bool FreeTypeFont::hasCodePoint(int codepoint) const
 {
-  FreeTypeFont* font = new FreeTypeFont(filename, height);
+  return m_face.hasCodePoint(codepoint);
+}
+
+FreeTypeFont* load_free_type_font(ft::Lib& lib,
+                                  const char* filename,
+                                  const int height)
+{
+  FreeTypeFont* font = new FreeTypeFont(lib, filename, height);
   if (!font->isValid()) {
     delete font;
     font = nullptr;

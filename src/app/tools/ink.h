@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -7,6 +7,8 @@
 #ifndef APP_TOOLS_INK_H_INCLUDED
 #define APP_TOOLS_INK_H_INCLUDED
 #pragma once
+
+#include "app/tools/stroke.h"
 
 namespace gfx {
   class Region;
@@ -22,9 +24,6 @@ namespace app {
     // The main task of this class is to draw scanlines through its
     // inkHline function member.
     class Ink {
-      // selection, paint, paint_fg, paint_bg, eraser,
-      // replace_fg_with_bg, replace_bg_with_fg, pick_fg, pick_bg, scroll,
-      // move, shade, blur, jumble
     public:
       virtual ~Ink() { }
 
@@ -65,6 +64,9 @@ namespace app {
       // Returns true if this ink is used to mark slices
       virtual bool isSlice() const { return false; }
 
+      // Returns true if this tool uses the dithering options
+      virtual bool withDitheringOptions() const { return false; }
+
       // Returns true if inkHline() needs source cel coordinates
       // instead of sprite coordinates (i.e. relative to
       // ToolLoop::getCelOrigin()).
@@ -88,6 +90,14 @@ namespace app {
       // PointShapes call this method when they convert a mouse-point
       // to a shape (e.g. pen shape)  with various scanlines.
       virtual void inkHline(int x1, int y, int x2, ToolLoop* loop) = 0;
+
+      // Called when we have to start using the ink for a new set of
+      // strokes (e.g. color gradients is adjusted depending on the
+      // first/last stroke points).
+      virtual void prepareForStrokes(ToolLoop* loop, Strokes& strokes) { }
+
+      // Called for each point shape.
+      virtual void prepareForPointShape(ToolLoop* loop, bool firstPoint, int x, int y) { }
 
     };
 

@@ -1,8 +1,10 @@
 // SHE library
-// Copyright (C) 2015-2016  David Capello
+// Copyright (C) 2015-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
+
+#define KEY_TRACE(...)
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -13,14 +15,18 @@
 #include "gfx/point.h"
 #include "she/event.h"
 #include "she/event_queue.h"
-#include "she/keys.h"
 #include "she/osx/generate_drop_files.h"
+#include "she/osx/keys.h"
 #include "she/osx/window.h"
 #include "she/system.h"
 
-#include <Carbon/Carbon.h>      // For VK codes
-
 namespace she {
+
+// Global variable used between View and OSXNSMenu to check if the
+// keyDown: event was used by a key equivalent in the menu.
+//
+// TODO I'm not proud of this, but it does the job
+bool g_keyEquivalentUsed = false;
 
 bool osx_is_key_pressed(KeyScancode scancode);
 
@@ -49,22 +55,25 @@ Event::MouseButton get_mouse_buttons(NSEvent* event)
   // Some Wacom drivers on OS X report right-clicks with
   // buttonNumber=0, so we've to check the type event anyway.
   switch (event.type) {
-    case NSLeftMouseDown:
-    case NSLeftMouseUp:
-    case NSLeftMouseDragged:
+    case NSEventTypeLeftMouseDown:
+    case NSEventTypeLeftMouseUp:
+    case NSEventTypeLeftMouseDragged:
       return Event::LeftButton;
-    case NSRightMouseDown:
-    case NSRightMouseUp:
-    case NSRightMouseDragged:
+    case NSEventTypeRightMouseDown:
+    case NSEventTypeRightMouseUp:
+    case NSEventTypeRightMouseDragged:
       return Event::RightButton;
   }
 
-  switch ([event buttonNumber]) {
+  switch (event.buttonNumber) {
     case 0: return Event::LeftButton; break;
     case 1: return Event::RightButton; break;
     case 2: return Event::MiddleButton; break;
-    // TODO add support for other buttons
+    // NSOtherMouseDown/Up/Dragged
+    case 3: return Event::X1Button; break;
+    case 4: return Event::X2Button; break;
   }
+
   return Event::MouseButton::NoneButton;
 }
 
@@ -72,57 +81,12 @@ KeyModifiers get_modifiers_from_nsevent(NSEvent* event)
 {
   int modifiers = kKeyNoneModifier;
   NSEventModifierFlags nsFlags = event.modifierFlags;
-  if (nsFlags & NSShiftKeyMask) modifiers |= kKeyShiftModifier;
-  if (nsFlags & NSControlKeyMask) modifiers |= kKeyCtrlModifier;
-  if (nsFlags & NSAlternateKeyMask) modifiers |= kKeyAltModifier;
-  if (nsFlags & NSCommandKeyMask) modifiers |= kKeyCmdModifier;
+  if (nsFlags & NSEventModifierFlagShift) modifiers |= kKeyShiftModifier;
+  if (nsFlags & NSEventModifierFlagControl) modifiers |= kKeyCtrlModifier;
+  if (nsFlags & NSEventModifierFlagOption) modifiers |= kKeyAltModifier;
+  if (nsFlags & NSEventModifierFlagCommand) modifiers |= kKeyCmdModifier;
   if (osx_is_key_pressed(kKeySpace)) modifiers |= kKeySpaceModifier;
   return (KeyModifiers)modifiers;
-}
-
-// Based on code from:
-// http://stackoverflow.com/questions/22566665/how-to-capture-unicode-from-key-events-without-an-nstextview
-// http://stackoverflow.com/questions/12547007/convert-key-code-into-key-equivalent-string
-// http://stackoverflow.com/questions/8263618/convert-virtual-key-code-to-unicode-string
-//
-// It includes a "translateDeadKeys" flag to avoid processing dead
-// keys in case that we want to use key
-CFStringRef get_unicode_from_key_code(NSEvent* event,
-                                      const bool translateDeadKeys)
-{
-  // The "TISCopyCurrentKeyboardInputSource()" doesn't contain
-  // kTISPropertyUnicodeKeyLayoutData (returns nullptr) when the input
-  // source is Japanese (Romaji/Hiragana/Katakana).
-
-  //TISInputSourceRef inputSource = TISCopyCurrentKeyboardInputSource();
-  TISInputSourceRef inputSource = TISCopyCurrentKeyboardLayoutInputSource();
-  CFDataRef keyLayoutData = (CFDataRef)TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData);
-  const UCKeyboardLayout* keyLayout =
-    (keyLayoutData ? (const UCKeyboardLayout*)CFDataGetBytePtr(keyLayoutData): nullptr);
-
-  UInt32 deadKeyState = (translateDeadKeys ? g_lastDeadKeyState: 0);
-  UniChar output[4];
-  UniCharCount length;
-
-  // Reference here:
-  // https://developer.apple.com/reference/coreservices/1390584-uckeytranslate?language=objc
-  UCKeyTranslate(
-    keyLayout,
-    event.keyCode,
-    kUCKeyActionDown,
-    ((event.modifierFlags >> 16) & 0xFF),
-    LMGetKbdType(),
-    (translateDeadKeys ? 0: kUCKeyTranslateNoDeadKeysMask),
-    &deadKeyState,
-    sizeof(output) / sizeof(output[0]),
-    &length,
-    output);
-
-  if (translateDeadKeys)
-    g_lastDeadKeyState = deadKeyState;
-
-  CFRelease(inputSource);
-  return CFStringCreateWithCharacters(kCFAllocatorDefault, output, length);
 }
 
 } // anonymous namespace
@@ -211,9 +175,15 @@ using namespace she;
 
 - (void)keyDown:(NSEvent*)event
 {
+  g_keyEquivalentUsed = false;
   [super keyDown:event];
 
-  KeyScancode scancode = cocoavk_to_scancode(event.keyCode);
+  // If a key equivalent used the keyDown event, we don't generate
+  // this she::KeyDown event.
+  if (g_keyEquivalentUsed)
+    return;
+
+  KeyScancode scancode = scancode_from_nsevent(event);
   Event ev;
   ev.setType(Event::KeyDown);
   ev.setScancode(scancode);
@@ -223,7 +193,8 @@ using namespace she;
 
   bool sendMsg = true;
 
-  CFStringRef strRef = get_unicode_from_key_code(event, false);
+  CFStringRef strRef = get_unicode_from_key_code(event.keyCode,
+                                                 event.modifierFlags);
   if (strRef) {
     int length = CFStringGetLength(strRef);
     if (length == 1)
@@ -235,7 +206,9 @@ using namespace she;
     g_pressedKeys[scancode] = (ev.unicodeChar() ? ev.unicodeChar(): 1);
 
   if (g_translateDeadKeys) {
-    strRef = get_unicode_from_key_code(event, true);
+    strRef = get_unicode_from_key_code(event.keyCode,
+                                       event.modifierFlags,
+                                       &g_lastDeadKeyState);
     if (strRef) {
       int length = CFStringGetLength(strRef);
       if (length > 0) {
@@ -253,6 +226,10 @@ using namespace she;
     }
   }
 
+  KEY_TRACE("View keyDown: unicode=%d (%c) scancode=%d modifiers=%d\n",
+            ev.unicodeChar(), ev.unicodeChar(),
+            ev.scancode(), ev.modifiers());
+
   if (sendMsg)
     queue_event(ev);
 }
@@ -261,7 +238,7 @@ using namespace she;
 {
   [super keyUp:event];
 
-  KeyScancode scancode = cocoavk_to_scancode(event.keyCode);
+  KeyScancode scancode = scancode_from_nsevent(event);
   if (scancode >= 0 && scancode < kKeyScancodes)
     g_pressedKeys[scancode] = 0;
 
@@ -285,10 +262,10 @@ using namespace she;
 {
   static int lastFlags = 0;
   static int flags[] = {
-    NSShiftKeyMask,
-    NSControlKeyMask,
-    NSAlternateKeyMask,
-    NSCommandKeyMask
+    NSEventModifierFlagShift,
+    NSEventModifierFlagControl,
+    NSEventModifierFlagOption,
+    NSEventModifierFlagCommand
   };
   static KeyScancode scancodes[] = {
     kKeyLShift,
@@ -477,7 +454,7 @@ using namespace she;
     scale = [(OSXWindow*)self.window scale];
 
   if (event.hasPreciseScrollingDeltas) {
-    ev.setPointerType(she::PointerType::Multitouch);
+    ev.setPointerType(she::PointerType::Touchpad);
     ev.setWheelDelta(gfx::Point(-event.scrollingDeltaX / scale,
                                 -event.scrollingDeltaY / scale));
     ev.setPreciseWheel(true);
@@ -508,7 +485,7 @@ using namespace she;
   ev.setMagnification(event.magnification);
   ev.setPosition(get_local_mouse_pos(self, event));
   ev.setModifiers(get_modifiers_from_nsevent(event));
-  ev.setPointerType(she::PointerType::Multitouch);
+  ev.setPointerType(she::PointerType::Touchpad);
   queue_event(ev);
 }
 
@@ -516,9 +493,9 @@ using namespace she;
 {
   if (event.isEnteringProximity == YES) {
     switch (event.pointingDeviceType) {
-      case NSPenPointingDevice: m_pointerType = she::PointerType::Pen; break;
-      case NSCursorPointingDevice: m_pointerType = she::PointerType::Cursor; break;
-      case NSEraserPointingDevice: m_pointerType = she::PointerType::Eraser; break;
+      case NSPointingDeviceTypePen: m_pointerType = she::PointerType::Pen; break;
+      case NSPointingDeviceTypeCursor: m_pointerType = she::PointerType::Cursor; break;
+      case NSPointingDeviceTypeEraser: m_pointerType = she::PointerType::Eraser; break;
       default:
         m_pointerType = she::PointerType::Unknown;
         break;

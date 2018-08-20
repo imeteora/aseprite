@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,25 +12,30 @@
 
 #include "app/console.h"
 #include "app/context.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/file/file_data.h"
 #include "app/file/file_format.h"
 #include "app/file/file_formats_manager.h"
 #include "app/file/format_options.h"
 #include "app/file/split_filename.h"
 #include "app/filename_formatter.h"
+#include "app/i18n/strings.h"
 #include "app/modules/gui.h"
 #include "app/modules/palettes.h"
+#include "app/pref/preferences.h"
+#include "app/ui/optional_alert.h"
 #include "app/ui/status_bar.h"
 #include "base/fs.h"
 #include "base/mutex.h"
 #include "base/scoped_lock.h"
 #include "base/shared_ptr.h"
 #include "base/string.h"
+#include "dio/detect_format.h"
 #include "doc/doc.h"
-#include "docio/detect_format.h"
+#include "fmt/format.h"
 #include "render/quantization.h"
 #include "render/render.h"
-#include "ui/alert.h"
+#include "ui/listitem.h"
 
 #include "open_sequence.xml.h"
 
@@ -41,40 +46,30 @@ namespace app {
 
 using namespace base;
 
-std::string get_readable_extensions()
+base::paths get_readable_extensions()
 {
-  std::string buf;
-
+  base::paths paths;
   for (const FileFormat* format : *FileFormatsManager::instance()) {
-    if (format->support(FILE_SUPPORT_LOAD)) {
-      if (!buf.empty())
-        buf.push_back(',');
-      buf += format->extensions();
-    }
+    if (format->support(FILE_SUPPORT_LOAD))
+      format->getExtensions(paths);
   }
-
-  return buf;
+  return paths;
 }
 
-std::string get_writable_extensions()
+base::paths get_writable_extensions()
 {
-  std::string buf;
-
+  base::paths paths;
   for (const FileFormat* format : *FileFormatsManager::instance()) {
-    if (format->support(FILE_SUPPORT_SAVE)) {
-      if (!buf.empty())
-        buf.push_back(',');
-      buf += format->extensions();
-    }
+    if (format->support(FILE_SUPPORT_SAVE))
+      format->getExtensions(paths);
   }
-
-  return buf;
+  return paths;
 }
 
-Document* load_document(Context* context, const char* filename)
+Doc* load_document(Context* context, const std::string& filename)
 {
   /* TODO add a option to configure what to do with the sequence */
-  base::UniquePtr<FileOp> fop(FileOp::createLoadDocumentOperation(context, filename, FILE_LOAD_SEQUENCE_NONE));
+  std::unique_ptr<FileOp> fop(FileOp::createLoadDocumentOperation(context, filename, FILE_LOAD_SEQUENCE_NONE));
   if (!fop)
     return nullptr;
 
@@ -88,7 +83,7 @@ Document* load_document(Context* context, const char* filename)
     console.printf(fop->error().c_str());
   }
 
-  Document* document = fop->releaseDocument();
+  Doc* document = fop->releaseDocument();
   fop.release();
 
   if (document && context)
@@ -97,15 +92,13 @@ Document* load_document(Context* context, const char* filename)
   return document;
 }
 
-int save_document(Context* context, doc::Document* document)
+int save_document(Context* context, Doc* document)
 {
-  ASSERT(dynamic_cast<app::Document*>(document));
-
-  UniquePtr<FileOp> fop(
+  std::unique_ptr<FileOp> fop(
     FileOp::createSaveDocumentOperation(
       context,
-      static_cast<app::Document*>(document),
-      document->filename().c_str(), ""));
+      FileOpROI(document, "", "", SelectedFrames(), false),
+      document->filename(), ""));
   if (!fop)
     return -1;
 
@@ -121,49 +114,99 @@ int save_document(Context* context, doc::Document* document)
   return (!fop->hasError() ? 0: -1);
 }
 
-// static
-FileOp* FileOp::createLoadDocumentOperation(Context* context, const char* filename, int flags)
+bool is_static_image_format(const std::string& filename)
 {
-  base::UniquePtr<FileOp> fop(
+  // Get the format through the extension of the filename
+  FileFormat* format =
+    FileFormatsManager::instance()
+    ->getFileFormat(dio::detect_format_by_file_extension(filename));
+
+  return (format && format->support(FILE_SUPPORT_SEQUENCES));
+}
+
+FileOpROI::FileOpROI()
+  : m_document(nullptr)
+  , m_slice(nullptr)
+  , m_frameTag(nullptr)
+{
+}
+
+FileOpROI::FileOpROI(const Doc* doc,
+                     const std::string& sliceName,
+                     const std::string& frameTagName,
+                     const doc::SelectedFrames& selFrames,
+                     const bool adjustByFrameTag)
+  : m_document(doc)
+  , m_slice(nullptr)
+  , m_frameTag(nullptr)
+  , m_selFrames(selFrames)
+{
+  if (doc) {
+    if (!sliceName.empty())
+      m_slice = doc->sprite()->slices().getByName(sliceName);
+
+    // Don't allow exporting frame tags with empty names
+    if (!frameTagName.empty())
+      m_frameTag = doc->sprite()->frameTags().getByName(frameTagName);
+
+    if (m_frameTag) {
+      if (m_selFrames.empty())
+        m_selFrames.insert(m_frameTag->fromFrame(), m_frameTag->toFrame());
+      else if (adjustByFrameTag)
+        m_selFrames.displace(m_frameTag->fromFrame());
+
+      m_selFrames =
+        m_selFrames.filter(MAX(0, m_frameTag->fromFrame()),
+                           MIN(m_frameTag->toFrame(), doc->sprite()->lastFrame()));
+    }
+    // All frames if selected frames is empty
+    else if (m_selFrames.empty())
+      m_selFrames.insert(0, doc->sprite()->lastFrame());
+  }
+}
+
+// static
+FileOp* FileOp::createLoadDocumentOperation(Context* context, const std::string& filename, int flags)
+{
+  std::unique_ptr<FileOp> fop(
     new FileOp(FileOpLoad, context));
   if (!fop)
     return nullptr;
 
-  LOG("FILE: Loading file \"%s\"\n", filename);
+  LOG("FILE: Loading file \"%s\"\n", filename.c_str());
 
   // Does file exist?
   if (!base::is_file(filename)) {
-    fop->setError("File not found: \"%s\"\n", filename);
+    fop->setError("File not found: \"%s\"\n", filename.c_str());
     goto done;
   }
 
   // Get the format through the extension of the filename
   fop->m_format = FileFormatsManager::instance()->getFileFormat(
-    docio::detect_format(filename));
+    dio::detect_format(filename));
   if (!fop->m_format ||
       !fop->m_format->support(FILE_SUPPORT_LOAD)) {
     fop->setError("%s can't load \"%s\" file (\"%s\")\n", PACKAGE,
-                  filename, base::get_file_extension(filename).c_str());
+                  filename.c_str(), base::get_file_extension(filename).c_str());
     goto done;
   }
 
-  /* use the "sequence" interface */
+  // Use the "sequence" interface
   if (fop->m_format->support(FILE_SUPPORT_SEQUENCES)) {
-    /* prepare to load a sequence */
     fop->prepareForSequence();
     fop->m_seq.flags = flags;
 
-    /* per now, we want load just one file */
+    // At the moment we want load just one file (the one specified in filename)
     fop->m_seq.filename_list.push_back(filename);
 
-    /* don't load the sequence (just the one file/one frame) */
+    // If the user wants to load the whole sequence
     if (!(flags & FILE_LOAD_SEQUENCE_NONE)) {
       std::string left, right;
       int c, width, start_from;
       char buf[512];
 
-      /* first of all, we must generate the list of files to load in the
-         sequence... */
+      // First of all, we must generate the list of files to load in the
+      // sequence...
 
       // Check is this could be a sequence
       start_from = split_filename(filename, left, right, width);
@@ -182,6 +225,7 @@ FileOp* FileOp::createLoadDocumentOperation(Context* context, const char* filena
         }
       }
 
+#ifdef ENABLE_UI
       // TODO add a better dialog to edit file-names
       if ((flags & FILE_LOAD_SEQUENCE_ASK) &&
           context &&
@@ -216,7 +260,7 @@ FileOp* FileOp::createLoadDocumentOperation(Context* context, const char* filena
 
         if (window.closer() == window.agree()) {
           // If the user replies "Agree", we load the selected files.
-          std::vector<std::string> list;
+          base::paths list;
 
           auto it = window.files()->children().begin();
           auto end = window.files()->children().end();
@@ -241,14 +285,23 @@ FileOp* FileOp::createLoadDocumentOperation(Context* context, const char* filena
           }
         }
       }
+#endif // ENABLE_UI
     }
   }
-  else
+  else {
     fop->m_filename = filename;
+  }
 
-  /* load just one frame */
+  // Load just one frame
   if (flags & FILE_LOAD_ONE_FRAME)
     fop->m_oneframe = true;
+
+  // Does data file exist?
+  if (flags & FILE_LOAD_DATA_FILE) {
+    std::string dataFilename = base::replace_extension(filename, "aseprite-data");
+    if (base::is_file(dataFilename))
+      fop->m_dataFilename = dataFilename;
+  }
 
 done:;
   return fop.release();
@@ -256,26 +309,34 @@ done:;
 
 // static
 FileOp* FileOp::createSaveDocumentOperation(const Context* context,
-                                            const Document* document,
-                                            const char* filename,
-                                            const char* fn_format_arg)
+                                            const FileOpROI& roi,
+                                            const std::string& filename,
+                                            const std::string& filenameFormatArg)
 {
-  base::UniquePtr<FileOp> fop(
+  std::unique_ptr<FileOp> fop(
     new FileOp(FileOpSave, const_cast<Context*>(context)));
 
   // Document to save
-  fop->m_document = const_cast<Document*>(document);
+  fop->m_document = const_cast<Doc*>(roi.document());
+  fop->m_roi = roi;
 
   // Get the extension of the filename (in lower case)
-  LOG("FILE: Saving document \"%s\"\n", filename);
+  LOG("FILE: Saving document \"%s\"\n", filename.c_str());
+
+  // Check for read-only attribute
+  if (base::has_readonly_attr(filename)) {
+    fop->setError("Error saving \"%s\" file, it's read-only",
+                  filename.c_str());
+    return fop.release();
+  }
 
   // Get the format through the extension of the filename
   fop->m_format = FileFormatsManager::instance()->getFileFormat(
-    docio::detect_format_by_file_extension(filename));
+    dio::detect_format_by_file_extension(filename));
   if (!fop->m_format ||
       !fop->m_format->support(FILE_SUPPORT_SAVE)) {
     fop->setError("%s can't save \"%s\" file (\"%s\")\n", PACKAGE,
-                  filename, base::get_file_extension(filename).c_str());
+                  filename.c_str(), base::get_file_extension(filename).c_str());
     return fop.release();
   }
 
@@ -289,49 +350,49 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
 
     case IMAGE_RGB:
       if (!(fop->m_format->support(FILE_SUPPORT_RGB))) {
-        warnings += "<<- RGB format";
+        warnings += "<<- " + Strings::alerts_file_format_rgb_mode();
         fatal = true;
       }
 
       if (!(fop->m_format->support(FILE_SUPPORT_RGBA)) &&
           fop->m_document->sprite()->needAlpha()) {
 
-        warnings += "<<- Alpha channel";
+        warnings += "<<- " + Strings::alerts_file_format_alpha_channel();
       }
       break;
 
     case IMAGE_GRAYSCALE:
       if (!(fop->m_format->support(FILE_SUPPORT_GRAY))) {
-        warnings += "<<- Grayscale format";
+        warnings += "<<- " + Strings::alerts_file_format_grayscale_mode();
         fatal = true;
       }
       if (!(fop->m_format->support(FILE_SUPPORT_GRAYA)) &&
           fop->m_document->sprite()->needAlpha()) {
 
-        warnings += "<<- Alpha channel";
+        warnings += "<<- " + Strings::alerts_file_format_alpha_channel();
       }
       break;
 
     case IMAGE_INDEXED:
       if (!(fop->m_format->support(FILE_SUPPORT_INDEXED))) {
-        warnings += "<<- Indexed format";
+        warnings += "<<- " + Strings::alerts_file_format_indexed_mode();
         fatal = true;
       }
       break;
   }
 
   // Frames support
-  if (fop->m_document->sprite()->totalFrames() > 1) {
+  if (fop->m_roi.frames() > 1) {
     if (!fop->m_format->support(FILE_SUPPORT_FRAMES) &&
         !fop->m_format->support(FILE_SUPPORT_SEQUENCES)) {
-      warnings += "<<- Frames";
+      warnings += "<<- " + Strings::alerts_file_format_frames();
     }
   }
 
   // Layers support
-  if (fop->m_document->sprite()->folder()->getLayersCount() > 1) {
+  if (fop->m_document->sprite()->root()->layersCount() > 1) {
     if (!(fop->m_format->support(FILE_SUPPORT_LAYERS))) {
-      warnings += "<<- Layers";
+      warnings += "<<- " + Strings::alerts_file_format_layers();
     }
   }
 
@@ -339,14 +400,14 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
   if (fop->m_document->sprite()->getPalettes().size() > 1) {
     if (!fop->m_format->support(FILE_SUPPORT_PALETTES) &&
         !fop->m_format->support(FILE_SUPPORT_SEQUENCES)) {
-      warnings += "<<- Palette changes between frames";
+      warnings += "<<- " + Strings::alerts_file_format_palette_changes();
     }
   }
 
   // Check frames support
   if (!fop->m_document->sprite()->frameTags().empty()) {
     if (!fop->m_format->support(FILE_SUPPORT_FRAME_TAGS)) {
-      warnings += "<<- Frame tags";
+      warnings += "<<- " + Strings::alerts_file_format_frame_tags();
     }
   }
 
@@ -378,28 +439,17 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
 
   // Show the confirmation alert
   if (!warnings.empty()) {
+#ifdef ENABLE_UI
     // Interative
     if (context && context->isUIAvailable()) {
-      warnings += "<<You can use \".ase\" format to keep all this information.";
-
-      std::string title, buttons;
-      if (fatal) {
-        title = "Error";
-        buttons = "&Close";
-      }
-      else {
-        title = "Warning";
-        buttons = "&Yes||&No";
-      }
-
-      int ret = ui::Alert::show("%s<<File format \".%s\" doesn't support:%s"
-        "<<Do you want continue with \".%s\" anyway?"
-        "||%s",
-        title.c_str(),
-        fop->m_format->name(),
-        warnings.c_str(),
-        fop->m_format->name(),
-        buttons.c_str());
+      int ret = OptionalAlert::show(
+        Preferences::instance().saveFile.showFileFormatDoesntSupportAlert,
+        1, // Yes is the default option when the alert dialog is disabled
+        fmt::format(
+          (fatal ? Strings::alerts_file_format_doesnt_support_error():
+                   Strings::alerts_file_format_doesnt_support_warning()),
+          fop->m_format->name(),
+          warnings));
 
       // Operation can't be done (by fatal error) or the user cancel
       // the operation
@@ -407,7 +457,9 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
         return nullptr;
     }
     // No interactive & fatal error?
-    else if (fatal) {
+    else
+#endif // ENABLE_UI
+    if (fatal) {
       fop->setError(warnings.c_str());
       return fop.release();
     }
@@ -418,98 +470,73 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
     fop->prepareForSequence();
 
     std::string fn = filename;
-    std::string fn_format = fn_format_arg;
-    bool default_format = false;
-
+    std::string fn_format = filenameFormatArg;
     if (fn_format.empty()) {
-      if (fop->m_document->sprite()->totalFrames() == 1)
-        fn_format = "{fullname}";
-      else {
-        fn_format = "{path}/{title}{frame}.{extension}";
-        default_format = true;
-      }
+      fn_format = get_default_filename_format(
+        fn,
+        true,                       // With path
+        (fop->m_roi.frames() > 1),  // Has frames
+        false,                      // Doesn't have layers
+        false);                     // Doesn't have tags
     }
 
-    // Save one frame
-    if (fop->m_document->sprite()->totalFrames() == 1) {
+    Sprite* spr = fop->m_document->sprite();
+    frame_t outputFrame = 0;
+
+    for (frame_t frame : fop->m_roi.selectedFrames()) {
+      FrameTag* innerTag = (fop->m_roi.frameTag() ? fop->m_roi.frameTag(): spr->frameTags().innerTag(frame));
+      FrameTag* outerTag = (fop->m_roi.frameTag() ? fop->m_roi.frameTag(): spr->frameTags().outerTag(frame));
       FilenameInfo fnInfo;
-      fnInfo.filename(fn);
+      fnInfo
+        .filename(fn)
+        .sliceName(fop->m_roi.slice() ? fop->m_roi.slice()->name(): "")
+        .innerTagName(innerTag ? innerTag->name(): "")
+        .outerTagName(outerTag ? outerTag->name(): "")
+        .frame(outputFrame)
+        .tagFrame(innerTag ? frame - innerTag->fromFrame():
+                             outputFrame);
 
-      fn = filename_formatter(fn_format, fnInfo);
-      fop->m_seq.filename_list.push_back(fn);
+      fop->m_seq.filename_list.push_back(
+        filename_formatter(fn_format, fnInfo));
+
+      ++outputFrame;
     }
-    // Save multiple frames
-    else {
-      int width = 0;
-      int start_from = 0;
 
-      if (default_format) {
-        std::string left, right;
-        start_from = split_filename(fn.c_str(), left, right, width);
-        if (start_from < 0) {
-          start_from = 1;
-          width = 1;
-        }
-        else {
-          fn = left;
-          fn += right;
-        }
-      }
-
-      Sprite* spr = fop->m_document->sprite();
-      std::vector<char> buf(32);
-      std::sprintf(&buf[0], "{frame%0*d}", width, 0);
-      if (default_format)
-        fn_format = set_frame_format(fn_format, &buf[0]);
-      else if (spr->totalFrames() > 1)
-        fn_format = add_frame_format(fn_format, &buf[0]);
-
-      for (frame_t frame(0); frame<spr->totalFrames(); ++frame) {
-        FrameTag* innerTag = spr->frameTags().innerTag(frame);
-        FrameTag* outerTag = spr->frameTags().outerTag(frame);
-        FilenameInfo fnInfo;
-        fnInfo
-          .filename(fn)
-          .innerTagName(innerTag ? innerTag->name(): "")
-          .outerTagName(outerTag ? outerTag->name(): "")
-          .frame(start_from+frame)
-          .tagFrame(innerTag ? frame-innerTag->fromFrame():
-                               start_from+frame);
-
-        std::string frame_fn =
-          filename_formatter(fn_format, fnInfo);
-
-        fop->m_seq.filename_list.push_back(frame_fn);
-      }
-
-      if (context && context->isUIAvailable() &&
-          fop->m_seq.filename_list.size() > 1 &&
-          ui::Alert::show("Notice"
-                          "<<Do you want to export the animation in %d files?"
-                          "<<%s, %s..."
-                          "||&Agree||&Cancel",
-                          int(fop->m_seq.filename_list.size()),
-                          base::get_file_name(fop->m_seq.filename_list[0]).c_str(),
-                          base::get_file_name(fop->m_seq.filename_list[1]).c_str()) != 1) {
-        return nullptr;
-      }
+#ifdef ENABLE_UI
+    if (context && context->isUIAvailable() &&
+        fop->m_seq.filename_list.size() > 1 &&
+        OptionalAlert::show(
+          Preferences::instance().saveFile.showExportAnimationInSequenceAlert,
+          1,
+          fmt::format(
+            Strings::alerts_export_animation_in_sequence(),
+            int(fop->m_seq.filename_list.size()),
+            base::get_file_name(fop->m_seq.filename_list[0]),
+            base::get_file_name(fop->m_seq.filename_list[1]))) != 1) {
+      return nullptr;
     }
+#endif // ENABLE_UI
   }
   else
     fop->m_filename = filename;
 
   // Configure output format?
   if (fop->m_format->support(FILE_SUPPORT_GET_FORMAT_OPTIONS)) {
-    base::SharedPtr<FormatOptions> format_options =
-      fop->m_format->getFormatOptions(fop);
+    base::SharedPtr<FormatOptions> opts =
+      fop->m_format->getFormatOptions(fop.get());
 
     // Does the user cancelled the operation?
-    if (!format_options)
+    if (!opts)
       return nullptr;
 
-    fop->m_seq.format_options = format_options;
-    fop->m_document->setFormatOptions(format_options);
+    fop->m_formatOptions = opts;
+    fop->m_document->setFormatOptions(opts);
   }
+
+  // Does data file exist?
+  std::string dataFilename = base::replace_extension(filename, "aseprite-data");
+  if (base::is_file(dataFilename))
+    fop->m_dataFilename = dataFilename;
 
   return fop.release();
 }
@@ -521,6 +548,8 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
 //
 // After this function you must to mark the FileOp as "done" calling
 // FileOp::done() function.
+//
+// TODO refactor this code
 void FileOp::operate(IFileOpProgress* progress)
 {
   ASSERT(!isDone());
@@ -540,9 +569,12 @@ void FileOp::operate(IFileOpProgress* progress)
       frame_t frames(m_seq.filename_list.size());
       frame_t frame(0);
       Image* old_image = nullptr;
+      gfx::Size canvasSize(0, 0);
 
-      // TODO set_palette for each frame???
+      // TODO setPalette for each frame???
       auto add_image = [&]() {
+        canvasSize |= m_seq.image->size();
+
         m_seq.last_cel->data()->setImage(m_seq.image);
         m_seq.layer->addCel(m_seq.last_cel);
 
@@ -625,25 +657,43 @@ void FileOp::operate(IFileOpProgress* progress)
       m_filename = *m_seq.filename_list.begin();
 
       // Final setup
-      if (m_document != NULL) {
+      if (m_document) {
         // Configure the layer as the 'Background'
         if (!m_seq.has_alpha)
           m_seq.layer->configureAsBackground();
+
+        // Set the final canvas size (as the bigger loaded
+        // frame/image).
+        m_document->sprite()->setSize(canvasSize.w,
+                                      canvasSize.h);
 
         // Set the frames range
         m_document->sprite()->setTotalFrames(frame);
 
         // Sets special options from the specific format (e.g. BMP
         // file can contain the number of bits per pixel).
-        m_document->setFormatOptions(m_seq.format_options);
+        m_document->setFormatOptions(m_formatOptions);
       }
     }
     // Direct load from one file.
     else {
       // Call the "load" procedure.
-      if (!m_format->load(this))
+      if (!m_format->load(this)) {
         setError("Error loading sprite from file \"%s\"\n",
                  m_filename.c_str());
+      }
+    }
+
+    // Load special data from .aseprite-data file
+    if (m_document &&
+        m_document->sprite()  &&
+        !m_dataFilename.empty()) {
+      try {
+        load_aseprite_data_file(m_dataFilename, m_document);
+      }
+      catch (const std::exception& ex) {
+        setError("Error loading data file: %s\n", ex.what());
+      }
     }
   }
   // Save //////////////////////////////////////////////////////////////////////
@@ -659,36 +709,67 @@ void FileOp::operate(IFileOpProgress* progress)
 
       // Create a temporary bitmap
       m_seq.image.reset(Image::create(sprite->pixelFormat(),
-          sprite->width(),
-          sprite->height()));
+                                      sprite->width(),
+                                      sprite->height()));
 
       m_seq.progress_offset = 0.0f;
       m_seq.progress_fraction = 1.0f / (double)sprite->totalFrames();
 
       // For each frame in the sprite.
       render::Render render;
-      for (frame_t frame(0); frame < sprite->totalFrames(); ++frame) {
+      frame_t outputFrame = 0;
+      for (frame_t frame : m_roi.selectedFrames()) {
         // Draw the "frame" in "m_seq.image"
-        render.renderSprite(m_seq.image.get(), sprite, frame);
+        if (m_roi.slice()) {
+          const SliceKey* key = m_roi.slice()->getByFrame(frame);
+          if (!key || key->isEmpty())
+            continue;           // Skip frame because there is no slice key
+
+          m_seq.image.reset(
+            Image::create(sprite->pixelFormat(),
+                          key->bounds().w,
+                          key->bounds().h));
+
+          render.renderSprite(
+            m_seq.image.get(), sprite, frame,
+            gfx::Clip(gfx::Point(0, 0), key->bounds()));
+        }
+        else {
+          render.renderSprite(m_seq.image.get(), sprite, frame);
+        }
 
         // Setup the palette.
         sprite->palette(frame)->copyColorsTo(m_seq.palette);
 
         // Setup the filename to be used.
-        m_filename = m_seq.filename_list[frame];
+        m_filename = m_seq.filename_list[outputFrame];
+
+        // Make directories
+        {
+          std::string dir = base::get_file_path(m_filename);
+          try {
+            if (!base::is_directory(dir))
+              base::make_all_directories(dir);
+          }
+          catch (const std::exception& ex) {
+            // Ignore errors and make the delegate fail
+            setError("Error creating directory \"%s\"\n%s",
+                     dir.c_str(), ex.what());
+          }
+        }
 
         // Call the "save" procedure... did it fail?
         if (!m_format->save(this)) {
           setError("Error saving frame %d in the file \"%s\"\n",
-                   frame+1, m_filename.c_str());
+                   outputFrame+1, m_filename.c_str());
           break;
         }
 
         m_seq.progress_offset += m_seq.progress_fraction;
+        ++outputFrame;
       }
 
       m_filename = *m_seq.filename_list.begin();
-      m_document->setFilename(m_filename);
 
       // Destroy the image
       m_seq.image.reset(NULL);
@@ -696,9 +777,23 @@ void FileOp::operate(IFileOpProgress* progress)
     // Direct save to a file.
     else {
       // Call the "save" procedure.
-      if (!m_format->save(this))
+      if (!m_format->save(this)) {
         setError("Error saving the sprite in the file \"%s\"\n",
                  m_filename.c_str());
+      }
+    }
+
+    // Save special data from .aseprite-data file
+    if (m_document &&
+        m_document->sprite() &&
+        !hasError() &&
+        !m_dataFilename.empty()) {
+      try {
+        save_aseprite_data_file(m_dataFilename, m_document);
+      }
+      catch (const std::exception& ex) {
+        setError("Error loading data file: %s\n", ex.what());
+      }
     }
 #else
     setError(
@@ -739,7 +834,7 @@ void FileOp::createDocument(Sprite* spr)
   // spr can be NULL if the sprite is set in onPostLoad() then
 
   ASSERT(m_document == NULL);
-  m_document = new Document(spr);
+  m_document = new Doc(spr);
 }
 
 void FileOp::postLoad()
@@ -782,15 +877,15 @@ void FileOp::postLoad()
   m_document->markAsSaved();
 }
 
-base::SharedPtr<FormatOptions> FileOp::sequenceGetFormatOptions() const
+base::SharedPtr<FormatOptions> FileOp::formatOptions() const
 {
-  return m_seq.format_options;
+  return m_formatOptions;
 }
 
-void FileOp::sequenceSetFormatOptions(const base::SharedPtr<FormatOptions>& format_options)
+void FileOp::setFormatOptions(const base::SharedPtr<FormatOptions>& opts)
 {
-  ASSERT(!m_seq.format_options);
-  m_seq.format_options = format_options;
+  ASSERT(!m_formatOptions);
+  m_formatOptions = opts;
 }
 
 void FileOp::sequenceSetNColors(int ncolors)
@@ -853,7 +948,7 @@ Image* FileOp::sequenceImage(PixelFormat pixelFormat, int w, int h)
       LayerImage* layer = new LayerImage(sprite);
 
       // Add the layer
-      sprite->folder()->addLayer(layer);
+      sprite->root()->addLayer(layer);
 
       // Done
       createDocument(sprite);
@@ -872,7 +967,7 @@ Image* FileOp::sequenceImage(PixelFormat pixelFormat, int w, int h)
   }
 
   if (m_seq.last_cel) {
-    setError("Error: called two times \"fop_sequence_image()\".\n");
+    setError("Error: called two times FileOp::sequenceImage()\n");
     return nullptr;
   }
 
@@ -885,7 +980,7 @@ Image* FileOp::sequenceImage(PixelFormat pixelFormat, int w, int h)
 
 void FileOp::setError(const char *format, ...)
 {
-  char buf_error[4096];
+  char buf_error[4096];         // TODO possible stack overflow
   va_list ap;
   va_start(ap, format);
   vsnprintf(buf_error, sizeof(buf_error), format, ap);
@@ -913,6 +1008,16 @@ void FileOp::setProgress(double progress)
 
   if (m_progressInterface)
     m_progressInterface->ackFileOpProgress(progress);
+}
+
+void FileOp::getFilenameList(base::paths& output) const
+{
+  if (isSequence()) {
+    output = m_seq.filename_list;
+  }
+  else {
+    output.push_back(m_filename);
+  }
 }
 
 double FileOp::progress() const
@@ -971,7 +1076,7 @@ FileOp::FileOp(FileOpType type, Context* context)
 void FileOp::prepareForSequence()
 {
   m_seq.palette = new Palette(frame_t(0), 256);
-  m_seq.format_options.reset();
+  m_formatOptions.reset();
 }
 
 } // namespace app

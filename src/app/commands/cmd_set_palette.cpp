@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -10,12 +10,11 @@
 
 #include "app/commands/cmd_set_palette.h"
 #include "app/context_access.h"
-#include "app/document_api.h"
+#include "app/doc_api.h"
 #include "app/file_selector.h"
 #include "app/ini_file.h"
 #include "app/modules/palettes.h"
 #include "app/transaction.h"
-#include "base/unique_ptr.h"
 #include "doc/palette.h"
 #include "ui/alert.h"
 #include "ui/manager.h"
@@ -25,9 +24,7 @@ namespace app {
 using namespace ui;
 
 SetPaletteCommand::SetPaletteCommand()
-  : Command("SetPalette",
-            "Set Palette",
-            CmdRecordableFlag)
+  : Command(CommandId::SetPalette(), CmdRecordableFlag)
   , m_palette(NULL)
 {
 }
@@ -48,7 +45,8 @@ void SetPaletteCommand::onExecute(Context* context)
   set_current_palette(m_palette, false);
 
   // Redraw the entire screen
-  ui::Manager::getDefault()->invalidate();
+  if (context->isUIAvailable())
+    ui::Manager::getDefault()->invalidate();
 }
 
 Command* CommandFactory::createSetPaletteCommand()

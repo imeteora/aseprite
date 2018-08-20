@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2016  David Capello
+// Copyright (C) 2016-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -14,11 +14,12 @@
 #include "app/commands/params.h"
 #include "app/context.h"
 #include "app/context_access.h"
+#include "app/i18n/strings.h"
 #include "app/modules/gui.h"
 #include "app/transaction.h"
-#include "app/ui/timeline.h"
-#include "base/convert_to.h"
+#include "app/ui/timeline/timeline.h"
 #include "doc/layer.h"
+#include "fmt/format.h"
 
 #include <string>
 
@@ -29,6 +30,7 @@ public:
   LayerOpacityCommand();
 
 protected:
+  bool onNeedsParams() const override { return true; }
   void onLoadParams(const Params& params) override;
   bool onEnabled(Context* context) override;
   void onExecute(Context* context) override;
@@ -39,9 +41,7 @@ private:
 };
 
 LayerOpacityCommand::LayerOpacityCommand()
-  : Command("LayerOpacity",
-            "Layer Opacity",
-            CmdUIOnlyFlag)
+  : Command(CommandId::LayerOpacity(), CmdUIOnlyFlag)
 {
   m_opacity = 255;
 }
@@ -70,21 +70,20 @@ void LayerOpacityCommand::onExecute(Context* context)
   {
     Transaction transaction(writer.context(), "Set Layer Opacity");
 
-    // TODO the range of selected frames should be in doc::Site.
+    // TODO the range of selected frames should be in app::Site.
+    SelectedLayers selLayers;
     auto range = App::instance()->timeline()->range();
     if (range.enabled()) {
-      for (LayerIndex layerIdx = range.layerBegin(); layerIdx <= range.layerEnd(); ++layerIdx) {
-        Layer* layer = writer.sprite()->indexToLayer(layerIdx);
-        if (!layer->isImage())
-          continue;
-
-        transaction.execute(
-          new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), m_opacity));
-      }
+      selLayers = range.selectedLayers();
     }
     else {
-      transaction.execute(
-        new cmd::SetLayerOpacity(static_cast<LayerImage*>(writer.layer()), m_opacity));
+      selLayers.insert(writer.layer());
+    }
+
+    for (auto layer : selLayers) {
+      if (layer->isImage())
+        transaction.execute(
+          new cmd::SetLayerOpacity(static_cast<LayerImage*>(layer), m_opacity));
     }
 
     transaction.commit();
@@ -95,12 +94,9 @@ void LayerOpacityCommand::onExecute(Context* context)
 
 std::string LayerOpacityCommand::onGetFriendlyName() const
 {
-  std::string text = "Set Layer Opacity to ";
-  text += base::convert_to<std::string>(m_opacity);
-  text += " (";
-  text += base::convert_to<std::string>(int(100.0 * m_opacity / 255.0));
-  text += "%)";
-  return text;
+  return fmt::format(getBaseFriendlyName(),
+                     m_opacity,
+                     int(100.0 * m_opacity / 255.0));
 }
 
 Command* CommandFactory::createLayerOpacityCommand()

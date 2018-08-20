@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,9 +11,9 @@
 #include "app/ui/drop_down_button.h"
 
 #include "app/modules/gui.h"
-#include "app/ui/skin/button_icon_impl.h"
 #include "app/ui/skin/skin_property.h"
 #include "app/ui/skin/skin_theme.h"
+#include "ui/button.h"
 #include "ui/theme.h"
 
 namespace app {
@@ -26,26 +26,21 @@ DropDownButton::DropDownButton(const char* text)
   , m_button(new Button(text))
   , m_dropDown(new Button(""))
 {
-  SkinTheme* theme = SkinTheme::instance();
-
-  setup_look(m_button, LeftButtonLook);
-  setup_look(m_dropDown, RightButtonLook);
-
   m_button->setExpansive(true);
-  m_button->setAlign(LEFT | MIDDLE);
   m_button->Click.connect(&DropDownButton::onButtonClick, this);
   m_dropDown->Click.connect(&DropDownButton::onDropDownButtonClick, this);
 
   addChild(m_button);
   addChild(m_dropDown);
 
-  setChildSpacing(0);
-
-  m_dropDown->setIconInterface
-    (new ButtonIconImpl(theme->parts.comboboxArrowDown(),
-                        theme->parts.comboboxArrowDownSelected(),
-                        theme->parts.comboboxArrowDownDisabled(),
-                        CENTER | MIDDLE));
+  InitTheme.connect(
+    [this]{
+      SkinTheme* theme = SkinTheme::instance();
+      m_button->setStyle(theme->styles.dropDownButton());
+      m_dropDown->setStyle(theme->styles.dropDownExpandButton());
+      setChildSpacing(0);
+    });
+  initTheme();
 }
 
 void DropDownButton::onButtonClick(Event& ev)

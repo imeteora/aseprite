@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -10,28 +10,37 @@
 
 #include "ui/system.h"
 
+#include "base/thread.h"
 #include "gfx/point.h"
 #include "she/display.h"
 #include "she/surface.h"
 #include "she/system.h"
+#include "ui/clipboard_delegate.h"
 #include "ui/cursor.h"
 #include "ui/intern.h"
 #include "ui/intern.h"
 #include "ui/manager.h"
+#include "ui/message.h"
 #include "ui/overlay.h"
 #include "ui/overlay_manager.h"
+#include "ui/scale.h"
 #include "ui/theme.h"
 #include "ui/widget.h"
 
 namespace ui {
 
+// This is used to check if calls to UI layer are made from the non-UI
+// thread. (Which might be catastrofic.)
+base::thread::native_handle_type main_gui_thread;
+
 // Current mouse cursor type.
 
 static CursorType mouse_cursor_type = kOutsideDisplay;
-static Cursor* mouse_cursor = NULL;
-static she::Display* mouse_display = NULL;
-static Overlay* mouse_cursor_overlay = NULL;
-static bool use_native_mouse_cursor = false;
+static const Cursor* mouse_cursor_custom = nullptr;
+static const Cursor* mouse_cursor = nullptr;
+static she::Display* mouse_display = nullptr;
+static Overlay* mouse_cursor_overlay = nullptr;
+static bool use_native_mouse_cursor = true;
 static bool support_native_custom_cursor = false;
 
 // Mouse information (button and position).
@@ -42,7 +51,7 @@ static int mouse_cursor_scale = 1;
 
 static int mouse_scares = 0;
 
-static void update_mouse_overlay(Cursor* cursor)
+static void update_mouse_overlay(const Cursor* cursor)
 {
   mouse_cursor = cursor;
 
@@ -68,7 +77,7 @@ static void update_mouse_overlay(Cursor* cursor)
   }
 }
 
-static bool update_custom_native_cursor(Cursor* cursor)
+static bool update_custom_native_cursor(const Cursor* cursor)
 {
   bool result = false;
 
@@ -98,7 +107,7 @@ static bool update_custom_native_cursor(Cursor* cursor)
 static void update_mouse_cursor()
 {
   she::NativeCursor nativeCursor = she::kNoCursor;
-  Cursor* cursor = nullptr;
+  const Cursor* cursor = nullptr;
 
   if (use_native_mouse_cursor ||
       mouse_cursor_type == kOutsideDisplay) {
@@ -150,9 +159,11 @@ static void update_mouse_cursor()
 
   // Use a custom cursor
   if (nativeCursor == she::kNoCursor &&
-      mouse_cursor_type != ui::kOutsideDisplay &&
-      CurrentTheme::get()) {
-    cursor = CurrentTheme::get()->getCursor(mouse_cursor_type);
+      mouse_cursor_type != ui::kOutsideDisplay) {
+    if (get_theme() && mouse_cursor_type != ui::kCustomCursor)
+      cursor = get_theme()->getStandardCursor(mouse_cursor_type);
+    else
+      cursor = mouse_cursor_custom;
   }
 
   // Try to use a custom native cursor if it's possible
@@ -162,8 +173,21 @@ static void update_mouse_cursor()
   }
 }
 
-UISystem::UISystem()
+static UISystem* g_instance = nullptr;
+
+// static
+UISystem* UISystem::instance()
 {
+  return g_instance;
+}
+
+UISystem::UISystem()
+  : m_clipboardDelegate(nullptr)
+{
+  ASSERT(!g_instance);
+  g_instance = this;
+
+  main_gui_thread = base::this_thread::native_handle();
   mouse_cursor_type = kOutsideDisplay;
   support_native_custom_cursor =
     ((she::instance() &&
@@ -179,13 +203,16 @@ UISystem::~UISystem()
   OverlayManager::destroyInstance();
 
   // finish theme
-  CurrentTheme::set(NULL);
+  set_theme(nullptr, guiscale());
 
   details::exitWidgets();
 
   _internal_set_mouse_display(nullptr);
   if (!update_custom_native_cursor(nullptr))
     update_mouse_overlay(nullptr);
+
+  ASSERT(g_instance == this);
+  g_instance = nullptr;
 }
 
 void _internal_set_mouse_display(she::Display* display)
@@ -213,6 +240,24 @@ int display_h()
     return 1;
 }
 
+void set_clipboard_text(const std::string& text)
+{
+  ASSERT(g_instance);
+  ClipboardDelegate* delegate = g_instance->clipboardDelegate();
+  if (delegate)
+    delegate->setClipboardText(text);
+}
+
+bool get_clipboard_text(std::string& text)
+{
+  ASSERT(g_instance);
+  ClipboardDelegate* delegate = g_instance->clipboardDelegate();
+  if (delegate)
+    return delegate->getClipboardText(text);
+  else
+    return false;
+}
+
 void update_cursor_overlay()
 {
   if (mouse_cursor_overlay != NULL && mouse_scares == 0) {
@@ -236,12 +281,14 @@ CursorType get_mouse_cursor()
   return mouse_cursor_type;
 }
 
-void set_mouse_cursor(CursorType type)
+void set_mouse_cursor(CursorType type, const Cursor* cursor)
 {
-  if (mouse_cursor_type == type)
+  if (mouse_cursor_type == type &&
+      mouse_cursor_custom == cursor)
     return;
 
   mouse_cursor_type = type;
+  mouse_cursor_custom = cursor;
   update_mouse_cursor();
 }
 
@@ -299,5 +346,29 @@ void set_mouse_position(const gfx::Point& newPos)
 
   _internal_set_mouse_position(newPos);
 }
+
+void execute_from_ui_thread(std::function<void()>&& f)
+{
+  ASSERT(Manager::getDefault());
+
+  Manager* man = Manager::getDefault();
+  ASSERT(man);
+
+  FunctionMessage* msg = new FunctionMessage(std::move(f));
+  msg->addRecipient(man);
+  man->enqueueMessage(msg);
+}
+
+bool is_ui_thread()
+{
+  return (main_gui_thread == base::this_thread::native_handle());
+}
+
+#ifdef _DEBUG
+void assert_ui_thread()
+{
+  ASSERT(is_ui_thread());
+}
+#endif
 
 } // namespace ui

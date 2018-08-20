@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -16,10 +16,11 @@
 #include "app/transaction.h"
 #include "doc/palette.h"
 #include "doc/sprite.h"
+#include "ui/manager.h"
 
 #include "palette_size.xml.h"
 
-#include <climits>
+#include <limits>
 
 namespace app {
 
@@ -37,9 +38,7 @@ private:
 };
 
 PaletteSizeCommand::PaletteSizeCommand()
-  : Command("PaletteSize",
-            "Palette Size",
-            CmdRecordableFlag)
+  : Command(CommandId::PaletteSize(), CmdRecordableFlag)
 {
   m_size = 0;
 }
@@ -63,7 +62,7 @@ void PaletteSizeCommand::onExecute(Context* context)
     if (ncolors == palette.size())
       return;
 
-    palette.resize(MID(1, ncolors, INT_MAX));
+    palette.resize(MID(1, ncolors, std::numeric_limits<int>::max()));
 
     ContextWriter writer(reader);
     Transaction transaction(context, "Palette Size", ModifyDocument);

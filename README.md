@@ -1,8 +1,9 @@
 # Aseprite
-*Copyright (C) 2001-2016 David Capello*
+*Copyright (C) 2001-2018 David Capello*
 
 [![Build Status](https://travis-ci.org/aseprite/aseprite.svg)](https://travis-ci.org/aseprite/aseprite)
-[![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/aseprite/aseprite?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+[![Discourse Community](https://img.shields.io/badge/discourse-community-brightgreen.svg?style=flat)](https://community.aseprite.org/)
+[![Discord Server](https://discordapp.com/api/guilds/324979738533822464/embed.png)](https://discord.gg/Yb2CeX8)
 
 ## Introduction
 
@@ -20,7 +21,7 @@ features are:
 * Real-time **animation preview**.
 * [**Multiple editors**](http://www.aseprite.org/docs/workspace/#drag-and-drop-tabs) support.
 * Pixel-art specific tools like filled **Contour**, **Polygon**, [**Shading**](http://www.aseprite.org/docs/shading/) mode, etc.
-* **Onion skinning**
+* [**Onion skinning**](https://www.aseprite.org/docs/animation/#onion-skinning)
 
 ## Issues
 
@@ -35,9 +36,9 @@ If you found a bug or have a new idea/feature for the program,
 
 You can ask for help in:
 
-* Our official support email address: [support@aseprite.org](mailto:support@aseprite.org)
-* [Aseprite Steam Community](https://steamcommunity.com/app/431730/discussions/)
-* [Aseprite mailing list](http://groups.google.com/group/aseprite-discuss) ([subscribe](mailto:aseprite-discuss+subscribe@googlegroups.com))
+* [Aseprite Community](https://community.aseprite.org/)
+* [Aseprite Discord Server](https://discord.gg/Yb2CeX8)
+* Official support: [support@aseprite.org](mailto:support@aseprite.org)
 * Social networks and community-driven places:
   [Twitter](https://twitter.com/aseprite/),
   [Facebook](https://facebook.com/aseprite/),
@@ -48,32 +49,35 @@ You can ask for help in:
 
 ## Authors
 
-* David Capello [davidcapello@gmail.com](mailto:davidcapello@gmail.com) <br />
-  Programmer, designer, and maintainer. <br />
-  http://davidcapello.com/
-* Ilija Melentijevic <br />
-  New GUI skin for Aseprite v0.8. A lot of good ideas. <br />
-  http://ilkke.blogspot.com/ <br />
-  http://www.pixeljoint.com/p/9270.htm
-* Contributors <br />
-  http://www.aseprite.org/contributors/
-
-Thanks to all the people who have contributed ideas, patches, bugs
-report, feature requests, donations, and help me developing Aseprite.
+* [David Capello](https://davidcapello.com/): Lead developer, bug fixing, new features, designer, and maintainer.
+* [Gaspar Capello](https://github.com/Gasparoken): Developer, bug fixing.
 
 ## Credits
 
+The default Aseprite theme was introduced in v0.8, created by:
+
+* [Ilija Melentijevic](https://ilkke.net/)
+
 Aseprite includes color palettes created by:
 
-* [Richard "DawnBringer" Fhager](http://pixeljoint.com/p/23821.htm) palettes, [16 colors](http://pixeljoint.com/forum/forum_posts.asp?TID=12795),  [32 colors](http://pixeljoint.com/forum/forum_posts.asp?TID=16247).
-* [Arne Niklas Jansson](http://androidarts.com/) palettes, [16 colors](http://androidarts.com/palette/16pal.htm), [32 colors](http://wayofthepixel.net/index.php?topic=15824.msg144494).
+* [Richard "DawnBringer" Fhager](http://pixeljoint.com/p/23821.htm), [16 colors](http://pixeljoint.com/forum/forum_posts.asp?TID=12795),  [32 colors](http://pixeljoint.com/forum/forum_posts.asp?TID=16247).
+* [Arne Niklas Jansson](http://androidarts.com/), [16 colors](http://androidarts.com/palette/16pal.htm), [32 colors](http://wayofthepixel.net/index.php?topic=15824.msg144494).
+* [ENDESGA Studios](https://twitter.com/ENDESGA), [EDG16 and EDG32](https://forums.tigsource.com/index.php?topic=46126.msg1279124#msg1279124), and [other palettes](https://twitter.com/ENDESGA/status/865812366931353600)
+* [Hyohnoo Games](https://twitter.com/Hyohnoo), [mail24](https://twitter.com/Hyohnoo/status/797472587974639616) palette.
+* [Davit Masia](https://twitter.com/DavitMasia), [matriax8c](https://twitter.com/DavitMasia/status/834862452164612096) palette.
+* [Javier Guerrero](https://twitter.com/Xavier_Gd), [nyx8](https://twitter.com/Xavier_Gd/status/868519467864686594) palette.
+* [Adigun A. Polack](https://twitter.com/adigunpolack), [AAP-64](http://pixeljoint.com/pixelart/119466.htm), [AAP-Splendor128](http://pixeljoint.com/pixelart/120714.htm), [SimpleJPC-16](http://pixeljoint.com/pixelart/119844.htm), and [AAP-Micro12](http://pixeljoint.com/pixelart/121151.htm) palette.
+* [PineTreePizza](https://twitter.com/PineTreePizza), [Rosy-42](https://twitter.com/PineTreePizza/status/1006536191955623938) palette
 
 It tries to replicate some pixel-art algorithms:
 
 * [RotSprite](http://forums.sonicretro.org/index.php?showtopic=8848&st=15&p=159754&#entry159754) by Xenowhirl.
 * [Pixel perfect drawing algorithm](http://deepnight.net/pixel-perfect-drawing/) by [Sébastien Bénard](https://twitter.com/deepnightfr) and [Carduus](https://twitter.com/CarduusHimself/status/420554200737935361).
 
-Aseprite uses [several third-party open source projects](docs/LICENSES.md).
+Thanks to [third-party open source projects](docs/LICENSES.md), to
+[contributors](http://www.aseprite.org/contributors/), and all the
+people who have contributed ideas, patches, bugs report, feature
+requests, donations, and help me to develop Aseprite.
 
 ## License
 

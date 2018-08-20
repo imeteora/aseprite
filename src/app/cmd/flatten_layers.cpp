@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2016  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,14 +11,14 @@
 #include "app/cmd/flatten_layers.h"
 
 #include "app/cmd/add_layer.h"
-#include "app/cmd/set_layer_name.h"
 #include "app/cmd/configure_background.h"
 #include "app/cmd/copy_rect.h"
 #include "app/cmd/remove_layer.h"
 #include "app/cmd/remove_layer.h"
 #include "app/cmd/set_layer_flags.h"
+#include "app/cmd/set_layer_name.h"
 #include "app/cmd/unlink_cel.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
 #include "doc/primitives.h"
@@ -36,7 +36,7 @@ FlattenLayers::FlattenLayers(Sprite* sprite)
 void FlattenLayers::onExecute()
 {
   Sprite* sprite = this->sprite();
-  app::Document* doc = static_cast<app::Document*>(sprite->document());
+  auto doc = static_cast<Doc*>(sprite->document());
 
   // Create a temporary image.
   ImageRef image(Image::create(sprite->pixelFormat(),
@@ -55,7 +55,7 @@ void FlattenLayers::onExecute()
     // Create a new transparent layer to flatten everything onto.
     flatLayer = new LayerImage(sprite);
     ASSERT(flatLayer->isVisible());
-    executeAndAdd(new cmd::AddLayer(sprite->folder(), flatLayer, nullptr));
+    executeAndAdd(new cmd::AddLayer(sprite->root(), flatLayer, nullptr));
     executeAndAdd(new cmd::SetLayerName(flatLayer, "Flattened"));
     bgcolor = sprite->transparentColor();
   }
@@ -91,7 +91,7 @@ void FlattenLayers::onExecute()
   }
 
   // Delete old layers.
-  LayerList layers = sprite->folder()->getLayersList();
+  LayerList layers = sprite->root()->layers();
   for (Layer* layer : layers)
     if (layer != flatLayer)
       executeAndAdd(new cmd::RemoveLayer(layer));

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -24,13 +24,9 @@ namespace app {
     const_iterator begin() const { return m_params.begin(); }
     const_iterator end() const { return m_params.end(); }
 
-    bool empty() const {
-      return m_params.empty();
-    }
-
-    void clear() {
-      return m_params.clear();
-    }
+    bool empty() const { return m_params.empty(); }
+    int size() const { return int(m_params.size()); }
+    void clear() { return m_params.clear(); }
 
     bool has_param(const char* name) const {
       return m_params.find(name) != m_params.end();
@@ -48,25 +44,32 @@ namespace app {
       return m_params[name] = value;
     }
 
-    const std::string& get(const char* name) const {
-      return m_params[name];
+    std::string get(const char* name) const {
+      auto it = m_params.find(name);
+      if (it != m_params.end())
+        return it->second;
+      else
+        return std::string();
     }
 
-    void operator|=(const Params& params) const {
+    void operator|=(const Params& params) {
       for (const auto& p : params)
         m_params[p.first] = p.second;
     }
 
     template<typename T>
     const T get_as(const char* name) const {
-      std::istringstream stream(m_params[name]);
       T value = T();
-      stream >> value;
+      auto it = m_params.find(name);
+      if (it != m_params.end()) {
+        std::istringstream stream(it->second);
+        stream >> value;
+      }
       return value;
     }
 
   private:
-    mutable Map m_params;
+    Map m_params;
   };
 
 } // namespace app

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -22,10 +22,11 @@
 #include "base/bind.h"
 #include "base/fs.h"
 #include "base/string.h"
-#include "base/unique_ptr.h"
 #include "doc/image.h"
 #include "doc/image_ref.h"
+#include "render/ordered_dither.h"
 #include "render/quantization.h"
+#include "ui/system.h"
 
 #include "paste_text.xml.h"
 
@@ -44,15 +45,14 @@ protected:
 };
 
 PasteTextCommand::PasteTextCommand()
-  : Command("PasteText",
-            "Insert Text",
-            CmdUIOnlyFlag)
+  : Command(CommandId::PasteText(), CmdUIOnlyFlag)
 {
 }
 
 bool PasteTextCommand::onEnabled(Context* ctx)
 {
-  return ctx->checkFlags(ContextFlags::ActiveDocumentIsWritable);
+  return ctx->checkFlags(ContextFlags::ActiveDocumentIsWritable |
+                         ContextFlags::ActiveLayerIsEditable);
 }
 
 class PasteTextWindow : public app::gen::PasteText {
@@ -90,16 +90,16 @@ private:
   }
 
   void onSelectFontFile() {
-    std::string face = show_file_selector(
-      "Select a TrueType Font",
-      m_face,
-      "ttf",
-      FileSelectorType::Open,
-      nullptr);
+    base::paths exts = { "ttf", "ttc", "otf", "dfont" };
+    base::paths face;
+    if (!show_file_selector(
+          "Select a TrueType Font",
+          m_face, exts,
+          FileSelectorType::Open, face))
+      return;
 
-    if (!face.empty()) {
-      setFontFace(face);
-    }
+    ASSERT(!face.empty());
+    setFontFace(face.front());
   }
 
   void setFontFace(const std::string& face) {
@@ -137,7 +137,7 @@ private:
   }
 
   std::string m_face;
-  base::UniquePtr<FontPopup> m_fontPopup;
+  std::unique_ptr<FontPopup> m_fontPopup;
 };
 
 void PasteTextCommand::onExecute(Context* ctx)
@@ -184,7 +184,9 @@ void PasteTextCommand::onExecute(Context* ctx)
         image.reset(
           render::convert_pixel_format(
             image.get(), NULL, sprite->pixelFormat(),
-            DitheringMethod::NONE, rgbmap, sprite->palette(editor->frame()),
+            render::DitheringAlgorithm::None,
+            render::DitheringMatrix(),
+            rgbmap, sprite->palette(editor->frame()),
             false, 0));
       }
 
@@ -192,9 +194,7 @@ void PasteTextCommand::onExecute(Context* ctx)
     }
   }
   catch (const std::exception& ex) {
-    ui::Alert::show(PACKAGE
-                    "<<%s"
-                    "||&OK", ex.what());
+    Console::showException(ex);
   }
 }
 

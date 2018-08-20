@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,7 +11,6 @@
 #include "ui/ui.h"
 
 #include "app/app.h"
-#include "app/app_render.h"
 #include "app/commands/command.h"
 #include "app/commands/commands.h"
 #include "app/context.h"
@@ -19,6 +18,7 @@
 #include "app/modules/gfx.h"
 #include "app/pref/preferences.h"
 #include "app/ui/editor/editor.h"
+#include "app/ui/editor/editor_render.h"
 #include "app/ui/keyboard_shortcuts.h"
 #include "app/ui/status_bar.h"
 #include "doc/conversion_she.h"
@@ -50,11 +50,11 @@ public:
     , m_doc(editor->document())
     , m_sprite(editor->sprite())
     , m_pal(m_sprite->palette(editor->frame()))
-    , m_zoom(editor->zoom())
+    , m_proj(editor->projection())
     , m_index_bg_color(-1)
     , m_doublebuf(Image::create(IMAGE_RGB, ui::display_w(), ui::display_h()))
     , m_doublesur(she::instance()->createRgbaSurface(ui::display_w(), ui::display_h())) {
-    // Do not use DocumentWriter (do not lock the document) because we
+    // Do not use DocWriter (do not lock the document) because we
     // will call other sub-commands (e.g. previous frame, next frame,
     // etc.).
     View* view = View::getView(editor);
@@ -122,18 +122,18 @@ protected:
 
         // Change frame
         if (command != NULL &&
-            (command->id() == CommandId::GotoFirstFrame ||
-             command->id() == CommandId::GotoPreviousFrame ||
-             command->id() == CommandId::GotoNextFrame ||
-             command->id() == CommandId::GotoLastFrame)) {
+            (command->id() == CommandId::GotoFirstFrame() ||
+             command->id() == CommandId::GotoPreviousFrame() ||
+             command->id() == CommandId::GotoNextFrame() ||
+             command->id() == CommandId::GotoLastFrame())) {
           m_context->executeCommand(command, params);
           invalidate();
-          m_render.reset(NULL); // Re-render
+          m_render.reset(nullptr); // Re-render
         }
 #if 0
         // Play the animation
         else if (command != NULL &&
-                 std::strcmp(command->short_name(), CommandId::PlayAnimation) == 0) {
+                 std::strcmp(command->short_name(), CommandId::PlayAnimation()) == 0) {
           // TODO
         }
 #endif
@@ -172,13 +172,15 @@ protected:
 
   virtual void onPaint(PaintEvent& ev) override {
     Graphics* g = ev.graphics();
-    AppRender& render = m_editor->renderEngine();
+    EditorRender& render = m_editor->renderEngine();
+    render.setRefLayersVisiblity(false);
+    render.setProjection(render::Projection());
     render.disableOnionskin();
-    render.setBgType(render::BgType::TRANSPARENT);
+    render.setTransparentBackground();
 
     // Render sprite and leave the result in 'm_render' variable
-    if (m_render == NULL) {
-      ImageBufferPtr buf = Editor::getRenderImageBuffer();
+    if (m_render == nullptr) {
+      ImageBufferPtr buf = render.getRenderImageBuffer();
       m_render.reset(Image::create(IMAGE_RGB,
           m_sprite->width(), m_sprite->height(), buf));
 
@@ -187,48 +189,49 @@ protected:
     }
 
     int x, y, w, h, u, v;
-    x = m_pos.x + m_zoom.apply(m_zoom.remove(m_delta.x));
-    y = m_pos.y + m_zoom.apply(m_zoom.remove(m_delta.y));
-    w = m_zoom.apply(m_sprite->width());
-    h = m_zoom.apply(m_sprite->height());
+    x = m_pos.x + m_proj.applyX(m_proj.removeX(m_delta.x));
+    y = m_pos.y + m_proj.applyY(m_proj.removeY(m_delta.y));
+    w = m_proj.applyX(m_sprite->width());
+    h = m_proj.applyY(m_sprite->height());
 
     if (int(m_tiled) & int(TiledMode::X_AXIS)) x = SGN(x) * (ABS(x)%w);
     if (int(m_tiled) & int(TiledMode::Y_AXIS)) y = SGN(y) * (ABS(y)%h);
 
+    render.setProjection(m_proj);
     if (m_index_bg_color == -1) {
       render.setupBackground(m_doc, m_doublebuf->pixelFormat());
-      render.renderBackground(m_doublebuf,
+      render.renderBackground(m_doublebuf.get(),
         gfx::Clip(0, 0, -m_pos.x, -m_pos.y,
-          m_doublebuf->width(), m_doublebuf->height()), m_zoom);
+          m_doublebuf->width(), m_doublebuf->height()));
     }
     else {
-      doc::clear_image(m_doublebuf, m_pal->getEntry(m_index_bg_color));
+      doc::clear_image(m_doublebuf.get(), m_pal->getEntry(m_index_bg_color));
     }
 
     switch (m_tiled) {
       case TiledMode::NONE:
-        render.renderImage(m_doublebuf, m_render, m_pal, x, y,
-                           m_zoom, 255, BlendMode::NORMAL);
+        render.renderImage(m_doublebuf.get(), m_render.get(), m_pal, x, y,
+                           255, BlendMode::NORMAL);
         break;
       case TiledMode::X_AXIS:
         for (u=x-w; u<ui::display_w()+w; u+=w)
-          render.renderImage(m_doublebuf, m_render, m_pal, u, y,
-                             m_zoom, 255, BlendMode::NORMAL);
+          render.renderImage(m_doublebuf.get(), m_render.get(), m_pal, u, y,
+                             255, BlendMode::NORMAL);
         break;
       case TiledMode::Y_AXIS:
         for (v=y-h; v<ui::display_h()+h; v+=h)
-          render.renderImage(m_doublebuf, m_render, m_pal, x, v,
-                             m_zoom, 255, BlendMode::NORMAL);
+          render.renderImage(m_doublebuf.get(), m_render.get(), m_pal, x, v,
+                             255, BlendMode::NORMAL);
         break;
       case TiledMode::BOTH:
         for (v=y-h; v<ui::display_h()+h; v+=h)
           for (u=x-w; u<ui::display_w()+w; u+=w)
-            render.renderImage(m_doublebuf, m_render, m_pal, u, v,
-                               m_zoom, 255, BlendMode::NORMAL);
+            render.renderImage(m_doublebuf.get(), m_render.get(), m_pal, u, v,
+                               255, BlendMode::NORMAL);
         break;
     }
 
-    doc::convert_image_to_surface(m_doublebuf, m_pal,
+    doc::convert_image_to_surface(m_doublebuf.get(), m_pal,
       m_doublesur, 0, 0, 0, 0, m_doublebuf->width(), m_doublebuf->height());
     g->blit(m_doublesur, 0, 0, 0, 0, m_doublesur->width(), m_doublesur->height());
   }
@@ -236,16 +239,16 @@ protected:
 private:
   Context* m_context;
   Editor* m_editor;
-  Document* m_doc;
+  Doc* m_doc;
   Sprite* m_sprite;
   const Palette* m_pal;
   gfx::Point m_pos;
   gfx::Point m_oldMousePos;
   gfx::Point m_delta;
-  render::Zoom m_zoom;
+  render::Projection m_proj;
   int m_index_bg_color;
-  base::UniquePtr<Image> m_render;
-  base::UniquePtr<Image> m_doublebuf;
+  std::unique_ptr<Image> m_render;
+  std::unique_ptr<Image> m_doublebuf;
   she::ScopedHandle<she::Surface> m_doublesur;
   filters::TiledMode m_tiled;
 };
@@ -261,9 +264,7 @@ protected:
 };
 
 FullscreenPreviewCommand::FullscreenPreviewCommand()
-  : Command("FullscreenPreview",
-            "Fullscreen Preview",
-            CmdUIOnlyFlag)
+  : Command(CommandId::FullscreenPreview(), CmdUIOnlyFlag)
 {
 }
 

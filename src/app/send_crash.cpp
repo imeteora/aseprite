@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,31 +11,17 @@
 #include "app/send_crash.h"
 
 #include "app/app.h"
+#include "app/console.h"
+#include "app/i18n/strings.h"
 #include "app/resource_finder.h"
 #include "base/bind.h"
 #include "base/fs.h"
 #include "base/launcher.h"
+#include "ui/alert.h"
 
 #include "send_crash.xml.h"
 
 namespace app {
-
-#ifdef _WIN32
-static const char* kDefaultCrashName = PACKAGE "-crash-" VERSION ".dmp";
-#endif
-
-std::string memory_dump_filename()
-{
-#ifdef _WIN32
-
-  app::ResourceFinder rf;
-  rf.includeUserDir(kDefaultCrashName);
-  return rf.getFirstOrCreateDefault();
-
-#else
-  return "";
-#endif
-}
 
 void SendCrash::search()
 {
@@ -56,7 +42,7 @@ std::string SendCrash::notificationText()
 void SendCrash::notificationClick()
 {
   if (m_dumpFilename.empty()) {
-    ui::Alert::show("Crash Report<<Nothing to report||&OK");
+    ui::Alert::show(Strings::alerts_nothing_to_report());
     return;
   }
 
@@ -83,7 +69,7 @@ void SendCrash::notificationClick()
       m_dumpFilename = "";
     }
     catch (const std::exception& ex) {
-      ui::Alert::show("Error<<%s||&OK", ex.what());
+      Console::showException(ex);
     }
   }
 }

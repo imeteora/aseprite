@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -19,10 +19,6 @@ namespace doc {
   class Sprite;
 }
 
-namespace ui {
-  class Splitter;
-}
-
 namespace app {
 
   class FrameTagWindow : protected app::gen::FrameTagProperties {
@@ -36,8 +32,9 @@ namespace app {
     doc::color_t colorValue();
     doc::AniDir aniDirValue();
 
-    private:
-      const doc::Sprite* m_sprite;
+  private:
+    const doc::Sprite* m_sprite;
+    int m_base;
   };
 
 }

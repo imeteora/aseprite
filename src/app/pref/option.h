@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,10 +13,16 @@
 
 namespace app {
 
+  class OptionBase;
+
   class Section {
   public:
     Section(const std::string& name) : m_name(name) { }
+    virtual ~Section() { }
     const char* name() const { return m_name.c_str(); }
+
+    virtual Section* section(const char* id) = 0;
+    virtual OptionBase* option(const char* id) = 0;
 
     obs::signal<void()> BeforeChange;
     obs::signal<void()> AfterChange;
@@ -25,12 +31,25 @@ namespace app {
     std::string m_name;
   };
 
+  class OptionBase {
+  public:
+    OptionBase(Section* section, const char* id)
+      : m_section(section)
+      , m_id(id) {
+    }
+    virtual ~OptionBase() { }
+    const char* section() const { return m_section->name(); }
+    const char* id() const { return m_id; }
+  protected:
+    Section* m_section;
+    const char* m_id;
+  };
+
   template<typename T>
-  class Option {
+  class Option : public OptionBase {
   public:
     Option(Section* section, const char* id, const T& defaultValue = T())
-      : m_section(section)
-      , m_id(id)
+      : OptionBase(section, id)
       , m_default(defaultValue)
       , m_value(defaultValue)
       , m_dirty(false) {
@@ -60,8 +79,6 @@ namespace app {
       setValue(value);
     }
 
-    const char* section() const { return m_section->name(); }
-    const char* id() const { return m_id; }
     const T& defaultValue() const { return m_default; }
     void setDefaultValue(const T& defValue) {
       m_default = defValue;
@@ -91,8 +108,6 @@ namespace app {
     obs::signal<void(const T&)> AfterChange;
 
   private:
-    Section* m_section;
-    const char* m_id;
     T m_default;
     T m_value;
     bool m_dirty;

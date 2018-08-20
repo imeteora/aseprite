@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +13,8 @@
 #include "app/app.h"
 #include "app/color.h"
 #include "app/color_utils.h"
-#include "app/document.h"
+#include "app/doc.h"
+#include "app/site.h"
 #include "app/tools/controller.h"
 #include "app/tools/ink.h"
 #include "app/tools/intertwine.h"
@@ -24,6 +25,7 @@
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/tool_loop_impl.h"
 #include "app/ui_context.h"
+#include "app/util/wrap_value.h"
 #include "doc/algo.h"
 #include "doc/blend_internals.h"
 #include "doc/brush.h"
@@ -31,7 +33,7 @@
 #include "doc/image_impl.h"
 #include "doc/layer.h"
 #include "doc/primitives.h"
-#include "doc/site.h"
+#include "render/render.h"
 #include "she/display.h"
 #include "ui/manager.h"
 #include "ui/system.h"
@@ -89,9 +91,11 @@ void BrushPreview::show(const gfx::Point& screenPos)
   if (m_onScreen)
     hide();
 
-  app::Document* document = m_editor->document();
+  Doc* document = m_editor->document();
   Sprite* sprite = m_editor->sprite();
-  Layer* layer = m_editor->layer();
+  Layer* layer = (m_editor->layer() &&
+                  m_editor->layer()->isImage() ? m_editor->layer():
+                                                 nullptr);
   ASSERT(sprite);
 
   // Get drawable region
@@ -128,7 +132,7 @@ void BrushPreview::show(const gfx::Point& screenPos)
   }
   else if (
     (brush->type() == kImageBrushType ||
-     brush->size() > 1.0 / m_editor->zoom().scale()) &&
+     ((isFloodfill ? 1: brush->size()) > (1.0 / m_editor->zoom().scale()))) &&
     (// Use cursor bounds for inks that are effects (eraser, blur, etc.)
      (ink->isEffect()) ||
      // or when the brush color is transparent and we are not in the background layer
@@ -180,6 +184,27 @@ void BrushPreview::show(const gfx::Point& screenPos)
     gfx::Rect origBrushBounds = (isFloodfill ? gfx::Rect(0, 0, 1, 1): brush->bounds());
     gfx::Rect brushBounds = origBrushBounds;
     brushBounds.offset(spritePos);
+    gfx::Rect extraCelBounds = brushBounds;
+
+    // Tiled mode might require a bigger extra cel (to show the tiled)
+    if (int(m_editor->docPref().tiled.mode()) & int(filters::TiledMode::X_AXIS)) {
+      brushBounds.x = wrap_value(brushBounds.x, sprite->width());
+      extraCelBounds.x = brushBounds.x;
+      if ((extraCelBounds.x < 0 && extraCelBounds.x2() > 0) ||
+          (extraCelBounds.x < sprite->width() && extraCelBounds.x2() > sprite->width())) {
+        extraCelBounds.x = 0;
+        extraCelBounds.w = sprite->width();
+      }
+    }
+    if (int(m_editor->docPref().tiled.mode()) & int(filters::TiledMode::Y_AXIS)) {
+      brushBounds.y = wrap_value(brushBounds.y, sprite->height());
+      extraCelBounds.y = brushBounds.y;
+      if ((extraCelBounds.y < 0 && extraCelBounds.y2() > 0) ||
+          (extraCelBounds.y < sprite->height() && extraCelBounds.y2() > sprite->height())) {
+        extraCelBounds.y = 0;
+        extraCelBounds.h = sprite->height();
+      }
+    }
 
     // Create the extra cel to show the brush preview
     Site site = m_editor->getSite();
@@ -191,7 +216,7 @@ void BrushPreview::show(const gfx::Point& screenPos)
 
     if (!m_extraCel)
       m_extraCel.reset(new ExtraCel);
-    m_extraCel->create(document->sprite(), brushBounds, site.frame(), opacity);
+    m_extraCel->create(document->sprite(), extraCelBounds, site.frame(), opacity);
     m_extraCel->setType(render::ExtraType::NONE);
     m_extraCel->setBlendMode(
       (layer ? static_cast<LayerImage*>(layer)->blendMode():
@@ -207,7 +232,7 @@ void BrushPreview::show(const gfx::Point& screenPos)
     if (layer) {
       render::Render().renderLayer(
         extraImage, layer, site.frame(),
-        gfx::Clip(0, 0, brushBounds),
+        gfx::Clip(0, 0, extraCelBounds),
         BlendMode::SRC);
 
       // This extra cel is a patch for the current layer/frame
@@ -215,23 +240,24 @@ void BrushPreview::show(const gfx::Point& screenPos)
     }
 
     {
-      base::UniquePtr<tools::ToolLoop> loop(
+      std::unique_ptr<tools::ToolLoop> loop(
         create_tool_loop_preview(
           m_editor, extraImage,
-          brushBounds.origin()));
+          extraCelBounds.origin()));
       if (loop) {
-        loop->getInk()->prepareInk(loop);
+        loop->getInk()->prepareInk(loop.get());
+        loop->getController()->prepareController(loop.get());
         loop->getIntertwine()->prepareIntertwine();
-        loop->getPointShape()->preparePointShape(loop);
+        loop->getPointShape()->preparePointShape(loop.get());
         loop->getPointShape()->transformPoint(
-          loop,
+          loop.get(),
           brushBounds.x-origBrushBounds.x,
           brushBounds.y-origBrushBounds.y);
       }
     }
 
     document->notifySpritePixelsModified(
-      sprite, gfx::Region(m_lastBounds = brushBounds),
+      sprite, gfx::Region(m_lastBounds = extraCelBounds),
       m_lastFrame = site.frame());
 
     m_withRealPreview = true;
@@ -241,12 +267,10 @@ void BrushPreview::show(const gfx::Point& screenPos)
   if (!(m_type & NATIVE_CROSSHAIR) ||
       (m_type & BRUSH_BOUNDARIES)) {
     ui::ScreenGraphics g;
-    ui::SetClip clip(&g, gfx::Rect(0, 0, g.width(), g.height()));
+    ui::SetClip clip(&g);
     gfx::Color uiCursorColor = color_utils::color_for_ui(appCursorColor);
-
     forEachBrushPixel(&g, m_screenPosition, spritePos, uiCursorColor, &BrushPreview::savePixelDelegate);
     forEachBrushPixel(&g, m_screenPosition, spritePos, uiCursorColor, &BrushPreview::drawPixelDelegate);
-
     m_withModifiedPixels = true;
   }
 
@@ -271,10 +295,6 @@ void BrushPreview::hide()
   if (!m_onScreen)
     return;
 
-  app::Document* document = m_editor->document();
-  Sprite* sprite = m_editor->sprite();
-  ASSERT(sprite);
-
   // Get drawable region
   m_editor->getDrawableRegion(m_clippingRegion, ui::Widget::kCutTopWindows);
 
@@ -285,17 +305,24 @@ void BrushPreview::hide()
   if (m_withModifiedPixels) {
     // Restore pixels
     ui::ScreenGraphics g;
-    ui::SetClip clip(&g, gfx::Rect(0, 0, g.width(), g.height()));
-
+    ui::SetClip clip(&g);
     forEachBrushPixel(&g, m_screenPosition, m_editorPosition, gfx::ColorNone,
                       &BrushPreview::clearPixelDelegate);
   }
 
   // Clean pixel/brush preview
   if (m_withRealPreview) {
-    document->setExtraCel(ExtraCelRef(nullptr));
-    document->notifySpritePixelsModified(
-      sprite, gfx::Region(m_lastBounds), m_lastFrame);
+    Doc* document = m_editor->document();
+    doc::Sprite* sprite = m_editor->sprite();
+
+    ASSERT(document);
+    ASSERT(sprite);
+
+    if (document && sprite) {
+      document->setExtraCel(ExtraCelRef(nullptr));
+      document->notifySpritePixelsModified(
+        sprite, gfx::Region(m_lastBounds), m_lastFrame);
+    }
 
     m_withRealPreview = false;
   }
@@ -303,6 +330,16 @@ void BrushPreview::hide()
   m_onScreen = false;
   m_clippingRegion.clear();
   m_oldClippingRegion.clear();
+}
+
+void BrushPreview::discardBrushPreview()
+{
+  Doc* document = m_editor->document();
+  ASSERT(document);
+
+  if (document && m_onScreen && m_withRealPreview) {
+    document->setExtraCel(ExtraCelRef(nullptr));
+  }
 }
 
 void BrushPreview::redraw()
@@ -430,19 +467,22 @@ void BrushPreview::traceSelectionCrossPixels(
     0, 0, 1, 1, 0, 0,
   };
   gfx::Point out, outpt = m_editor->editorToScreen(pt);
-  int u, v;
-  int size = m_editor->zoom().apply(thickness/2);
-  int size2 = m_editor->zoom().apply(thickness);
-  if (size2 == 0) size2 = 1;
+  const render::Projection& proj = m_editor->projection();
+  gfx::Size size(proj.applyX(thickness/2),
+                 proj.applyY(thickness/2));
+  gfx::Size size2(proj.applyX(thickness),
+                  proj.applyY(thickness));
+  if (size2.w == 0) size2.w = 1;
+  if (size2.h == 0) size2.h = 1;
 
-  for (v=0; v<6; v++) {
-    for (u=0; u<6; u++) {
+  for (int v=0; v<6; v++) {
+    for (int u=0; u<6; u++) {
       if (!cross[v*6+u])
         continue;
 
       out = outpt;
-      out.x += ((u<3) ? u-size-3: u-size-3+size2);
-      out.y += ((v<3) ? v-size-3: v-size-3+size2);
+      out.x += ((u<3) ? u-size.w-3: u-size.w-3+size2.w);
+      out.y += ((v<3) ? v-size.h-3: v-size.h-3+size2.h);
 
       (this->*pixelDelegate)(g, out, color);
     }

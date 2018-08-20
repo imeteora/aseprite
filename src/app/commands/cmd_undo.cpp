@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -11,7 +11,7 @@
 #include "app/app.h"
 #include "app/commands/command.h"
 #include "app/context_access.h"
-#include "app/document_undo.h"
+#include "app/doc_undo.h"
 #include "app/ini_file.h"
 #include "app/modules/editors.h"
 #include "app/modules/gui.h"
@@ -23,6 +23,10 @@
 #include "doc/sprite.h"
 #include "ui/manager.h"
 #include "ui/system.h"
+
+#ifdef ENABLE_UI
+#include "app/ui/timeline/timeline.h"
+#endif
 
 namespace app {
 
@@ -42,9 +46,8 @@ private:
 };
 
 UndoCommand::UndoCommand(Type type)
-  : Command((type == Undo ? "Undo": "Redo"),
-            (type == Undo ? "Undo": "Redo"),
-            CmdUIOnlyFlag)
+  : Command((type == Undo ? CommandId::Undo():
+                            CommandId::Redo()), CmdUIOnlyFlag)
   , m_type(type)
 {
 }
@@ -52,7 +55,7 @@ UndoCommand::UndoCommand(Type type)
 bool UndoCommand::onEnabled(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   return
     document != NULL &&
     ((m_type == Undo ? document->undoHistory()->canUndo():
@@ -62,15 +65,15 @@ bool UndoCommand::onEnabled(Context* context)
 void UndoCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
-  DocumentUndo* undo = document->undoHistory();
+  Doc* document(writer.document());
+  DocUndo* undo = document->undoHistory();
+
+#ifdef ENABLE_UI
   Sprite* sprite = document->sprite();
   SpritePosition spritePosition;
-  const bool gotoModified =
-    Preferences::instance().undo.gotoModified();
-
+  const bool gotoModified = Preferences::instance().undo.gotoModified();
   if (gotoModified) {
-    SpritePosition currentPosition(writer.site()->layerIndex(),
+    SpritePosition currentPosition(writer.site()->layer(),
                                    writer.site()->frame());
 
     if (m_type == Undo)
@@ -79,7 +82,9 @@ void UndoCommand::onExecute(Context* context)
       spritePosition = undo->nextRedoSpritePosition();
 
     if (spritePosition != currentPosition) {
-      current_editor->setLayer(sprite->indexToLayer(spritePosition.layerIndex()));
+      Layer* selectLayer = spritePosition.layer();
+      if (selectLayer)
+        current_editor->setLayer(selectLayer);
       current_editor->setFrame(spritePosition.frame());
 
       // Draw the current layer/frame (which is not undone yet) so the
@@ -92,13 +97,24 @@ void UndoCommand::onExecute(Context* context)
     }
   }
 
+  // Get the stream to deserialize the document range after executing
+  // the undo/redo action. We cannot yet deserialize the document
+  // range because there could be inexistent layers.
+  std::istream* docRangeStream;
+  if (m_type == Undo)
+    docRangeStream = undo->nextUndoDocRange();
+  else
+    docRangeStream = undo->nextRedoDocRange();
+
   StatusBar* statusbar = StatusBar::instance();
-  if (statusbar)
+  if (statusbar) {
     statusbar->showTip(1000, "%s %s",
       (m_type == Undo ? "Undid": "Redid"),
       (m_type == Undo ?
         undo->nextUndoLabel().c_str():
         undo->nextRedoLabel().c_str()));
+  }
+#endif // ENABLE_UI
 
   // Effectively undo/redo.
   if (m_type == Undo)
@@ -106,24 +122,42 @@ void UndoCommand::onExecute(Context* context)
   else
     undo->redo();
 
+#ifdef ENABLE_UI
   // After redo/undo, we retry to change the current SpritePosition
   // (because new frames/layers could be added, positions that we
   // weren't able to reach before the undo).
   if (gotoModified) {
     SpritePosition currentPosition(
-      writer.site()->layerIndex(),
+      writer.site()->layer(),
       writer.site()->frame());
 
     if (spritePosition != currentPosition) {
-      current_editor->setLayer(sprite->indexToLayer(spritePosition.layerIndex()));
+      Layer* selectLayer = spritePosition.layer();
+      if (selectLayer)
+        current_editor->setLayer(selectLayer);
       current_editor->setFrame(spritePosition.frame());
     }
   }
 
+  // Update timeline range. We've to deserialize the DocRange at
+  // this point when objects (possible layers) are re-created after
+  // the undo and we can deserialize them.
+  if (docRangeStream) {
+    Timeline* timeline = App::instance()->timeline();
+    if (timeline) {
+      DocRange docRange;
+      if (docRange.read(*docRangeStream))
+        timeline->setRange(docRange);
+    }
+  }
+#endif  // ENABLE_UI
+
   document->generateMaskBoundaries();
   document->setExtraCel(ExtraCelRef(nullptr));
 
+#ifdef ENABLE_UI
   update_screen_for_document(document);
+#endif
   set_current_palette(writer.palette(), false);
 }
 

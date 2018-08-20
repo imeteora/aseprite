@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -8,11 +8,13 @@
 #define UI_MENU_H_INCLUDED
 #pragma once
 
-#include "base/unique_ptr.h"
 #include "obs/signal.h"
 #include "ui/register_message.h"
 #include "ui/separator.h"
 #include "ui/widget.h"
+#include "ui/window.h"
+
+#include <memory>
 
 namespace ui {
 
@@ -78,10 +80,13 @@ namespace ui {
 
   private:
     void closePopup();
+    void startFilteringMouseDown();
+    void stopFilteringMouseDown();
 
     MenuBaseData* m_base;
 
     friend class Menu;
+    friend class MenuItem;
   };
 
   class MenuBar : public MenuBox {
@@ -120,14 +125,19 @@ namespace ui {
       return m_submenu_menubox;
     }
 
+    void executeClick();
+    void validateItem();
+
     // Fired when the menu item is clicked.
     obs::signal<void()> Click;
 
   protected:
-    virtual bool onProcessMessage(Message* msg) override;
-    virtual void onPaint(PaintEvent& ev) override;
-    virtual void onSizeHint(SizeHintEvent& ev) override;
+    bool onProcessMessage(Message* msg) override;
+    void onInitTheme(InitThemeEvent& ev) override;
+    void onPaint(PaintEvent& ev) override;
+    void onSizeHint(SizeHintEvent& ev) override;
     virtual void onClick();
+    virtual void onValidate();
 
     bool inBar();
 
@@ -136,12 +146,11 @@ namespace ui {
     void closeSubmenu(bool last_of_close_chain);
     void startTimer();
     void stopTimer();
-    void executeClick();
 
     bool m_highlighted;           // Is it highlighted?
     Menu* m_submenu;              // The sub-menu
     MenuBox* m_submenu_menubox;   // The opened menubox for this menu-item
-    base::UniquePtr<Timer> m_submenu_timer; // Timer to open the submenu
+    std::unique_ptr<Timer> m_submenu_timer; // Timer to open the submenu
 
     friend class Menu;
     friend class MenuBox;
@@ -151,6 +160,13 @@ namespace ui {
   public:
     MenuSeparator() : Separator("", HORIZONTAL) {
     }
+  };
+
+  class MenuBoxWindow : public Window {
+  public:
+    MenuBoxWindow(MenuBox* menubox);
+  protected:
+    bool onProcessMessage(Message* msg) override;
   };
 
   extern RegisterMessage kOpenMenuItemMessage;

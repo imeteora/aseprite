@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -29,16 +29,14 @@ protected:
 };
 
 ReselectMaskCommand::ReselectMaskCommand()
-  : Command("ReselectMask",
-            "Reselect Mask",
-            CmdRecordableFlag)
+  : Command(CommandId::ReselectMask(), CmdRecordableFlag)
 {
 }
 
 bool ReselectMaskCommand::onEnabled(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   return
      document &&                      // The document does exist
     !document->isMaskVisible() &&     // The mask is hidden
@@ -49,7 +47,7 @@ bool ReselectMaskCommand::onEnabled(Context* context)
 void ReselectMaskCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   {
     Transaction transaction(writer.context(), "Reselect", DoesntModifyDocument);
     transaction.execute(new cmd::ReselectMask(document));

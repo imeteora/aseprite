@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,6 +15,7 @@
 #include "app/transaction.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
+#include "app/pref/preferences.h"
 
 namespace app {
 
@@ -29,9 +30,7 @@ protected:
 };
 
 MaskAllCommand::MaskAllCommand()
-  : Command("MaskAll",
-            "Mask All",
-            CmdRecordableFlag)
+  : Command(CommandId::MaskAll(), CmdRecordableFlag)
 {
 }
 
@@ -44,7 +43,7 @@ bool MaskAllCommand::onEnabled(Context* context)
 void MaskAllCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   Sprite* sprite(writer.sprite());
 
   Mask newMask;
@@ -56,6 +55,12 @@ void MaskAllCommand::onExecute(Context* context)
 
   document->resetTransformation();
   document->generateMaskBoundaries();
+
+  if (Preferences::instance().selection.autoShowSelectionEdges()) {
+    DocumentPreferences& docPref = Preferences::instance().document(document);
+    docPref.show.selectionEdges(true);
+  }
+
   update_screen_for_document(document);
 }
 

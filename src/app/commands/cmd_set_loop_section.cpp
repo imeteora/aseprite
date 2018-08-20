@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -18,7 +18,7 @@
 #include "app/context_access.h"
 #include "app/loop_tag.h"
 #include "app/transaction.h"
-#include "app/ui/timeline.h"
+#include "app/ui/timeline/timeline.h"
 #include "doc/frame_tag.h"
 
 namespace app {
@@ -40,9 +40,7 @@ protected:
 };
 
 SetLoopSectionCommand::SetLoopSectionCommand()
-  : Command("SetLoopSection",
-            "Set Loop Section",
-            CmdRecordableFlag)
+  : Command(CommandId::SetLoopSection(), CmdRecordableFlag)
   , m_action(Action::Auto)
   , m_begin(0)
   , m_end(0)
@@ -70,7 +68,7 @@ bool SetLoopSectionCommand::onEnabled(Context* ctx)
 
 void SetLoopSectionCommand::onExecute(Context* ctx)
 {
-  doc::Document* doc = ctx->activeDocument();
+  Doc* doc = ctx->activeDocument();
   if (!doc)
     return;
 
@@ -84,8 +82,8 @@ void SetLoopSectionCommand::onExecute(Context* ctx)
     case Action::Auto: {
       auto range = App::instance()->timeline()->range();
       if (range.enabled() && (range.frames() > 1)) {
-        begin = range.frameBegin();
-        end = range.frameEnd();
+        begin = range.selectedFrames().firstFrame();
+        end = range.selectedFrames().lastFrame();
         on = true;
       }
       else {
@@ -122,7 +120,7 @@ void SetLoopSectionCommand::onExecute(Context* ctx)
       transaction.commit();
     }
     else {
-      Command* cmd = CommandsModule::instance()->getCommandByName(CommandId::FrameTagProperties);
+      Command* cmd = Commands::instance()->byId(CommandId::FrameTagProperties());
       ctx->executeCommand(cmd);
     }
   }

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,14 +12,13 @@
 
 #include "app/console.h"
 #include "app/crash/internals.h"
-#include "app/document.h"
+#include "app/doc.h"
 #include "base/convert_to.h"
 #include "base/exception.h"
 #include "base/fs.h"
 #include "base/fstream_path.h"
 #include "base/serialization.h"
 #include "base/string.h"
-#include "base/unique_ptr.h"
 #include "doc/cel.h"
 #include "doc/cel_data_io.h"
 #include "doc/cel_io.h"
@@ -31,6 +30,8 @@
 #include "doc/layer.h"
 #include "doc/palette.h"
 #include "doc/palette_io.h"
+#include "doc/slice.h"
+#include "doc/slice_io.h"
 #include "doc/sprite.h"
 #include "doc/string_io.h"
 #include "doc/subobjects_io.h"
@@ -84,8 +85,8 @@ public:
     }
   }
 
-  app::Document* loadDocument() {
-    app::Document* doc = loadObject<app::Document*>("doc", m_docId, &Reader::readDocument);
+  Doc* loadDocument() {
+    Doc* doc = loadObject<Doc*>("doc", m_docId, &Reader::readDocument);
     if (doc)
       fixUndetectedDocumentIssues(doc);
     else
@@ -96,8 +97,8 @@ public:
   bool loadDocumentInfo(DocumentInfo& info) {
     m_loadInfo = &info;
     return
-      loadObject<app::Document*>("doc", m_docId, &Reader::readDocument)
-      == (app::Document*)1;
+      loadObject<Doc*>("doc", m_docId, &Reader::readDocument)
+        == (Doc*)1;
   }
 
 private:
@@ -168,19 +169,19 @@ private:
     return nullptr;
   }
 
-  app::Document* readDocument(std::ifstream& s) {
+  Doc* readDocument(std::ifstream& s) {
     ObjectId sprId = read32(s);
     std::string filename = read_string(s);
 
     // Load DocumentInfo only
     if (m_loadInfo) {
       m_loadInfo->filename = filename;
-      return (app::Document*)loadSprite(sprId);
+      return (Doc*)loadSprite(sprId);
     }
 
     Sprite* spr = loadSprite(sprId);
     if (spr) {
-      app::Document* doc = new app::Document(spr);
+      Doc* doc = new Doc(spr);
       doc->setFilename(filename);
       doc->impossibleToBackToSavedState();
       return doc;
@@ -215,12 +216,12 @@ private:
     if (m_loadInfo) {
       m_loadInfo->format = format;
       m_loadInfo->width = w;
-      m_loadInfo->height = w;
+      m_loadInfo->height = h;
       m_loadInfo->frames = nframes;
       return (Sprite*)1;
     }
 
-    base::UniquePtr<Sprite> spr(new Sprite(format, w, h, 256));
+    std::unique_ptr<Sprite> spr(new Sprite(format, w, h, 256));
     m_sprite = spr.get();
     spr->setTransparentColor(transparentColor);
 
@@ -238,11 +239,26 @@ private:
     // Read layers
     int nlayers = read32(s);
     if (nlayers >= 1 && nlayers < 0xfffff) {
+      std::map<ObjectId, LayerGroup*> layersMap;
+      layersMap[0] = spr->root(); // parentId = 0 is the root level
+
       for (int i = 0; i < nlayers; ++i) {
         ObjectId layId = read32(s);
+        ObjectId parentId = read32(s);
+
+        if (!layersMap[parentId]) {
+          Console().printf("Inexistent parent #%d for layer #%d", parentId, layId);
+          // Put this layer at the root level
+          parentId = 0;
+        }
+
         Layer* lay = loadObject<Layer*>("lay", layId, &Reader::readLayer);
-        if (lay)
-          spr->folder()->addLayer(lay);
+        if (lay) {
+          if (lay->isGroup())
+            layersMap[layId] = static_cast<LayerGroup*>(lay);
+
+          layersMap[parentId]->addLayer(lay);
+        }
       }
     }
     else {
@@ -271,20 +287,37 @@ private:
       }
     }
 
+    // Read slices
+    int nslices = read32(s);
+    if (nslices >= 1 && nslices < 0xffffff) {
+      for (int i = 0; i < nslices; ++i) {
+        ObjectId sliceId = read32(s);
+        Slice* slice = loadObject<Slice*>("slice", sliceId, &Reader::readSlice);
+        if (slice)
+          spr->slices().add(slice);
+      }
+    }
+
     return spr.release();
   }
 
+  // TODO could we use doc::read_layer() here?
   Layer* readLayer(std::ifstream& s) {
     LayerFlags flags = (LayerFlags)read32(s);
     ObjectType type = (ObjectType)read16(s);
-    ASSERT(type == ObjectType::LayerImage);
+    ASSERT(type == ObjectType::LayerImage ||
+           type == ObjectType::LayerGroup);
 
     std::string name = read_string(s);
 
     if (type == ObjectType::LayerImage) {
-      base::UniquePtr<LayerImage> lay(new LayerImage(m_sprite));
+      std::unique_ptr<LayerImage> lay(new LayerImage(m_sprite));
       lay->setName(name);
       lay->setFlags(flags);
+
+      // Blend mode & opacity
+      lay->setBlendMode((BlendMode)read16(s));
+      lay->setOpacity(read8(s));
 
       // Cels
       int ncels = read32(s);
@@ -299,6 +332,12 @@ private:
           lay->addCel(cel);
         }
       }
+      return lay.release();
+    }
+    else if (type == ObjectType::LayerGroup) {
+      std::unique_ptr<LayerGroup> lay(new LayerGroup(m_sprite));
+      lay->setName(name);
+      lay->setFlags(flags);
       return lay.release();
     }
     else {
@@ -328,8 +367,12 @@ private:
     return read_frame_tag(s, false);
   }
 
+  Slice* readSlice(std::ifstream& s) {
+    return read_slice(s, false);
+  }
+
   // Fix issues that the restoration process could produce.
-  void fixUndetectedDocumentIssues(app::Document* doc) {
+  void fixUndetectedDocumentIssues(Doc* doc) {
     Sprite* spr = doc->sprite();
     ASSERT(spr);
     if (!spr)
@@ -371,13 +414,13 @@ bool read_document_info(const std::string& dir, DocumentInfo& info)
   return Reader(dir).loadDocumentInfo(info);
 }
 
-app::Document* read_document(const std::string& dir)
+Doc* read_document(const std::string& dir)
 {
   return Reader(dir).loadDocument();
 }
 
-app::Document* read_document_with_raw_images(const std::string& dir,
-                                             RawImagesAs as)
+Doc* read_document_with_raw_images(const std::string& dir,
+                                   RawImagesAs as)
 {
   Reader reader(dir);
 
@@ -394,7 +437,7 @@ app::Document* read_document_with_raw_images(const std::string& dir,
 
   // Load each image as a new frame
   auto lay = new LayerImage(spr);
-  spr->folder()->addLayer(lay);
+  spr->root()->addLayer(lay);
 
   frame_t frame = 0;
   for (const auto& fn : base::list_files(dir)) {
@@ -419,7 +462,7 @@ app::Document* read_document_with_raw_images(const std::string& dir,
         break;
       case RawImagesAs::kLayers:
         lay = new LayerImage(spr);
-        spr->folder()->addLayer(lay);
+        spr->root()->addLayer(lay);
         break;
     }
   }
@@ -428,7 +471,7 @@ app::Document* read_document_with_raw_images(const std::string& dir,
       spr->setTotalFrames(frame);
   }
 
-  app::Document* doc = new app::Document(spr);
+  Doc* doc = new Doc(spr);
   doc->setFilename(info.filename);
   doc->impossibleToBackToSavedState();
   return doc;

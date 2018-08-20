@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2016  David Capello
+// Copyright (C) 2016-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -13,7 +13,7 @@
 #include "app/resource_finder.h"
 #include "app/ui/browser_view.h"
 #include "app/ui/main_window.h"
-#include "app/ui/skin/skin_style_property.h"
+#include "app/ui/separator_in_view.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/workspace.h"
 #include "base/file_handle.h"
@@ -81,8 +81,7 @@ public:
   obs::signal<void()> FileChange;
 
   CMarkBox() {
-    setBgColor(SkinTheme::instance()->colors.textboxFace());
-    setBorder(gfx::Border(4*guiscale()));
+    initTheme();
   }
 
   const std::string& file() {
@@ -149,7 +148,7 @@ private:
     gfx::Point p = cpos.origin();
     int maxH = 0;
     int itemLevel = 0;
-    Widget* prevChild = nullptr;
+    //Widget* prevChild = nullptr;
 
     for (auto child : children) {
       gfx::Size sz = child->sizeHint(gfx::Size(width, 0));
@@ -175,7 +174,7 @@ private:
         p.x = cpos.x + itemLevel*font()->textLength(" - ");
         p.y += maxH;
         maxH = 0;
-        prevChild = nullptr;
+        //prevChild = nullptr;
       }
 
       if (child->isExpansive())
@@ -183,8 +182,8 @@ private:
 
       callback(gfx::Rect(p, sz), child);
 
-      if (!isItem) prevChild = child;
-      if (isBreak) prevChild = nullptr;
+      //if (!isItem) prevChild = child;
+      //if (isBreak) prevChild = nullptr;
 
       maxH = std::max(maxH, sz.h);
       p.x += sz.w;
@@ -250,6 +249,12 @@ private:
     }
 
     return Widget::onProcessMessage(msg);
+  }
+
+  void onInitTheme(InitThemeEvent& ev) override {
+    Widget::onInitTheme(ev);
+    setBgColor(SkinTheme::instance()->colors.textboxFace());
+    setBorder(gfx::Border(4*guiscale()));
   }
 
   void clear() {
@@ -428,9 +433,8 @@ private:
   }
 
   void addSeparator() {
-    auto sep = new Separator("", HORIZONTAL);
+    auto sep = new SeparatorInView(std::string(), HORIZONTAL);
     sep->setBorder(gfx::Border(0, font()->height(), 0, font()->height()));
-    sep->setBgColor(SkinTheme::instance()->colors.textboxFace());
     sep->setExpansive(true);
     addChild(sep);
   }
@@ -447,8 +451,10 @@ private:
         Label* label;
 
         if (word.size() > 4 &&
-            std::strncmp(word.c_str(), "http", 4) == 0)
+            std::strncmp(word.c_str(), "http", 4) == 0) {
           label = new LinkLabel(word);
+          label->setStyle(SkinTheme::instance()->styles.browserLink());
+        }
         else
           label = new Label(word);
 
@@ -467,13 +473,22 @@ private:
 
   void addCodeBlock(const std::string& content) {
     auto textBox = new TextBox(content, LEFT);
-    textBox->setBorder(gfx::Border(4*guiscale()));
-    textBox->setBgColor(SkinTheme::instance()->colors.textboxCodeFace());
+    textBox->InitTheme.connect(
+      [textBox]{
+        textBox->setBgColor(SkinTheme::instance()->colors.textboxCodeFace());
+        textBox->setBorder(gfx::Border(4*guiscale()));
+      });
+    textBox->initTheme();
     addChild(textBox);
   }
 
   void addLink(const std::string& url, const std::string& text) {
     auto label = new LinkLabel(url, text);
+    label->InitTheme.connect(
+      [label]{
+        label->setStyle(SkinTheme::instance()->styles.browserLink());
+      });
+    label->initTheme();
 
     if (url.find(':') == std::string::npos) {
       label->setUrl("");
@@ -508,14 +523,15 @@ private:
 BrowserView::BrowserView()
   : m_textBox(new CMarkBox)
 {
-  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-
   addChild(&m_view);
 
   m_view.attachToView(m_textBox);
   m_view.setExpansive(true);
-  m_view.setProperty(SkinStylePropertyPtr(
-      new SkinStyleProperty(theme->styles.workspaceView())));
+  m_view.InitTheme.connect(
+    [this]{
+      m_view.setStyle(SkinTheme::instance()->styles.workspaceView());
+    });
+  m_view.initTheme();
 
   m_textBox->FileChange.connect(
     []{

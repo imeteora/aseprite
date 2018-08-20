@@ -1,5 +1,5 @@
 // Aseprite UI Library
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -17,11 +17,15 @@
 #include "gfx/region.h"
 #include "gfx/size.h"
 #include "she/display.h"
+#include "she/draw_text.h"
 #include "she/font.h"
 #include "she/surface.h"
 #include "she/system.h"
 #include "ui/manager.h"
+#include "ui/scale.h"
 #include "ui/theme.h"
+
+#include <cctype>
 
 namespace ui {
 
@@ -50,22 +54,34 @@ int Graphics::height() const
   return m_surface->height();
 }
 
+int Graphics::getSaveCount() const
+{
+  return m_surface->getSaveCount();
+}
+
 gfx::Rect Graphics::getClipBounds() const
 {
   return m_surface->getClipBounds().offset(-m_dx, -m_dy);
 }
 
-void Graphics::setClipBounds(const gfx::Rect& rc)
+void Graphics::saveClip()
 {
-  m_surface->setClipBounds(gfx::Rect(rc).offset(m_dx, m_dy));
+  m_surface->saveClip();
 }
 
-bool Graphics::intersectClipRect(const gfx::Rect& rc)
+void Graphics::restoreClip()
 {
-  return m_surface->intersectClipRect(gfx::Rect(rc).offset(m_dx, m_dy));
+  m_surface->restoreClip();
 }
 
-void Graphics::setDrawMode(DrawMode mode, int param)
+bool Graphics::clipRect(const gfx::Rect& rc)
+{
+  return m_surface->clipRect(gfx::Rect(rc).offset(m_dx, m_dy));
+}
+
+void Graphics::setDrawMode(DrawMode mode, int param,
+                           const gfx::Color a,
+                           const gfx::Color b)
 {
   switch (mode) {
     case DrawMode::Solid:
@@ -75,7 +91,7 @@ void Graphics::setDrawMode(DrawMode mode, int param)
       m_surface->setDrawMode(she::DrawMode::Xor);
       break;
     case DrawMode::Checked:
-      m_surface->setDrawMode(she::DrawMode::Checked, param);
+      m_surface->setDrawMode(she::DrawMode::Checked, param, a, b);
       break;
   }
 }
@@ -176,6 +192,30 @@ void Graphics::drawRgbaSurface(she::Surface* surface, int x, int y)
   m_surface->drawRgbaSurface(surface, m_dx+x, m_dy+y);
 }
 
+void Graphics::drawRgbaSurface(she::Surface* surface, int srcx, int srcy, int dstx, int dsty, int w, int h)
+{
+  dirty(gfx::Rect(m_dx+dstx, m_dy+dsty, w, h));
+
+  she::SurfaceLock lockSrc(surface);
+  she::SurfaceLock lockDst(m_surface);
+  m_surface->drawRgbaSurface(surface, srcx, srcy, m_dx+dstx, m_dy+dsty, w, h);
+}
+
+void Graphics::drawRgbaSurface(she::Surface* surface,
+                               const gfx::Rect& srcRect,
+                               const gfx::Rect& dstRect)
+{
+  dirty(gfx::Rect(m_dx+dstRect.x, m_dy+dstRect.y,
+                  dstRect.w, dstRect.h));
+
+  she::SurfaceLock lockSrc(surface);
+  she::SurfaceLock lockDst(m_surface);
+  m_surface->drawRgbaSurface(
+    surface,
+    srcRect,
+    gfx::Rect(dstRect).offset(m_dx, m_dy));
+}
+
 void Graphics::drawColoredRgbaSurface(she::Surface* surface, gfx::Color color, int x, int y)
 {
   dirty(gfx::Rect(m_dx+x, m_dy+y, surface->width(), surface->height()));
@@ -184,6 +224,17 @@ void Graphics::drawColoredRgbaSurface(she::Surface* surface, gfx::Color color, i
   she::SurfaceLock lockDst(m_surface);
   m_surface->drawColoredRgbaSurface(surface, color, gfx::ColorNone,
     gfx::Clip(m_dx+x, m_dy+y, 0, 0, surface->width(), surface->height()));
+}
+
+void Graphics::drawColoredRgbaSurface(she::Surface* surface, gfx::Color color,
+                                      int srcx, int srcy, int dstx, int dsty, int w, int h)
+{
+  dirty(gfx::Rect(m_dx+dstx, m_dy+dsty, w, h));
+
+  she::SurfaceLock lockSrc(surface);
+  she::SurfaceLock lockDst(m_surface);
+  m_surface->drawColoredRgbaSurface(surface, color, gfx::ColorNone,
+    gfx::Clip(m_dx+dstx, m_dy+dsty, srcx, srcy, w, h));
 }
 
 void Graphics::blit(she::Surface* srcSurface, int srcx, int srcy, int dstx, int dsty, int w, int h)
@@ -200,95 +251,132 @@ void Graphics::setFont(she::Font* font)
   m_font = font;
 }
 
-void Graphics::drawChar(int chr, gfx::Color fg, gfx::Color bg, int x, int y)
+void Graphics::drawText(base::utf8_const_iterator it,
+                        const base::utf8_const_iterator& end,
+                        gfx::Color fg, gfx::Color bg,
+                        const gfx::Point& origPt,
+                        she::DrawTextDelegate* delegate)
 {
-  dirty(gfx::Rect(gfx::Point(m_dx+x, m_dy+y), measureChar(chr)));
+  gfx::Point pt(m_dx+origPt.x, m_dy+origPt.y);
 
   she::SurfaceLock lock(m_surface);
-  m_surface->drawChar(m_font, fg, bg, m_dx+x, m_dy+y, chr);
+  gfx::Rect textBounds =
+    she::draw_text(m_surface, m_font, it, end, fg, bg, pt.x, pt.y, delegate);
+
+  dirty(gfx::Rect(pt.x, pt.y, textBounds.w, textBounds.h));
 }
 
-void Graphics::drawString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Point& ptOrig)
+void Graphics::drawText(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Point& pt)
 {
-  gfx::Point pt(m_dx+ptOrig.x, m_dy+ptOrig.y);
-  dirty(gfx::Rect(pt.x, pt.y, m_font->textLength(str), m_font->height()));
-
-  she::SurfaceLock lock(m_surface);
-  m_surface->drawString(m_font, fg, bg, pt.x, pt.y, str);
+  drawText(base::utf8_const_iterator(str.begin()),
+           base::utf8_const_iterator(str.end()),
+           fg, bg, pt, nullptr);
 }
 
-void Graphics::drawUIString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Point& pt,
-                            bool drawUnderscore)
-{
-  she::SurfaceLock lock(m_surface);
-  base::utf8_const_iterator it(str.begin()), end(str.end());
-  int x = m_dx+pt.x;
-  int y = m_dy+pt.y;
-  int underscored_x = 0;
-  int underscored_w = -1;
+namespace {
 
-  while (it != end) {
-    if (*it == '&') {
-      ++it;
-      if (it != end && *it != '&') {
-        underscored_x = x;
-        underscored_w = m_font->charWidth(*it);
+class DrawUITextDelegate : public she::DrawTextDelegate {
+public:
+  DrawUITextDelegate(she::Surface* surface,
+                     she::Font* font, const int mnemonic)
+    : m_surface(surface)
+    , m_font(font)
+    , m_mnemonic(std::tolower(mnemonic))
+    , m_underscoreColor(gfx::ColorNone) {
+  }
+
+  gfx::Rect bounds() const { return m_bounds; }
+
+  void preProcessChar(const int index,
+                      const int codepoint,
+                      gfx::Color& fg,
+                      gfx::Color& bg) override {
+    if (m_surface) {
+      if (m_mnemonic &&
+          // TODO use ICU library to lower unicode chars
+          std::tolower(codepoint) == m_mnemonic) {
+        m_underscoreColor = fg;
+        m_mnemonic = 0;         // Just one time
+      }
+      else {
+        m_underscoreColor = gfx::ColorNone;
       }
     }
-    m_surface->drawChar(m_font, fg, bg, x, y, *it);
-    x += m_font->charWidth(*it);
-    ++it;
   }
 
-  y += m_font->height();
-  if (drawUnderscore && underscored_w > 0) {
-    m_surface->fillRect(fg,
-      gfx::Rect(underscored_x, y, underscored_w, guiscale()));
-    y += guiscale();
+  bool preDrawChar(const gfx::Rect& charBounds) override {
+    m_bounds |= charBounds;
+    return true;
   }
 
-  dirty(gfx::Rect(pt, gfx::Point(x, y)));
+  void postDrawChar(const gfx::Rect& charBounds) override {
+    if (!gfx::is_transparent(m_underscoreColor)) {
+      // TODO underscore height = guiscale() should be configurable from ui::Theme
+      int dy = 0;
+      if (m_font->type() == she::FontType::kTrueType) // TODO use other method to locate the underline
+        dy += guiscale();
+      gfx::Rect underscoreBounds(charBounds.x, charBounds.y+charBounds.h+dy,
+                                 charBounds.w, guiscale());
+      m_surface->fillRect(m_underscoreColor, underscoreBounds);
+      m_bounds |= underscoreBounds;
+    }
+  }
+
+private:
+  she::Surface* m_surface;
+  she::Font* m_font;
+  int m_mnemonic;
+  gfx::Color m_underscoreColor;
+  gfx::Rect m_bounds;
+};
+
 }
 
-void Graphics::drawAlignedUIString(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Rect& rc, int align)
+void Graphics::drawUIText(const std::string& str, gfx::Color fg, gfx::Color bg,
+                          const gfx::Point& pt, const int mnemonic)
+{
+  she::SurfaceLock lock(m_surface);
+  int x = m_dx+pt.x;
+  int y = m_dy+pt.y;
+
+  DrawUITextDelegate delegate(m_surface, m_font, mnemonic);
+  she::draw_text(m_surface, m_font,
+                 base::utf8_const_iterator(str.begin()),
+                 base::utf8_const_iterator(str.end()),
+                 fg, bg, x, y, &delegate);
+
+  dirty(delegate.bounds());
+}
+
+void Graphics::drawAlignedUIText(const std::string& str, gfx::Color fg, gfx::Color bg,
+                                 const gfx::Rect& rc, const int align)
 {
   doUIStringAlgorithm(str, fg, bg, rc, align, true);
 }
 
-gfx::Size Graphics::measureChar(int chr)
+gfx::Size Graphics::measureUIText(const std::string& str)
 {
   return gfx::Size(
-    m_font->charWidth(chr),
-    m_font->height());
-}
-
-gfx::Size Graphics::measureUIString(const std::string& str)
-{
-  return gfx::Size(
-    Graphics::measureUIStringLength(str, m_font),
+    Graphics::measureUITextLength(str, m_font),
     m_font->height());
 }
 
 // static
-int Graphics::measureUIStringLength(const std::string& str, she::Font* font)
+int Graphics::measureUITextLength(const std::string& str, she::Font* font)
 {
-  base::utf8_const_iterator it(str.begin()), end(str.end());
-  int length = 0;
-
-  while (it != end) {
-    if (*it == '&')
-      ++it;
-
-    length += font->charWidth(*it);
-    ++it;
-  }
-
-  return length;
+  DrawUITextDelegate delegate(nullptr, font, 0);
+  she::draw_text(nullptr, font,
+                 base::utf8_const_iterator(str.begin()),
+                 base::utf8_const_iterator(str.end()),
+                 gfx::ColorNone, gfx::ColorNone, 0, 0,
+                 &delegate);
+  return delegate.bounds().w;
 }
 
 gfx::Size Graphics::fitString(const std::string& str, int maxWidth, int align)
 {
-  return doUIStringAlgorithm(str, gfx::ColorNone, gfx::ColorNone, gfx::Rect(0, 0, maxWidth, 0), align, false);
+  return doUIStringAlgorithm(str, gfx::ColorNone, gfx::ColorNone,
+                             gfx::Rect(0, 0, maxWidth, 0), align, false);
 }
 
 gfx::Size Graphics::doUIStringAlgorithm(const std::string& str, gfx::Color fg, gfx::Color bg, const gfx::Rect& rc, int align, bool draw)
@@ -366,7 +454,7 @@ gfx::Size Graphics::doUIStringAlgorithm(const std::string& str, gfx::Color fg, g
       else
         xout = pt.x;
 
-      drawString(line, fg, bg, gfx::Point(xout, pt.y));
+      drawText(line, fg, bg, gfx::Point(xout, pt.y));
 
       if (!gfx::is_transparent(bg))
         fillAreaBetweenRects(bg,
@@ -391,13 +479,21 @@ gfx::Size Graphics::doUIStringAlgorithm(const std::string& str, gfx::Color fg, g
   return calculatedSize;
 }
 
+void Graphics::dirty(const gfx::Rect& bounds)
+{
+  gfx::Rect rc = m_surface->getClipBounds();
+  rc = rc.createIntersection(bounds);
+  if (!rc.isEmpty())
+    m_dirtyBounds |= rc;
+}
+
 //////////////////////////////////////////////////////////////////////
 // ScreenGraphics
 
 ScreenGraphics::ScreenGraphics()
   : Graphics(she::instance()->defaultDisplay()->getSurface(), 0, 0)
 {
-  setFont(CurrentTheme::get()->getDefaultFont());
+  setFont(get_theme()->getDefaultFont());
 }
 
 ScreenGraphics::~ScreenGraphics()

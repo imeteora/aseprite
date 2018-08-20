@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,10 +9,15 @@
 #pragma once
 
 #include "app/commands/params.h"
+#include "app/ui/key.h"
+#include "she/shortcut.h"
 #include "ui/menu.h"
 
+namespace she {
+  class MenuItem;
+}
+
 namespace app {
-  class Key;
   class Command;
 
   // A widget that represent a menu item of the application.
@@ -22,13 +27,26 @@ namespace app {
   // used to check the availability of the command).
   class AppMenuItem : public ui::MenuItem {
   public:
-    AppMenuItem(const char* text, Command* command = nullptr, const Params& params = Params());
+    struct Native {
+      she::MenuItem* menuItem = nullptr;
+      she::Shortcut shortcut;
+      app::KeyContext keyContext = app::KeyContext::Any;
+    };
 
-    Key* key() { return m_key; }
-    void setKey(Key* key) { m_key = key; }
+    AppMenuItem(const std::string& text,
+                Command* command = nullptr,
+                const Params& params = Params());
+    ~AppMenuItem();
+
+    KeyPtr key() { return m_key; }
+    void setKey(const KeyPtr& key);
 
     Command* getCommand() { return m_command; }
     const Params& getParams() const { return m_params; }
+
+    Native* native() { return m_native; }
+    void setNative(const Native& native);
+    void syncNativeMenuItemKeyShortcut();
 
     static void setContextParams(const Params& params);
 
@@ -36,11 +54,13 @@ namespace app {
     bool onProcessMessage(ui::Message* msg) override;
     void onSizeHint(ui::SizeHintEvent& ev) override;
     void onClick() override;
+    void onValidate() override;
 
   private:
-    Key* m_key;
+    KeyPtr m_key;
     Command* m_command;
     Params m_params;
+    Native* m_native;
 
     static Params s_contextParams;
   };

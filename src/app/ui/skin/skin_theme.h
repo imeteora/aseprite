@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,21 +9,21 @@
 #pragma once
 
 #include "app/ui/skin/skin_part.h"
-#include "app/ui/skin/style_sheet.h"
 #include "gfx/color.h"
 #include "gfx/fwd.h"
 #include "ui/manager.h"
+#include "ui/scale.h"
 #include "ui/theme.h"
 
-#include "skin.xml.h"
+#include "theme.xml.h"
 
 #include <map>
 #include <string>
+#include <vector>
 
 namespace ui {
   class Entry;
   class Graphics;
-  class IButtonIcon;
 }
 
 namespace she {
@@ -33,57 +33,46 @@ namespace she {
 namespace app {
   namespace skin {
 
+    class FontData;
+
     // This is the GUI theme used by Aseprite (which use images from
     // data/skins directory).
     class SkinTheme : public ui::Theme
-                    , public app::gen::SkinFile<SkinTheme> {
+                    , public app::gen::ThemeFile<SkinTheme> {
     public:
-      static const char* kThemeCloseButtonId;
+      static const char* kThemesFolderName;
 
       static SkinTheme* instance();
 
       SkinTheme();
       ~SkinTheme();
 
+      const std::string& path() { return m_path; }
+      int preferredScreenScaling() { return m_preferredScreenScaling; }
+      int preferredUIScaling() { return m_preferredUIScaling; }
+
       she::Font* getDefaultFont() const override { return m_defaultFont; }
       she::Font* getWidgetFont(const ui::Widget* widget) const override;
       she::Font* getMiniFont() const { return m_miniFont; }
 
-      ui::Cursor* getCursor(ui::CursorType type) override;
+      ui::Cursor* getStandardCursor(ui::CursorType type) override;
       void initWidget(ui::Widget* widget) override;
       void getWindowMask(ui::Widget* widget, gfx::Region& region) override;
-      void setDecorativeWidgetBounds(ui::Widget* widget) override;
       int getScrollbarSize() override;
+      gfx::Size getEntryCaretSize(ui::Widget* widget) override;
 
-      void paintDesktop(ui::PaintEvent& ev) override;
-      void paintBox(ui::PaintEvent& ev) override;
-      void paintButton(ui::PaintEvent& ev) override;
-      void paintCheckBox(ui::PaintEvent& ev) override;
       void paintEntry(ui::PaintEvent& ev) override;
-      void paintGrid(ui::PaintEvent& ev) override;
-      void paintLabel(ui::PaintEvent& ev) override;
-      void paintLinkLabel(ui::PaintEvent& ev) override;
       void paintListBox(ui::PaintEvent& ev) override;
-      void paintListItem(ui::PaintEvent& ev) override;
       void paintMenu(ui::PaintEvent& ev) override;
       void paintMenuItem(ui::PaintEvent& ev) override;
-      void paintSplitter(ui::PaintEvent& ev) override;
-      void paintRadioButton(ui::PaintEvent& ev) override;
-      void paintSeparator(ui::PaintEvent& ev) override;
       void paintSlider(ui::PaintEvent& ev) override;
       void paintComboBoxEntry(ui::PaintEvent& ev) override;
-      void paintComboBoxButton(ui::PaintEvent& ev) override;
       void paintTextBox(ui::PaintEvent& ev) override;
-      void paintView(ui::PaintEvent& ev) override;
-      void paintViewScrollbar(ui::PaintEvent& ev) override;
       void paintViewViewport(ui::PaintEvent& ev) override;
-      void paintWindow(ui::PaintEvent& ev) override;
-      void paintPopupWindow(ui::PaintEvent& ev) override;
-      void paintTooltip(ui::PaintEvent& ev) override;
-      void paintWindowButton(ui::PaintEvent& ev);
 
       int get_button_selected_offset() const { return 0; } // TODO Configurable in xml
 
+      SkinPartPtr getToolPart(const char* toolId) const;
       she::Surface* getToolIcon(const char* toolId) const;
 
       // Helper functions to draw bounds/hlines with sheet parts
@@ -91,69 +80,87 @@ namespace app {
                     she::Surface* nw, she::Surface* n, she::Surface* ne,
                     she::Surface* e, she::Surface* se, she::Surface* s,
                     she::Surface* sw, she::Surface* w);
-      void drawRect(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart, gfx::Color bg = gfx::ColorNone);
-      void drawRect2(ui::Graphics* g, const gfx::Rect& rc, int x_mid, SkinPart* nw1, SkinPart* nw2, gfx::Color bg1, gfx::Color bg2);
+      void drawRect(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart, const bool drawCenter = true);
+      void drawRect2(ui::Graphics* g, const gfx::Rect& rc, int x_mid, SkinPart* nw1, SkinPart* nw2);
       void drawHline(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart);
       void drawVline(ui::Graphics* g, const gfx::Rect& rc, SkinPart* skinPart);
       void paintProgressBar(ui::Graphics* g, const gfx::Rect& rc, double progress);
 
-      Style* getStyle(const std::string& id) {
-        return m_stylesheet.getStyle(id);
+      ui::Style* getStyleById(const std::string& id) const {
+        auto it = m_styles.find(id);
+        if (it != m_styles.end())
+          return it->second;
+        else
+          return nullptr;
       }
 
-      SkinPartPtr getPartById(const std::string& id) {
-        return m_parts_by_id[id];
+      SkinPartPtr getPartById(const std::string& id) const {
+        auto it = m_parts_by_id.find(id);
+        if (it != m_parts_by_id.end())
+          return it->second;
+        else
+          return SkinPartPtr(nullptr);
       }
 
-      int getDimensionById(const std::string& id) {
-        // Warning! Don't use ui::guiscale(), as CurrentTheme::get()
-        // is still nullptr when we use this getDimensionById()
-        return m_dimensions_by_id[id] * this->guiscale();
+      ui::Cursor* getCursorById(const std::string& id) const {
+        auto it = m_cursors.find(id);
+        if (it != m_cursors.end())
+          return it->second;
+        else
+          return nullptr;
       }
 
-      gfx::Color getColorById(const std::string& id) {
-        ASSERT(m_colors_by_id.find(id) != m_colors_by_id.end());
-        return m_colors_by_id[id];
+      int getDimensionById(const std::string& id) const {
+        auto it = m_dimensions_by_id.find(id);
+        if (it != m_dimensions_by_id.end())
+          return it->second * ui::guiscale();
+        else
+          return 0;
       }
+
+      gfx::Color getColorById(const std::string& id) const {
+        auto it = m_colors_by_id.find(id);
+        if (it != m_colors_by_id.end())
+          return it->second;
+        else
+          return gfx::ColorNone;
+      }
+
+      void drawEntryCaret(ui::Graphics* g, ui::Entry* widget, int x, int y);
 
     protected:
-      void onRegenerate() override;
+      void onRegenerateTheme() override;
 
     private:
-      void loadAll(const std::string& skinId);
-      void loadSheet(const std::string& skinId);
-      void loadFonts(const std::string& skinId);
-      void loadXml(const std::string& skinId);
+      void loadFontData();
+      void loadAll(const std::string& themeId);
+      void loadSheet();
+      void loadXml();
 
       she::Surface* sliceSheet(she::Surface* sur, const gfx::Rect& bounds);
       gfx::Color getWidgetBgColor(ui::Widget* widget);
-      void drawTextString(ui::Graphics* g, const char *t, gfx::Color fg_color, gfx::Color bg_color,
-                          ui::Widget* widget, const gfx::Rect& rc,
-                          int selected_offset);
-      void drawEntryCaret(ui::Graphics* g, ui::Entry* widget, int x, int y);
+      void drawText(ui::Graphics* g, const char *t, gfx::Color fg_color, gfx::Color bg_color,
+                    ui::Widget* widget, const gfx::Rect& rc,
+                    int selected_offset, int mnemonic);
+      void drawEntryText(ui::Graphics* g, ui::Entry* widget);
 
-      void paintIcon(ui::Widget* widget, ui::Graphics* g, ui::IButtonIcon* iconInterface, int x, int y);
+      std::string findThemePath(const std::string& themeId) const;
 
-      she::Font* loadFont(const std::string& userFont, const std::string& themeFont);
-
+      std::string m_path;
       she::Surface* m_sheet;
       std::map<std::string, SkinPartPtr> m_parts_by_id;
-      std::map<std::string, she::Surface*> m_toolicon;
       std::map<std::string, gfx::Color> m_colors_by_id;
       std::map<std::string, int> m_dimensions_by_id;
-      std::vector<ui::Cursor*> m_cursors;
-      StyleSheet m_stylesheet;
+      std::map<std::string, ui::Cursor*> m_cursors;
+      std::vector<ui::Cursor*> m_standardCursors;
+      std::map<std::string, ui::Style*> m_styles;
+      std::map<std::string, FontData*> m_fonts;
+      std::map<std::string, she::Font*> m_themeFonts;
       she::Font* m_defaultFont;
       she::Font* m_miniFont;
+      int m_preferredScreenScaling;
+      int m_preferredUIScaling;
     };
-
-    inline SkinPartPtr get_part_by_id(const std::string& id) {
-      return static_cast<SkinTheme*>(ui::Manager::getDefault()->theme())->getPartById(id);
-    }
-
-    inline gfx::Color get_color_by_id(const std::string& id) {
-      return static_cast<SkinTheme*>(ui::Manager::getDefault()->theme())->getColorById(id);
-    }
 
   } // namespace skin
 } // namespace app

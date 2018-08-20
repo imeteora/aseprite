@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2015  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -32,9 +32,7 @@ protected:
 };
 
 TiledModeCommand::TiledModeCommand()
-  : Command("TiledMode",
-            "Tiled Mode",
-            CmdUIOnlyFlag)
+  : Command(CommandId::TiledMode(), CmdUIOnlyFlag)
   , m_mode(filters::TiledMode::NONE)
 {
 }
@@ -57,13 +55,13 @@ bool TiledModeCommand::onEnabled(Context* ctx)
 
 bool TiledModeCommand::onChecked(Context* ctx)
 {
-  const Document* doc = ctx->activeDocument();
+  const Doc* doc = ctx->activeDocument();
   return (Preferences::instance().document(doc).tiled.mode() == m_mode);
 }
 
 void TiledModeCommand::onExecute(Context* ctx)
 {
-  const Document* doc = ctx->activeDocument();
+  const Doc* doc = ctx->activeDocument();
   Preferences::instance().document(doc).tiled.mode(m_mode);
 }
 

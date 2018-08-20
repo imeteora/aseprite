@@ -15,7 +15,6 @@ because they don't depend on any other component.
 
   * [allegro](allegro/): Modified version of [Allegro](http://alleg.sourceforge.net/) library, used for keyboard/mouse input, and drawing 2D graphics on screen.
   * [clip](https://github.com/aseprite/clip): Clipboard library.
-  * [css](css/): Pseudo-style sheet library.
   * [fixmath](fixmath/): Fixed point operations (original code from Allegro code by Shawn Hargreaves).
   * [flic](https://github.com/aseprite/flic): Library to load/save FLI/FLC files.
   * [gfx](gfx/): Abstract graphics structures like point, size, rectangle, region, color, etc.
@@ -43,25 +42,48 @@ because they don't depend on any other component.
   * [filters](filters/) (base, doc, gfx): Effects for images.
   * [render](render/) (base, doc, gfx): Library to render documents.
   * [ui](ui/) (base, gfx, she): Portable UI library (buttons, windows, text fields, etc.)
-  * [updater](updater/) (base, net): Component to check for updates.
+  * [updater](updater/) (base, cfg, net): Component to check for updates.
 
 ## Level 4
 
-  * [docio](docio/) (base, flic): Load/save documents.
+  * [dio](dio/) (base, doc, fixmath, flic): Load/save sprites/documents.
 
 ## Level 5
 
-  * [app](app/) (allegro, base, doc, docio, filters, fixmath, flic, gfx, pen, render, scripting, she, ui, undo, updater, webserver)
+  * [app](app/) (base, doc, dio, filters, fixmath, flic, gfx, pen, render, scripting, she, ui, undo, updater, webserver)
 
 ## Level 6
 
   * [main](main/) (app, base, she, ui)
+  * [desktop](desktop/) (base, doc, dio, render): Integration with the desktop (Windows Explorer, Finder, GNOME, KDE, etc.)
 
 # Debugging Tricks
 
-* On Windows, you can use F5 to show the amount of used memory.
-* On debug mode (when `_DEBUG` is defined), `Ctrl+Alt+Shift+Q` crashes
-  the application in case that you want to test the anticrash feature
-  or your need a memory dump file.
-* On debug mode, you can use `Ctrl+Alt+Shift+R` to recover the active
-  document from the data recovery store.
+When Aseprite is compiled with `ENABLE_DEVMODE`, you have the
+following extra commands/features available:
+
+* `F5`: On Windows shows the amount of used memory.
+* `F1`: Switch new/old render engine.
+* `Ctrl+F1`: Switch/test Screen/UI Scaling values.
+* `Ctrl+Alt+Shift+Q`: crashes the application in case that you want to
+  test the anticrash feature or your need a memory dump file.
+* `Ctrl+Alt+Shift+R`: recover the active document from the data
+  recovery store.
+* `aseprite.ini`: `[perf] show_render_time=true` shows a performance
+  clock in the Editor.
+
+# Detect Platform
+
+You can check the platform using the following checks:
+
+    #ifdef _WIN32
+      #ifdef _WIN64
+        // Windows x64
+      #else
+        // Windows x86
+      #endif
+    #elif defined(__APPLE__)
+        // macOS
+    #else
+        // Linux
+    #endif

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -9,8 +9,12 @@
 #endif
 
 #include "app/cmd.h"
+#include "base/debug.h"
+#include "base/mem_utils.h"
 
 #include <typeinfo>
+
+#define CMD_TRACE(...)
 
 namespace app {
 
@@ -27,7 +31,7 @@ Cmd::~Cmd()
 
 void Cmd::execute(Context* ctx)
 {
-  TRACE("CMD: Executing cmd '%s'\n", typeid(*this).name());
+  CMD_TRACE("CMD: Executing cmd '%s'\n", typeid(*this).name());
   ASSERT(m_state == State::NotExecuted);
 
   m_ctx = ctx;
@@ -42,7 +46,7 @@ void Cmd::execute(Context* ctx)
 
 void Cmd::undo()
 {
-  TRACE("CMD: Undo cmd '%s'\n", typeid(*this).name());
+  CMD_TRACE("CMD: Undo cmd '%s'\n", typeid(*this).name());
   ASSERT(m_state == State::Executed || m_state == State::Redone);
 
   onUndo();
@@ -55,7 +59,7 @@ void Cmd::undo()
 
 void Cmd::redo()
 {
-  TRACE("CMD: Redo cmd '%s'\n", typeid(*this).name());
+  CMD_TRACE("CMD: Redo cmd '%s'\n", typeid(*this).name());
   ASSERT(m_state == State::Undone);
 
   onRedo();
@@ -68,6 +72,10 @@ void Cmd::redo()
 
 void Cmd::dispose()
 {
+  CMD_TRACE("CMD: Deleting '%s' (%s)\n",
+            typeid(*this).name(),
+            base::get_pretty_memory_size(memSize()).c_str());
+
   delete this;
 }
 

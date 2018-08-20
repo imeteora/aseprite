@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2017  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -15,7 +15,6 @@
 #include "app/modules/gui.h"
 #include "app/transaction.h"
 #include "app/ui/status_bar.h"
-#include "app/ui/timeline.h"
 #include "doc/cel.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
@@ -33,9 +32,7 @@ protected:
 };
 
 UnlinkCelCommand::UnlinkCelCommand()
-  : Command("UnlinkCel",
-            "Unlink Cel",
-            CmdRecordableFlag)
+  : Command(CommandId::UnlinkCel(), CmdRecordableFlag)
 {
 }
 
@@ -47,41 +44,36 @@ bool UnlinkCelCommand::onEnabled(Context* context)
 void UnlinkCelCommand::onExecute(Context* context)
 {
   ContextWriter writer(context);
-  Document* document(writer.document());
+  Doc* document(writer.document());
   bool nonEditableLayers = false;
   {
     Transaction transaction(writer.context(), "Unlink Cel");
 
-    // TODO the range of selected frames should be in doc::Site.
-    auto range = App::instance()->timeline()->range();
-    if (range.enabled()) {
-      Sprite* sprite = writer.sprite();
-
-      for (LayerIndex layerIdx = range.layerBegin(); layerIdx <= range.layerEnd(); ++layerIdx) {
-        Layer* layer = sprite->indexToLayer(layerIdx);
+    const Site* site = writer.site();
+    if (site->inTimeline() &&
+        !site->selectedLayers().empty()) {
+      for (Layer* layer : site->selectedLayers()) {
         if (!layer->isImage())
           continue;
 
+        if (!layer->isEditableHierarchy()) {
+          nonEditableLayers = true;
+          continue;
+        }
+
         LayerImage* layerImage = static_cast<LayerImage*>(layer);
 
-        for (frame_t frame = range.frameEnd(),
-               begin = range.frameBegin()-1;
-             frame != begin;
-             --frame) {
+        for (frame_t frame : site->selectedFrames().reversed()) {
           Cel* cel = layerImage->cel(frame);
-          if (cel && cel->links()) {
-            if (layerImage->isEditable())
-              transaction.execute(new cmd::UnlinkCel(cel));
-            else
-              nonEditableLayers = true;
-          }
+          if (cel && cel->links())
+            transaction.execute(new cmd::UnlinkCel(cel));
         }
       }
     }
     else {
       Cel* cel = writer.cel();
       if (cel && cel->links()) {
-        if (cel->layer()->isEditable())
+        if (cel->layer()->isEditableHierarchy())
           transaction.execute(new cmd::UnlinkCel(writer.cel()));
         else
           nonEditableLayers = true;

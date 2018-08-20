@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2001-2016  David Capello
+// Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
 // the End-User License Agreement for Aseprite.
@@ -12,12 +12,10 @@
 
 #include "app/color_utils.h"
 #include "app/pref/preferences.h"
-#include "app/ui/skin/button_icon_impl.h"
 #include "app/ui/skin/skin_theme.h"
 #include "app/ui/status_bar.h"
 #include "base/bind.h"
 #include "base/pi.h"
-#include "base/scoped_value.h"
 #include "filters/color_curve.h"
 #include "she/surface.h"
 #include "ui/graphics.h"
@@ -53,36 +51,58 @@ ColorWheel::ColorWheel()
   : m_discrete(Preferences::instance().colorBar.discreteWheel())
   , m_colorModel((ColorModel)Preferences::instance().colorBar.wheelModel())
   , m_harmony((Harmony)Preferences::instance().colorBar.harmony())
-  , m_options("", kButtonWidget, kButtonWidget, kCheckWidget)
+  , m_options("")
   , m_harmonyPicked(false)
 {
-  SkinTheme* theme = SkinTheme::instance();
-
-  setBorder(gfx::Border(3*ui::guiscale()));
-
   m_options.Click.connect(base::Bind<void>(&ColorWheel::onOptions, this));
-  m_options.setBgColor(theme->colors.editorFace());
-  m_options.setIconInterface(
-    new ButtonIconImpl(theme->parts.palOptions(),
-                       theme->parts.palOptions(),
-                       theme->parts.palOptions(),
-                       CENTER | MIDDLE));
-
   addChild(&m_options);
+
+  InitTheme.connect(
+    [this]{
+      SkinTheme* theme = SkinTheme::instance();
+      m_options.setStyle(theme->styles.colorWheelOptions());
+      m_bgColor = theme->colors.editorFace();
+    });
+  initTheme();
 }
 
-app::Color ColorWheel::getColorByPosition(const gfx::Point& mousePos)
-{
-  return getColorInClientPos(mousePos - bounds().origin());
-}
-
-app::Color ColorWheel::getColorInClientPos(const gfx::Point& pos)
+app::Color ColorWheel::getMainAreaColor(const int _u, const int umax,
+                                        const int _v, const int vmax)
 {
   m_harmonyPicked = false;
 
-  int u = (pos.x - (m_wheelBounds.x+m_wheelBounds.w/2));
-  int v = (pos.y - (m_wheelBounds.y+m_wheelBounds.h/2));
+  int u = _u - umax/2;
+  int v = _v - vmax/2;
   double d = std::sqrt(u*u + v*v);
+
+  if (m_colorModel == ColorModel::NORMAL_MAP) {
+    double a = std::atan2(-v, u);
+    int di = int(128.0 * d / m_wheelRadius);
+
+    if (m_discrete) {
+      int ai = (int(180.0 * a / PI) + 360);
+      ai += 15;
+      ai /= 30;
+      ai *= 30;
+      a = PI * ai / 180.0;
+
+      di /= 32;
+      di *= 32;
+    }
+
+    int r = 128 + di*std::cos(a);
+    int g = 128 + di*std::sin(a);
+    int b = 255 - di;
+    if (d < m_wheelRadius+2*guiscale()) {
+      return app::Color::fromRgb(
+        MID(0, r, 255),
+        MID(0, g, 255),
+        MID(128, b, 255));
+    }
+    else {
+      return app::Color::fromRgb(128, 128, 255);
+    }
+  }
 
   // Pick from the wheel
   if (d < m_wheelRadius+2*guiscale()) {
@@ -112,27 +132,29 @@ app::Color ColorWheel::getColorInClientPos(const gfx::Point& pos)
 
     return app::Color::fromHsv(
       MID(0, hue, 360),
-      MID(0, sat, 100),
-      100);
+      MID(0, sat / 100.0, 1.0),
+      m_color.getHsvValue(),
+      m_color.getAlpha());
   }
 
   // Pick harmonies
   if (m_color.getAlpha() > 0) {
-    const gfx::Rect& rc = m_clientBounds;
+    const gfx::Point pos(_u, _v);
     int n = getHarmonies();
-    int boxsize = MIN(rc.w/10, rc.h/10);
+    int boxsize = MIN(umax/10, vmax/10);
 
     for (int i=0; i<n; ++i) {
       app::Color color = getColorInHarmony(i);
 
-      if (gfx::Rect(rc.x+rc.w-(n-i)*boxsize,
-                    rc.y+rc.h-boxsize,
+      if (gfx::Rect(umax-(n-i)*boxsize,
+                    vmax-boxsize,
                     boxsize, boxsize).contains(pos)) {
         m_harmonyPicked = true;
 
-        color = app::Color::fromHsv(convertHueAngle(int(color.getHue()), 1),
-                                    color.getSaturation(),
-                                    color.getValue());
+        color = app::Color::fromHsv(convertHueAngle(int(color.getHsvHue()), 1),
+                                    color.getHsvSaturation(),
+                                    color.getHsvValue(),
+                                    m_color.getAlpha());
         return color;
       }
     }
@@ -141,8 +163,150 @@ app::Color ColorWheel::getColorInClientPos(const gfx::Point& pos)
   return app::Color::fromMask();
 }
 
+app::Color ColorWheel::getBottomBarColor(const int u, const int umax)
+{
+  double val = double(u) / double(umax);
+  return app::Color::fromHsv(
+    m_color.getHsvHue(),
+    m_color.getHsvSaturation(),
+    MID(0.0, val, 1.0),
+    m_color.getAlpha());
+}
+
+void ColorWheel::onPaintMainArea(ui::Graphics* g, const gfx::Rect& rc)
+{
+  bool oldHarmonyPicked = m_harmonyPicked;
+
+  int r = MIN(rc.w/2, rc.h/2);
+  m_wheelRadius = r;
+  m_wheelBounds = gfx::Rect(rc.x+rc.w/2-r,
+                            rc.y+rc.h/2-r,
+                            r*2, r*2);
+
+  if (m_color.getAlpha() > 0) {
+    if (m_colorModel == ColorModel::NORMAL_MAP) {
+      double angle = std::atan2(m_color.getGreen()-128,
+                                m_color.getRed()-128);
+      double dist = (255-m_color.getBlue()) / 128.0;
+      dist = MID(0.0, dist, 1.0);
+
+      gfx::Point pos =
+        m_wheelBounds.center() +
+        gfx::Point(int(+std::cos(angle)*double(m_wheelRadius)*dist),
+                   int(-std::sin(angle)*double(m_wheelRadius)*dist));
+      paintColorIndicator(g, pos, true);
+    }
+    else {
+      int n = getHarmonies();
+      int boxsize = MIN(rc.w/10, rc.h/10);
+
+      for (int i=0; i<n; ++i) {
+        app::Color color = getColorInHarmony(i);
+        double angle = color.getHsvHue()-30.0;
+        double dist = color.getHsvSaturation();
+
+        color = app::Color::fromHsv(convertHueAngle(int(color.getHsvHue()), 1),
+                                    color.getHsvSaturation(),
+                                    color.getHsvValue());
+
+        gfx::Point pos =
+          m_wheelBounds.center() +
+          gfx::Point(int(+std::cos(PI*angle/180.0)*double(m_wheelRadius)*dist),
+                     int(-std::sin(PI*angle/180.0)*double(m_wheelRadius)*dist));
+
+        paintColorIndicator(g, pos, color.getHsvValue() < 0.5);
+
+        g->fillRect(gfx::rgba(color.getRed(),
+                              color.getGreen(),
+                              color.getBlue(), 255),
+                    gfx::Rect(rc.x+rc.w-(n-i)*boxsize,
+                              rc.y+rc.h-boxsize,
+                              boxsize, boxsize));
+      }
+    }
+  }
+
+  m_harmonyPicked = oldHarmonyPicked;
+}
+
+void ColorWheel::onPaintBottomBar(ui::Graphics* g, const gfx::Rect& rc)
+{
+  if (m_color.getType() != app::Color::MaskType) {
+    double val = m_color.getHsvValue();
+    gfx::Point pos(rc.x + int(double(rc.w) * val),
+                   rc.y + rc.h/2);
+    paintColorIndicator(g, pos, val < 0.5);
+  }
+}
+
+void ColorWheel::onPaintSurfaceInBgThread(she::Surface* s,
+                                          const gfx::Rect& main,
+                                          const gfx::Rect& bottom,
+                                          const gfx::Rect& alpha,
+                                          bool& stop)
+{
+  if (m_paintFlags & MainAreaFlag) {
+    int umax = MAX(1, main.w-1);
+    int vmax = MAX(1, main.h-1);
+
+    for (int y=0; y<main.h && !stop; ++y) {
+      for (int x=0; x<main.w && !stop; ++x) {
+        app::Color appColor =
+          getMainAreaColor(x, umax,
+                           y, vmax);
+
+        gfx::Color color;
+        if (appColor.getType() != app::Color::MaskType) {
+          appColor.setAlpha(255);
+          color = color_utils::color_for_ui(appColor);
+        }
+        else {
+          color = m_bgColor;
+        }
+
+        s->putPixel(color, main.x+x, main.y+y);
+      }
+    }
+    if (stop)
+      return;
+    m_paintFlags ^= MainAreaFlag;
+  }
+
+  if (m_paintFlags & BottomBarFlag) {
+    double hue = m_color.getHsvHue();
+    double sat = m_color.getHsvSaturation();
+
+    for (int x=0; x<bottom.w && !stop; ++x) {
+      gfx::Color color = color_utils::color_for_ui(
+        app::Color::fromHsv(hue, sat, double(x) / double(bottom.w)));
+
+      s->drawVLine(color, bottom.x+x, bottom.y, bottom.h);
+    }
+    if (stop)
+      return;
+    m_paintFlags ^= BottomBarFlag;
+  }
+
+  // Paint alpha bar
+  ColorSelector::onPaintSurfaceInBgThread(s, main, bottom, alpha, stop);
+}
+
+int ColorWheel::onNeedsSurfaceRepaint(const app::Color& newColor)
+{
+  return
+    // Only if the saturation changes we have to redraw the main surface.
+    (m_colorModel != ColorModel::NORMAL_MAP &&
+     cs_double_diff(m_color.getHsvValue(), newColor.getHsvValue()) ? MainAreaFlag: 0) |
+    (cs_double_diff(m_color.getHsvHue(), newColor.getHsvHue()) ||
+     cs_double_diff(m_color.getHsvSaturation(), newColor.getHsvSaturation()) ? BottomBarFlag: 0) |
+    ColorSelector::onNeedsSurfaceRepaint(newColor);
+}
+
 void ColorWheel::setDiscrete(bool state)
 {
+  if (m_discrete != state)
+    m_paintFlags = AllAreasFlag;
+
   m_discrete = state;
   Preferences::instance().colorBar.discreteWheel(m_discrete);
 
@@ -175,11 +339,11 @@ app::Color ColorWheel::getColorInHarmony(int j) const
 {
   int i = MID(0, (int)m_harmony, (int)Harmony::LAST);
   j = MID(0, j, harmonies[i].n-1);
-  double hue = convertHueAngle(int(m_color.getHue()), -1) + harmonies[i].hues[j];
-  double sat = m_color.getSaturation() * harmonies[i].sats[j] / 100.0;
+  double hue = convertHueAngle(int(m_color.getHsvHue()), -1) + harmonies[i].hues[j];
+  double sat = m_color.getHsvSaturation() * harmonies[i].sats[j] / 100.0;
   return app::Color::fromHsv(std::fmod(hue, 360),
-                             MID(0.0, sat, 100.0),
-                             m_color.getValue());
+                             MID(0.0, sat, 1.0),
+                             m_color.getHsvValue());
 }
 
 void ColorWheel::onResize(ui::ResizeEvent& ev)
@@ -187,130 +351,12 @@ void ColorWheel::onResize(ui::ResizeEvent& ev)
   ColorSelector::onResize(ev);
 
   gfx::Rect rc = clientChildrenBounds();
-  int r = MIN(rc.w/2, rc.h/2);
-
-  m_clientBounds = rc;
-  m_wheelRadius = r;
-  m_wheelBounds = gfx::Rect(rc.x+rc.w/2-r,
-                            rc.y+rc.h/2-r,
-                            r*2, r*2);
-
   gfx::Size prefSize = m_options.sizeHint();
   rc = childrenBounds();
   rc.x += rc.w-prefSize.w;
   rc.w = prefSize.w;
   rc.h = prefSize.h;
   m_options.setBounds(rc);
-}
-
-void ColorWheel::onPaint(ui::PaintEvent& ev)
-{
-  ui::Graphics* g = ev.graphics();
-  SkinTheme* theme = static_cast<SkinTheme*>(this->theme());
-
-  theme->drawRect(g, clientBounds(),
-                  theme->parts.editorNormal().get(),
-                  bgColor());
-
-  const gfx::Rect& rc = m_clientBounds;
-
-  for (int y=rc.y; y<rc.y+rc.h; ++y) {
-    for (int x=rc.x; x<rc.x+rc.w; ++x) {
-      app::Color appColor =
-        ColorWheel::getColorInClientPos(gfx::Point(x, y));
-
-      gfx::Color color;
-      if (appColor.getType() != app::Color::MaskType) {
-        color = color_utils::color_for_ui(appColor);
-      }
-      else {
-        color = theme->colors.editorFace();
-      }
-
-      g->putPixel(color, x, y);
-    }
-  }
-
-  if (m_color.getAlpha() > 0) {
-    int n = getHarmonies();
-    int boxsize = MIN(rc.w/10, rc.h/10);
-
-    for (int i=0; i<n; ++i) {
-      app::Color color = getColorInHarmony(i);
-      double angle = color.getHue()-30.0;
-      double dist = color.getSaturation();
-
-      color = app::Color::fromHsv(convertHueAngle(int(color.getHue()), 1),
-                                  color.getSaturation(),
-                                  color.getValue());
-
-      gfx::Point pos =
-        m_wheelBounds.center() +
-        gfx::Point(int(+std::cos(PI*angle/180.0)*double(m_wheelRadius)*dist/100.0),
-                   int(-std::sin(PI*angle/180.0)*double(m_wheelRadius)*dist/100.0));
-
-      she::Surface* icon = theme->parts.colorWheelIndicator()->bitmap(0);
-      g->drawRgbaSurface(icon,
-                         pos.x-icon->width()/2,
-                         pos.y-icon->height()/2);
-
-      g->fillRect(gfx::rgba(color.getRed(),
-                            color.getGreen(),
-                            color.getBlue(), 255),
-                  gfx::Rect(rc.x+rc.w-(n-i)*boxsize,
-                            rc.y+rc.h-boxsize,
-                            boxsize, boxsize));
-    }
-  }
-}
-
-bool ColorWheel::onProcessMessage(ui::Message* msg)
-{
-  switch (msg->type()) {
-
-    case kMouseDownMessage:
-      captureMouse();
-      // Continue...
-
-    case kMouseMoveMessage: {
-      MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-
-      app::Color color = getColorInClientPos(
-        mouseMsg->position()
-        - bounds().origin());
-
-      if (color != app::Color::fromMask()) {
-        base::ScopedValue<bool> switcher(m_lockColor, m_harmonyPicked, false);
-
-        StatusBar::instance()->showColor(0, "", color);
-        if (hasCapture())
-          ColorChange(color, mouseMsg->buttons());
-      }
-      break;
-    }
-
-    case kMouseUpMessage:
-      if (hasCapture()) {
-        releaseMouse();
-      }
-      return true;
-
-    case kSetCursorMessage: {
-      MouseMessage* mouseMsg = static_cast<MouseMessage*>(msg);
-      app::Color color = getColorInClientPos(
-        mouseMsg->position()
-        - bounds().origin());
-
-      if (color.getType() != app::Color::MaskType) {
-        ui::set_mouse_cursor(kEyedropperCursor);
-        return true;
-      }
-      break;
-    }
-
-  }
-
-  return ColorSelector::onProcessMessage(msg);
 }
 
 void ColorWheel::onOptions()
@@ -326,37 +372,42 @@ void ColorWheel::onOptions()
   MenuItem tetradic("Tetradic");
   MenuItem square("Square");
   menu.addChild(&discrete);
-  menu.addChild(new MenuSeparator);
-  menu.addChild(&none);
-  menu.addChild(&complementary);
-  menu.addChild(&monochromatic);
-  menu.addChild(&analogous);
-  menu.addChild(&split);
-  menu.addChild(&triadic);
-  menu.addChild(&tetradic);
-  menu.addChild(&square);
-
-  if (isDiscrete()) discrete.setSelected(true);
-  switch (m_harmony) {
-    case Harmony::NONE: none.setSelected(true); break;
-    case Harmony::COMPLEMENTARY: complementary.setSelected(true); break;
-    case Harmony::MONOCHROMATIC: monochromatic.setSelected(true); break;
-    case Harmony::ANALOGOUS: analogous.setSelected(true); break;
-    case Harmony::SPLIT: split.setSelected(true); break;
-    case Harmony::TRIADIC: triadic.setSelected(true); break;
-    case Harmony::TETRADIC: tetradic.setSelected(true); break;
-    case Harmony::SQUARE: square.setSelected(true); break;
+  if (m_colorModel != ColorModel::NORMAL_MAP) {
+    menu.addChild(new MenuSeparator);
+    menu.addChild(&none);
+    menu.addChild(&complementary);
+    menu.addChild(&monochromatic);
+    menu.addChild(&analogous);
+    menu.addChild(&split);
+    menu.addChild(&triadic);
+    menu.addChild(&tetradic);
+    menu.addChild(&square);
   }
 
+  if (isDiscrete())
+    discrete.setSelected(true);
   discrete.Click.connect(base::Bind<void>(&ColorWheel::setDiscrete, this, !isDiscrete()));
-  none.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::NONE));
-  complementary.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::COMPLEMENTARY));
-  monochromatic.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::MONOCHROMATIC));
-  analogous.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::ANALOGOUS));
-  split.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::SPLIT));
-  triadic.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::TRIADIC));
-  tetradic.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::TETRADIC));
-  square.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::SQUARE));
+
+  if (m_colorModel != ColorModel::NORMAL_MAP) {
+    switch (m_harmony) {
+      case Harmony::NONE: none.setSelected(true); break;
+      case Harmony::COMPLEMENTARY: complementary.setSelected(true); break;
+      case Harmony::MONOCHROMATIC: monochromatic.setSelected(true); break;
+      case Harmony::ANALOGOUS: analogous.setSelected(true); break;
+      case Harmony::SPLIT: split.setSelected(true); break;
+      case Harmony::TRIADIC: triadic.setSelected(true); break;
+      case Harmony::TETRADIC: tetradic.setSelected(true); break;
+      case Harmony::SQUARE: square.setSelected(true); break;
+    }
+    none.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::NONE));
+    complementary.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::COMPLEMENTARY));
+    monochromatic.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::MONOCHROMATIC));
+    analogous.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::ANALOGOUS));
+    split.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::SPLIT));
+    triadic.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::TRIADIC));
+    tetradic.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::TETRADIC));
+    square.Click.connect(base::Bind<void>(&ColorWheel::setHarmony, this, Harmony::SQUARE));
+  }
 
   gfx::Rect rc = m_options.bounds();
   menu.showPopup(gfx::Point(rc.x+rc.w, rc.y));

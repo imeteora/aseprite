@@ -1,5 +1,5 @@
 // SHE library
-// Copyright (C) 2012-2016  David Capello
+// Copyright (C) 2012-2018  David Capello
 //
 // This file is released under the terms of the MIT license.
 // Read LICENSE.txt for more information.
@@ -11,13 +11,13 @@
 #include "gfx/point.h"
 #include "she/display_handle.h"
 #include "she/native_cursor.h"
+#include "she/surface_list.h"
 
 #include <string>
 
 namespace she {
 
   class Surface;
-  class Font;
 
   // A display or window to show graphics.
   class Display {
@@ -55,6 +55,7 @@ namespace she {
     virtual bool isMinimized() const = 0;
 
     virtual void setTitleBar(const std::string& title) = 0;
+    virtual void setIcons(const SurfaceList& icons) = 0;
 
     virtual NativeCursor nativeMouseCursor() = 0;
     virtual bool setNativeMouseCursor(NativeCursor cursor) = 0;
@@ -69,6 +70,12 @@ namespace she {
     // window position (e.g. in the same monitor).
     virtual std::string getLayout() = 0;
     virtual void setLayout(const std::string& layout) = 0;
+
+    // For Windows 8/10 only in tablet devices: Set to true if you
+    // want to interpret one finger as the mouse movement and two
+    // fingers as pan/scroll (true by default). If you want to pan
+    // with one finger, call this function with false.
+    virtual void setInterpretOneFingerGestureAsMouseMovement(bool state) = 0;
 
     // Returns the HWND on Windows.
     virtual DisplayHandle nativeHandle() = 0;
